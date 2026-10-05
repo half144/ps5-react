@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useState} from 'react';
 import {View, Text, Controller, useGamepad} from '@ps5-react/core';
-import {Panel, Button, Status, attempt, useMenu, mono} from '../ui.jsx';
+import {Panel, Button, Status, attempt, mono} from '../ui.jsx';
 import {fixed} from '../format.js';
 
 const BUTTONS = ['up', 'down', 'left', 'right', 'cross', 'circle', 'triangle', 'square',
@@ -35,7 +35,7 @@ function Trigger({name, value}) {
   );
 }
 
-export function ControllerPage({active, onBack}) {
+export function ControllerPage() {
   const pad = useGamepad();
   const [color, setColor] = useState(-1);
   const [status, setStatus] = useState(null);
@@ -49,10 +49,6 @@ export function ControllerPage({active, onBack}) {
     ['Vibrate', () => { Controller.vibrate(0.8, 300); return 'Vibrating for 300 ms'; }],
     ['Reset light bar', () => { Controller.resetLightBar(); return 'Light bar reset'; }],
   ];
-  const [focus] = useMenu(active, actions.length, {
-    onConfirm: index => setStatus(attempt(actions[index][1])),
-    onBack,
-  });
 
   return (
     <View className="flex-1 gap-5">
@@ -82,7 +78,7 @@ export function ControllerPage({active, onBack}) {
         </Panel>
       </View>
       <View className="flex-row gap-3">
-        {actions.map(([label], index) => <Button key={label} label={label} focused={active && focus === index} />)}
+        {actions.map(([label, run]) => <Button key={label} label={label} onPress={() => setStatus(attempt(run))} />)}
       </View>
       <Status status={status} />
     </View>

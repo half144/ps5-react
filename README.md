@@ -109,25 +109,46 @@ render resolution, display surface, and timeout.
 
 ```jsx
 import {useState} from 'react';
-import {AppRegistry, View, Text, useController} from '@ps5-react/core';
+import {AppRegistry, View, Text, FocusScope} from '@ps5-react/core';
 
 function Counter() {
   const [count, setCount] = useState(0);
-  useController(action => {
-    if (action === 'confirm') setCount(value => value + 1);
-  });
-  return <View><Text>Count: {count}</Text></View>;
+  return (
+    <FocusScope autoFocus>
+      <View onPress={() => setCount(value => value + 1)}>
+        <Text>Count: {count}</Text>
+      </View>
+    </FocusScope>
+  );
 }
 
 AppRegistry.registerComponent('my-app', () => Counter);
 ```
 
 `@ps5-react/core` exports Embedded React's `AppRegistry`, `View`, `Text`, `Image`,
-and `ScrollView`, plus the `useController` hook, the `tw` style template, and
-the [native modules](#native-modules).
-Controller actions are `previous`, `next`, `confirm`, and `back`.
-Subscriptions are removed on unmount.
-Keep active subscriptions scoped to the screen that should receive input.
+and `ScrollView` (with D-pad focus on `View`, `Image`, and `Pressable`), the
+[navigation](#navigation) API, the `useController` hook for raw input, the `tw`
+style template, and the [native modules](#native-modules).
+`useController` receives `up`, `down`, `left`, `right`, `confirm`, and `back`
+(plus `previous`/`next` for compatibility) and unsubscribes on unmount.
+
+## Navigation
+
+```jsx
+<FocusScope autoFocus onBack={closeLibrary}>
+  {games.map(game => (
+    <View key={game.id} onPress={() => open(game)}
+      className="rounded-xl bg-slate-800 focused:bg-sky-700 focused:scale-105" />
+  ))}
+</FocusScope>
+```
+
+Focus moves spatially: the D-pad picks the nearest focusable element in the
+pressed direction from the laid-out positions, Cross calls `onPress`, and Circle
+goes to the enclosing `FocusScope.onBack` handlers, then `BackHandler`
+listeners. Apps mark elements focusable instead of tracking focus indices.
+`FocusScope` groups regions (tabs, page, modal) with `trap`, `wrap`, and focus
+memory; `ScrollView` follows focus. See [Navigation](docs/NAVIGATION.md).
 
 Images and fonts are baked during the build. Font sizes written in `className`
 or as literal styles are found automatically; declare only sizes chosen at
@@ -137,7 +158,7 @@ The initial rendering profile is 2560×1440 downsampled to a 1920×1080 surface.
 ## Styling with className
 
 ```jsx
-<View focused={focus === i}
+<View onPress={() => open(label)}
   className="rounded-xl bg-slate-800 px-6 py-4 focused:bg-sky-800 focused:scale-105">
   <Text className="text-xl text-white">{label}</Text>
 </View>
@@ -145,9 +166,27 @@ The initial rendering profile is 2560×1440 downsampled to a 1920×1080 surface.
 
 A subset of Tailwind CSS v3 utilities compiles to literal style objects at
 build time; nothing is parsed on the PS5. Sizes are scaled to the app's render
-width. `focused:`, `selected:`, and other state variants read the element's
-props, and explicit `style` always wins. Unsupported classes fail the build with
+width. On a focusable element, `focused:` and `pressed:` follow its own focus;
+`selected:` and other state variants read the element's props, and explicit
+`style` always wins. Unsupported classes fail the build with
 a source location. See [Styling with className](docs/TAILWIND.md).
+
+## Animation
+
+```jsx
+import {motion, AnimatePresence, transitions} from '@ps5-react/core';
+
+<motion.View onPress={play} whileFocus={{y: -6, scale: 1.06}} transition={transitions.focus}
+  className="w-48 h-28 rounded-2xl bg-slate-800" />
+<View className="animate-in fade-in slide-in-from-bottom-4 duration-300" />
+```
+
+`motion.View`, `AnimatePresence`, variants with stagger, and transition presets
+follow the Motion API; Tailwind animation classes compile to the same props.
+Animations run in the engine without per-frame JavaScript. On the CPU renderer,
+translation is cheap, scale and rotation are limited to small elements, and
+full-screen fades are the most expensive. See [Animation](docs/ANIMATION.md)
+and `apps/motion-lab`.
 
 ## Native modules
 
@@ -181,14 +220,16 @@ Logs and test screenshots are under `.build/<app>/`.
 - The PS5 framework starter has not yet been independently hardware-tested.
 - Rasterization runs on the CPU; there is no direct GPU UI backend or measured FPS claim.
 - DOM, browser APIs, Node.js APIs, networking, audio, and text input are not implemented.
-- Focus navigation is app-owned; spatial focus and reusable controls are future work.
+- Spatial focus is not yet tested on hardware; there are no pointer, touch, or text-input focus modes.
 - Dependencies are pinned, but cross-machine bit-identical builds are not guaranteed.
 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Navigation](docs/NAVIGATION.md)
 - [Styling with className](docs/TAILWIND.md)
 - [Native modules](docs/NATIVE-API.md)
+- [Animation](docs/ANIMATION.md)
 - [Hardware evidence](docs/HARDWARE.md)
 - [Dependencies and licenses](docs/DEPENDENCIES.md)
 - [Contribution guide](CONTRIBUTING.md)

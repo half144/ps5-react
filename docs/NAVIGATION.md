@@ -1,0 +1,432 @@
+# Navigation
+
+Focus moves by itself, the way a browser or a TV platform moves it: mark what
+is focusable, and the D-pad picks the nearest element in the pressed direction
+from the elements' real positions on screen. Cross presses, Circle goes back.
+Apps do not track focus indices.
+
+```jsx
+<FocusScope autoFocus>
+  {games.map(game => (
+    <View key={game.id} focusable onPress={() => open(game)}
+      className="rounded-xl bg-slate-800 transition focused:bg-sky-700 focused:scale-105">
+      <Text className="text-white">{game.title}</Text>
+    </View>
+  ))}
+</FocusScope>
+```
+
+## Quick start
+
+```jsx
+import {useState} from 'react';
+import {AppRegistry, View, Text, FocusScope} from '@ps5-react/core';
+
+const items = ['Play', 'Settings', 'About'];
+
+function Menu() {
+  const [selected, setSelected] = useState(null);
+  const clear = () => {
+    setSelected(null);
+    return true;
+  };
+  return (
+    <FocusScope autoFocus wrap onBack={clear}>
+      <View className="w-screen h-screen bg-slate-950 items-center justify-center gap-8">
+        <View className="flex-row gap-4">
+          {items.map(item => (
+            <View key={item} onPress={() => setSelected(item)}
+              className="w-56 h-24 rounded-xl border-4 border-slate-700 bg-slate-800
+                items-center justify-center focused:border-sky-400 focused:scale-105">
+              <Text className="text-xl text-white">{item}</Text>
+            </View>
+          ))}
+        </View>
+        <Text className="text-base text-sky-300">{selected ?? 'Nothing selected'}</Text>
+      </View>
+    </FocusScope>
+  );
+}
+
+AppRegistry.registerComponent('menu', () => Menu);
+```
+
+1. Give each item `onPress` (or `focusable` when it does nothing on Cross).
+2. Style the focused state with `focused:` classes, `whileFocus`, or a `style`
+   function. The element's own focus drives them; there is no `focused` prop to pass.
+3. Wrap the screen in `FocusScope autoFocus` so something has focus at start.
+4. Handle Circle with `onBack`.
+
+`npm run create` scaffolds this menu; `apps/starter`, `apps/tailwind-gallery`,
+`apps/system-explorer`, and `apps/motion-lab` use the patterns below.
+
+## Host input (ABI v2)
+
+`globalThis.__ps5ReactDispatch(action)` receives `up`, `down`, `left`, `right`
+(the D-pad and the left stick, with the platform's hold-to-repeat), `confirm`,
+and `back`. For ABI v1 compatibility the runtime also delivers `previous` (after
+`up`/`left`) and `next` (after `down`/`right`) to `useController` handlers only.
+Desktop: arrow keys, Enter, Backspace. Options/Escape still exit.
+
+| Action | Desktop | PS5 |
+| --- | --- | --- |
+| `up`, `down`, `left`, `right` | Arrow keys | D-pad, left stick |
+| `confirm` | Enter | Cross (X) |
+| `back` | Backspace | Circle |
+| Exit (handled by the host) | Escape | Options |
+
+## Focusable elements
+
+`View`, `Image`, and `Pressable` from `@ps5-react/core` accept:
+
+| Prop | Meaning |
+| --- | --- |
+| `focusable` | Takes part in D-pad navigation (`Pressable` and any element with `onPress` are focusable by default) |
+| `onPress` | Called on Cross while focused |
+| `onFocus`, `onBlur` | Focus changes |
+| `autoFocus` | Takes focus when mounted if nothing in its scope has it |
+| `focusKey` | Stable id for `focus(key)` and `nextFocus*` |
+| `nextFocusUp`, `nextFocusDown`, `nextFocusLeft`, `nextFocusRight` | `focusKey` that overrides the spatial choice for that direction |
+| `style` | May be a function `({focused, pressed}) => style` |
+
+`pressed` is true for about 120 ms after Cross (for press feedback).
+`Text` is not focusable; wrap it in a `View`.
+
+```jsx
+<View onPress={save}
+  style={({focused, pressed}) => ({
+    padding: 16,
+    backgroundColor: pressed ? '#0369a1' : focused ? '#0ea5e9' : '#1e293b',
+  })} />
+```
+
+## Spatial algorithm
+
+Candidates are the focusable elements of the active scope whose rectangle lies
+in the pressed direction from the focused one. The winner minimises
+`primary distance + 2 × orthogonal offset` between the rectangles' nearest edges
+(ties: the one with more overlap on the orthogonal axis, then document order).
+Rectangles are the elements' laid-out screen rectangles (pre-transform), kept
+up to date as layout and scrolling change. If nothing qualifies in the scope,
+the search continues in the parent scope unless the scope traps. A `wrap`
+scope first wraps within the same row or column; with nothing there, the search
+continues outward as usual.
+
+Because rectangles are pre-transform, `focused:scale-105`, `whileFocus` lifts,
+and animated translations never change where focus goes next. Let the layout
+express the order you want, and use `nextFocus*` only for exceptions.
+
+## `FocusScope`
+
+| Prop | Meaning |
+| --- | --- |
+| `autoFocus` | Focus the scope's first (or remembered) element on mount |
+| `trap` | Focus cannot leave the scope (modals, dialogs) |
+| `wrap` | Moving past the last element in a direction wraps to the first in that row/column; with nothing in that row/column (Down from a tab row), focus leaves the scope as usual unless it traps |
+| `restoreFocus` | Re-entering the scope focuses the element focused when it was left (default `true`) |
+| `onBack` | Handles Circle while focus is inside; return `true` to consume |
+| `focusKey` | Name for `focus(key)` on the scope (focuses its remembered element) |
+
+Scopes nest. The active scope is the innermost scope containing the focused
+element. Unmounting the focused element moves focus to the nearest focusable in
+the same scope (or the scope's remembered/first element).
+
+`FocusScope` renders no element of its own, so it does not affect layout.
+
+## Hooks and modules
+
+- `useFocusable({focusKey, onPress, autoFocus, ...})` → `{focused, pressed, focusProps}` for
+  custom components; spread `focusProps` on a host element.
+- `useFocus()` → `{focusedKey, focus(key), blur()}`.
+- `useIsFocused()` inside a focusable subtree → boolean of the nearest focusable ancestor.
+- `BackHandler.addEventListener('hardwareBackPress', fn)` → `{remove()}`; `fn`
+  returning `true` consumes Circle. Order: each enclosing `FocusScope.onBack`,
+  innermost first, until one returns `true`; then listeners (last added first).
+  Unconsumed Circle does nothing. `BackHandler.exitApp()` is unchanged.
+- `useController(handler)` keeps receiving every action (raw input for games).
+
+`useFocus()` re-renders its component whenever the focused key changes; call it
+in the component that needs `focusedKey`, not in every list item. `focus(key)`
+returns whether something took focus, so it can be returned from `onBack`.
+
+## ScrollView
+
+A `ScrollView` scrolls its focused descendant into view (minimal movement with a
+margin), animated with `transitions.focus` when possible.
+
+```jsx
+<ScrollView className="flex-1 gap-1">
+  {entries.map(entry => (
+    <View key={entry.path} onPress={() => open(entry)}
+      className="px-3 py-1 rounded-md focused:bg-slate-700">
+      <Text className="text-sm text-white">{entry.name}</Text>
+    </View>
+  ))}
+</ScrollView>
+```
+
+Render the whole list and let the `ScrollView` follow focus instead of slicing
+a window of rows around a focus index. Give it a bounded height (`flex-1` in a
+sized parent, or an explicit `h-*`).
+
+## Tailwind and motion integration
+
+- On an element that is focusable (`focusable`, `onPress`, or `Pressable`) and
+  has no explicit `focused`/`pressed` prop, the `focused:` and `pressed:`
+  variants read the element's own focus state: the compiler emits a `style`
+  function instead of requiring the prop. An explicit `focused={...}` prop keeps
+  today's behavior.
+- `motion.*` elements that are focusable use their own focus state for
+  `whileFocus` and `whilePress`; animation classes with `transition` work the same.
+
+The compiler decides from the JSX attributes it sees: `focusable` or `onPress`
+written on the element, or `Pressable` imported from `@ps5-react/core`. A
+spread such as `{...focusProps}` does not count, so pass `focused` explicitly
+there (see [custom components](#custom-focusable-components)).
+
+Animated focus classes (`transition … focused:scale-105`) must not sit inside a
+conditional class expression; choose between two complete elements instead.
+See [TAILWIND.md](TAILWIND.md#focus-state).
+
+## Recipes
+
+### Grid
+
+A grid needs nothing beyond focusable cells: Up and Down find the cell in the
+neighbouring row from the real layout.
+
+```jsx
+<FocusScope autoFocus>
+  <View className="flex-row flex-wrap gap-6 w-[1096px]">
+    {apps.map(app => (
+      <motion.View key={app.id} onPress={() => launch(app)}
+        whileFocus={{y: -6, scale: 1.06}} transition={transitions.focus}
+        className="w-[200px] h-[140px] rounded-2xl bg-slate-800 focused:bg-slate-700" />
+    ))}
+  </View>
+</FocusScope>
+```
+
+When something outside the cell needs to know which one is focused (a gliding
+halo, a details panel), mirror it from `onFocus`/`onBlur`. The state only
+describes focus; it never moves it. `apps/motion-lab/pages/focus.jsx` places its
+halo this way.
+
+```jsx
+const [current, setCurrent] = useState(-1);
+// on each cell:
+onFocus={() => setCurrent(index)} onBlur={() => setCurrent(-1)}
+```
+
+### List
+
+A list is a column of focusable rows. Put long lists in a
+[`ScrollView`](#scrollview). Add `wrap` to its scope to loop from the last row
+back to the first.
+
+### Tabs
+
+Tabs are one scope and the page another. `wrap` loops Left and Right along the
+tab row while Down still leaves it. Focusing a tab shows its page; Cross or Down
+enters the page; Circle in the page returns to the tab row, which
+restores the active tab because scopes remember their last element.
+
+```jsx
+function App() {
+  const [page, setPage] = useState(0);
+  const {focusedKey, focus} = useFocus();
+  const inTabs = focusedKey?.startsWith('tab:') ?? true;
+  const {Page} = PAGES[page];
+  return (
+    <View className="w-screen h-screen gap-6">
+      <FocusScope focusKey="tabs" autoFocus wrap>
+        <View className="flex-row gap-2">
+          {PAGES.map(({label}, index) => (
+            <View key={label} focusKey={`tab:${label}`} selected={index === page}
+              onFocus={() => setPage(index)} onPress={() => focus('content')}
+              className="px-5 py-2 rounded-full border-2 border-transparent
+                selected:bg-slate-700 focused:border-sky-400">
+              <Text className="text-white">{label}</Text>
+            </View>
+          ))}
+        </View>
+      </FocusScope>
+      <FocusScope focusKey="content" onBack={() => focus('tabs')}>
+        <Page key={page} />
+      </FocusScope>
+      <Text className="text-sm text-slate-400">
+        {inTabs ? 'X / Down: enter the page' : 'Circle: back to tabs'}
+      </Text>
+    </View>
+  );
+}
+```
+
+`key={page}` remounts the page, so entering a new page starts at its first
+element. `focusedKey` with a `tab:` prefix tells the app which region has focus
+for hints and highlights, without an index.
+
+### Modal
+
+A modal traps focus and closes on Circle. When it unmounts, focus returns to the
+element that had it before the modal opened, or the nearest one left in the
+enclosing scope.
+
+```jsx
+{confirming && (
+  <FocusScope trap autoFocus onBack={() => { setConfirming(false); return true; }}>
+    <View className="absolute inset-0 bg-black/60 items-center justify-center">
+      <View className="w-[520px] p-8 gap-6 rounded-2xl bg-slate-800">
+        <Text className="text-xl text-white">Delete save data?</Text>
+        <View className="flex-row gap-4">
+          <View onPress={() => setConfirming(false)}
+            className="px-6 py-3 rounded-xl bg-slate-700 focused:bg-slate-500">
+            <Text className="text-white">Cancel</Text>
+          </View>
+          <View onPress={deleteSave}
+            className="px-6 py-3 rounded-xl bg-slate-700 focused:bg-rose-600">
+            <Text className="text-white">Delete</Text>
+          </View>
+        </View>
+      </View>
+    </View>
+  </FocusScope>
+)}
+```
+
+To send focus somewhere specific after closing, give that element a `focusKey`
+and call `focus(key)`.
+
+## Back handling
+
+Circle goes to the enclosing scopes' `onBack`, innermost first, until one returns
+`true`, then to `BackHandler` listeners, last added first. An unconsumed Circle
+does nothing; it never exits the app.
+
+A nested scope can handle Circle only in some states and let the rest bubble up.
+The System Explorer Files page climbs folders and, at `/`, leaves Circle to the
+page scope, which returns to the tabs:
+
+```jsx
+const up = () => {
+  if (dir === '/') return false;
+  open(parent(dir));
+  return true;
+};
+
+<FocusScope onBack={up}>…</FocusScope>
+```
+
+Use `onBack` for behavior tied to a region of the screen (close the modal, leave
+the page, go up a folder). Use a listener for screen-wide behavior that does not
+depend on where focus is, or when nothing is focusable:
+
+```jsx
+useEffect(() => {
+  const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+    if (!playing) return false;
+    pause();
+    return true;
+  });
+  return () => subscription.remove();
+}, [playing]);
+```
+
+`BackHandler.exitApp()` quits explicitly; Options (Escape on desktop) remains
+the host's exit action.
+
+## Custom focusable components
+
+The simplest custom control is a focusable `View` whose children read its focus
+with `useIsFocused()`. `Text` styles are not inherited, so this is also how a
+label changes with focus:
+
+```jsx
+function Label({children}) {
+  const focused = useIsFocused();
+  return <Text focused={focused} className="text-sm text-slate-300 focused:text-white">{children}</Text>;
+}
+
+export function Button({label, onPress}) {
+  return (
+    <View onPress={onPress} className="px-5 py-2 rounded-full bg-slate-800 focused:bg-sky-700">
+      <Label>{label}</Label>
+    </View>
+  );
+}
+```
+
+When the component itself needs the state, use `useFocusable` and spread
+`focusProps` on the element whose rectangle should be navigable. `focusProps`
+already contains `focusable={false}`, so the `View` does not register a second
+time; pass `focused` and `pressed` explicitly for the variants:
+
+```jsx
+import {View, Text, useFocusable} from '@ps5-react/core';
+
+export function Toggle({label, on, onChange, focusKey}) {
+  const {focused, pressed, focusProps} = useFocusable({focusKey, onPress: () => onChange(!on)});
+  return (
+    <View {...focusProps} focused={focused} pressed={pressed} selected={on}
+      className="flex-row gap-3 px-4 py-2 rounded-xl bg-slate-800
+        focused:bg-slate-700 pressed:scale-95 selected:border-2 selected:border-sky-400">
+      <Text focused={focused} className="text-slate-300 focused:text-white">{label}</Text>
+      <Text className="text-sky-300">{on ? 'On' : 'Off'}</Text>
+    </View>
+  );
+}
+```
+
+`useIsFocused()` below an element that uses `useFocusable` does not see it;
+pass `focused` down instead.
+
+## Migrating from `useController`
+
+| Before | After |
+| --- | --- |
+| `const [focus, setFocus] = useState(0)` plus `next`/`previous` arithmetic | `onPress` or `focusable` on each item inside a `FocusScope` |
+| `focused={focus === i}` | nothing: `focused:` classes and `whileFocus` read the element's own state |
+| `if (action === 'confirm') run(items[focus])` | `onPress={() => run(item)}` |
+| `if (action === 'back') …` | `FocusScope onBack`, or `BackHandler.addEventListener` |
+| `% length` wrapping | `FocusScope wrap` |
+| A "zone" flag for tabs versus content | Two scopes and `focus('tabs')` / `focus('content')` |
+| Slicing visible rows around the focus index | `ScrollView`, which follows focus |
+| `focused` passed down to child `Text` | `useIsFocused()` in the child |
+| A focus index needed for display | Mirror it with `onFocus`/`onBlur`, read-only |
+
+A list screen before and after:
+
+```jsx
+// Before
+const [focus, setFocus] = useState(0);
+useController(action => {
+  if (action === 'next') setFocus(i => (i + 1) % items.length);
+  if (action === 'previous') setFocus(i => (i + items.length - 1) % items.length);
+  if (action === 'confirm') open(items[focus]);
+});
+// …
+<View focused={focus === i} className="… focused:bg-sky-700" />
+
+// After
+<FocusScope autoFocus wrap>
+  {items.map(item => (
+    <View key={item.id} onPress={() => open(item)} className="… focused:bg-sky-700" />
+  ))}
+</FocusScope>
+```
+
+Keep `useController` for raw input that is not navigation: a game loop, a
+custom gesture, or a debug overlay. It receives every action alongside focus
+navigation, so do not also move focus from it.
+
+## Limits
+
+- Only `View`, `Image`, `Pressable`, and their `motion.*` versions can be
+  focusable. `Text` cannot.
+- The search uses pre-transform rectangles; transforms never steer focus.
+- `Text` does not follow its parent's focus automatically; use `useIsFocused()`.
+- While `AnimatePresence` plays an exit, the leaving elements remain focusable
+  until they unmount.
+- There is no pointer, touch, or text-input focus, and the runtime draws no
+  focus ring: the app styles the focused state.
+- Focus is JavaScript state and resets when the preview restarts.

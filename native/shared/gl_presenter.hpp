@@ -3,8 +3,9 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #pragma once
 
+#include "er_scene.h"
 #include <cstdint>
-#include <vector>
+#include <span>
 
 // Presents an opaque software framebuffer. The caller owns the GL context.
 // No components, fonts, layout, platform calls or dependencies on the UI kit.
@@ -14,11 +15,19 @@ public:
   GlPresenter(const GlPresenter&) = delete;
   GlPresenter& operator=(const GlPresenter&) = delete;
   bool init(int width, int height);
+  // Uploads the whole buffer. Afterwards the texture no longer mirrors the
+  // engine framebuffer, so the next damage draw uploads everything again.
   bool draw(const std::uint32_t* argb, int surface_width, int surface_height);
+  // Uploads only `damage`, the rects painted since the previous draw; the first
+  // draw and any surface size change upload the whole buffer.
+  bool draw(const std::uint32_t* argb, std::span<const ERRect> damage, int surface_width, int surface_height);
   void release();
 
 private:
   unsigned int program_ = 0, texture_ = 0, vao_ = 0;
-  int width_ = 0, height_ = 0;
-  std::vector<std::uint8_t> rgba_;
+  int width_ = 0, height_ = 0, surface_width_ = 0, surface_height_ = 0;
+  bool synced_ = false;
+
+  void upload(const std::uint32_t* argb, const ERRect& rect);
+  bool present(int surface_width, int surface_height);
 };

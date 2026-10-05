@@ -8,6 +8,8 @@
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
 #include "core/input.hpp"
+#include "damage_tracker.hpp"
+#include "frame_stats.hpp"
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
@@ -52,6 +54,16 @@ GamepadState gamepad_state(const hui::InputFrame& input) {
   return state;
 }
 
+const char* nav_action(hui::Direction direction) {
+  switch (direction) {
+    case hui::Direction::up: return "up";
+    case hui::Direction::down: return "down";
+    case hui::Direction::left: return "left";
+    case hui::Direction::right: return "right";
+    default: return nullptr;
+  }
+}
+
 bool dispatch(const char* action) {
   JSContext* ctx = er_runtime_context();
   JSValue global = JS_GetGlobalObject(ctx);
@@ -79,6 +91,7 @@ bool run_proof() {
   GlPresenter presenter;
   hui::InputTracker tracker;
   hui::PadSample samples[64];
+  FrameStats stats;
   bool runtime = false, software = false;
   bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT);
   hui::sys::log("[PS5-REACT] display=%d", ok);
@@ -88,7 +101,7 @@ bool run_proof() {
   }
   if (ok) {
     software = er_software_backend_init(width, height);
-    ok = software;
+    ok = software && damage_tracker_install(width, height);
     hui::sys::log("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
   }
   // The pad opens before the bundle runs: it also initializes the user service
@@ -122,21 +135,25 @@ bool run_proof() {
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
+      if (const char* line = stats.start_frame(now)) hui::sys::log("[PS5-REACT] %s", line);
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
       if (input.is_pressed(hui::Action::menu)) break;
       pad.tick(static_cast<float>(now - previous) / 1000000.0f);
       ps5_react_set_gamepad(gamepad_state(input));
-      if (input.nav == hui::Direction::left || input.nav == hui::Direction::up)
-        ok = dispatch("previous");
-      else if (input.nav == hui::Direction::right || input.nav == hui::Direction::down)
-        ok = dispatch("next");
+      if (const char* direction = nav_action(input.nav)) ok = dispatch(direction);
       if (ok && input.is_pressed(hui::Action::confirm)) ok = dispatch("confirm");
       if (ok && input.is_pressed(hui::Action::back)) ok = dispatch("back");
       if (!ok) break;
+      stats.lap(FrameStats::input, hui::sys::monotonic_us());
       er_runtime_pump(); er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
-      ok = presenter.draw(er_software_framebuffer(), display.width(), display.height()) && display.swap();
+      stats.lap(FrameStats::update, hui::sys::monotonic_us());
+      ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), display.width(), display.height());
+      damage_tracker_clear();
+      stats.lap(FrameStats::present, hui::sys::monotonic_us());
+      ok = ok && display.swap();
+      stats.lap(FrameStats::swap, hui::sys::monotonic_us());
       if (!ok) break;
       if (!first_present) {
         first_present = hui::sys::monotonic_us();

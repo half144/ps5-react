@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useState} from 'react';
 import {View, Platform, DeviceInfo, Users} from '@ps5-react/core';
-import {Panel, Field, Button, Status, attempt, useMenu} from '../ui.jsx';
+import {Panel, Field, Button, Status, attempt} from '../ui.jsx';
 import {bytes, known, fixed} from '../format.js';
 
 const celsius = value => `${value} °C`;
@@ -19,9 +19,8 @@ function read() {
   };
 }
 
-export function DevicePage({active, onBack}) {
+export function DevicePage() {
   const [info, setInfo] = useState(() => attempt(read));
-  const [focus] = useMenu(active, 1, {onConfirm: () => setInfo(attempt(read)), onBack});
   if (info.error) return <Status status={info} />;
   const {platform, target, device, foreground, users} = info.value;
 
@@ -46,7 +45,7 @@ export function DevicePage({active, onBack}) {
         <Field name="Free memory" value={known(device.freeMemory, bytes)} />
         <Field name="Process CPU time" value={known(device.processTime, us => `${fixed(us / 1e6)} s`)} />
       </Panel>
-      <View className="self-start"><Button label="Refresh" focused={active && focus === 0} /></View>
+      <View className="self-start"><Button label="Refresh" onPress={() => setInfo(attempt(read))} /></View>
     </View>
   );
 }

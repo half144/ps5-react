@@ -21,8 +21,30 @@ interface ClassNameProps {
   disabled?: boolean;
 }
 
+/** D-pad focus on `View`, `Image`, and `Pressable` from `@ps5-react/core` (docs/NAVIGATION.md). */
+interface FocusProps {
+  /** Takes part in D-pad navigation; implied by `onPress` and by `Pressable`. */
+  focusable?: boolean;
+  /** Takes focus when mounted if nothing in its scope has it. */
+  autoFocus?: boolean;
+  /** Stable id for `focus(key)` and `nextFocus*`. */
+  focusKey?: string;
+  nextFocusUp?: string;
+  nextFocusDown?: string;
+  nextFocusLeft?: string;
+  nextFocusRight?: string;
+  onFocus?: () => void;
+  onBlur?: () => void;
+}
+
+/** Called on Cross while focused, and on touch. */
+interface FocusPressProps {
+  onPress?: (event?: {type: 'press'}) => void;
+}
+
 declare module 'embedded-react' {
-  interface ViewProps extends ClassNameProps {}
+  interface ViewProps extends ClassNameProps, FocusProps, FocusPressProps {}
   interface TextProps extends ClassNameProps {}
-  interface ImageProps extends ClassNameProps {}
+  interface ImageProps extends ClassNameProps, FocusProps, FocusPressProps {}
+  interface PressableProps extends FocusProps {}
 }

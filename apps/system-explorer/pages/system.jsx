@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useState} from 'react';
 import {View, Text, Notifications, Linking, BackHandler} from '@ps5-react/core';
-import {Panel, Button, Status, attempt, useMenu, body} from '../ui.jsx';
+import {Panel, Button, Status, attempt, body} from '../ui.jsx';
 
 const REPO = 'https://github.com/half144/ps5-react';
 
@@ -14,20 +14,16 @@ const ACTIONS = [
   ['Exit app', () => { BackHandler.exitApp(); return 'Exiting…'; }],
 ];
 
-export function SystemPage({active, onBack}) {
+export function SystemPage() {
   const [status, setStatus] = useState(null);
-  const [focus] = useMenu(active, ACTIONS.length, {
-    onConfirm: index => setStatus(attempt(ACTIONS[index][1])),
-    onBack,
-  });
 
   return (
     <View className="flex-1 gap-5">
       <Panel title="SYSTEM SERVICES">
         <Text style={body}>Notifications.show, Linking.openURL, and BackHandler.exitApp.</Text>
         <View className="flex-row gap-3">
-          {ACTIONS.map(([label], index) => (
-            <Button key={label} label={label} focused={active && focus === index} />
+          {ACTIONS.map(([label, run]) => (
+            <Button key={label} label={label} onPress={() => setStatus(attempt(run))} />
           ))}
         </View>
         <Status status={status} />

@@ -115,7 +115,8 @@ def main():
                        (cross / "bridge/engine/CMakeFiles/embedded-react.dir/flags.make").read_text().splitlines()
                        if line.startswith("C_DEFINES ="))
     sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/time_compat.c",
-               ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/gl_presenter.cpp", generated / "assets.generated.c",
+               ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/gl_presenter.cpp",
+               ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/damage_tracker.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system")],
                hui / "src/core/input.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]

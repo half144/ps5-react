@@ -142,7 +142,31 @@ export const Linking = {
   },
 };
 
+const backListeners = [];
+
 export const BackHandler = {
   /** Closes the app after the current frame, like React Native's BackHandler.exitApp. */
   exitApp: () => host().exit(),
+  /**
+   * Circle, after the innermost FocusScope.onBack; the last listener added runs first.
+   * @param {'hardwareBackPress'} event
+   * @param {() => boolean | void} listener returns true to consume Circle
+   * @returns {{remove: () => void}}
+   */
+  addEventListener(event, listener) {
+    if (event !== 'hardwareBackPress') {
+      throw new Error(`BackHandler.addEventListener: only 'hardwareBackPress' is supported, got '${event}'`);
+    }
+    backListeners.push(listener);
+    return {remove() {
+      const index = backListeners.indexOf(listener);
+      if (index !== -1) backListeners.splice(index, 1);
+    }};
+  },
 };
+
+/** Internal: offers Circle to the listeners, last added first. @returns {boolean} consumed */
+export function dispatchBackPress() {
+  for (const listener of [...backListeners].reverse()) if (listener() === true) return true;
+  return false;
+}

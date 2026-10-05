@@ -18,6 +18,8 @@ extern "C" {
 #include "software_backend.h"
 void er_register_assets(void);
 }
+#include "damage_tracker.hpp"
+#include "frame_stats.hpp"
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
@@ -32,6 +34,12 @@ void er_register_assets(void);
 namespace {
 // Render at twice the logical resolution so rounded edges remain smooth on Retina.
 constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
+
+std::int64_t now_us() {
+  static const Uint64 frequency = SDL_GetPerformanceFrequency();
+  const Uint64 ticks = SDL_GetPerformanceCounter();
+  return static_cast<std::int64_t>(ticks / frequency * 1000000 + ticks % frequency * 1000000 / frequency);
+}
 
 float stick(SDL_GameController* controller, SDL_GameControllerAxis axis) {
   constexpr float deadzone = 0.16f;
@@ -78,8 +86,12 @@ struct Host {
   SDL_GLContext context = nullptr;
   SDL_GameController* controller = nullptr;
   GlPresenter presenter;
-  bool running = true, runtime_started = false, backend_started = false;
-  Uint32 previous_tick = 0;
+  FrameStats stats;
+  bool log_frames = true, running = true, runtime_started = false, backend_started = false;
+  Uint32 previous_tick = 0, next_repeat = 0;
+  const char* held_action = nullptr;
+  SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
+  SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
 
   ~Host() {
     if (runtime_started) er_runtime_shutdown();
@@ -116,7 +128,7 @@ struct Host {
 
   bool boot(const char* path) {
     backend_started = er_software_backend_init(width, height);
-    if (!backend_started) return false;
+    if (!backend_started || !damage_tracker_install(width, height)) return false;
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;
@@ -136,6 +148,13 @@ struct Host {
     if (ok) ok = std::fread(source.data(), 1, length, file) == length;
     std::fclose(file);
     return ok && er_runtime_load_source(source.data(), length, path);
+  }
+
+  const char* hold(const char* action, SDL_Scancode key,
+                   SDL_GameControllerButton button = SDL_CONTROLLER_BUTTON_INVALID) {
+    held_action = action; held_key = key; held_button = button;
+    next_repeat = SDL_GetTicks() + 350;
+    return action;
   }
 
   bool dispatch(const char* action) {
@@ -158,41 +177,69 @@ struct Host {
   }
 
   bool frame(bool swap = true) {
+    if (const char* line = stats.start_frame(now_us()); line && log_frames) {
+      std::printf("[PS5-REACT] %s\n", line);
+      std::fflush(stdout); // The dev watcher reads a pipe, where stdout is fully buffered.
+    }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       const char* action = nullptr;
       if (event.type == SDL_QUIT) running = false;
-      if (event.type == SDL_KEYDOWN) {
+      // The host repeats held directions itself, so OS key repeats are ignored.
+      if (event.type == SDL_KEYDOWN && !event.key.repeat) {
+        const SDL_Scancode key = event.key.keysym.scancode;
         switch (event.key.keysym.sym) {
-          case SDLK_LEFT: case SDLK_UP: action = "previous"; break;
-          case SDLK_RIGHT: case SDLK_DOWN: action = "next"; break;
+          case SDLK_UP: action = hold("up", key); break;
+          case SDLK_DOWN: action = hold("down", key); break;
+          case SDLK_LEFT: action = hold("left", key); break;
+          case SDLK_RIGHT: action = hold("right", key); break;
           case SDLK_RETURN: case SDLK_SPACE: action = "confirm"; break;
           case SDLK_BACKSPACE: action = "back"; break;
           case SDLK_ESCAPE: running = false; break;
         }
       } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-        switch (event.cbutton.button) {
-          case SDL_CONTROLLER_BUTTON_DPAD_LEFT: case SDL_CONTROLLER_BUTTON_DPAD_UP:
-            action = "previous"; break;
-          case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-            action = "next"; break;
+        const auto button = static_cast<SDL_GameControllerButton>(event.cbutton.button);
+        switch (button) {
+          case SDL_CONTROLLER_BUTTON_DPAD_UP: action = hold("up", SDL_SCANCODE_UNKNOWN, button); break;
+          case SDL_CONTROLLER_BUTTON_DPAD_DOWN: action = hold("down", SDL_SCANCODE_UNKNOWN, button); break;
+          case SDL_CONTROLLER_BUTTON_DPAD_LEFT: action = hold("left", SDL_SCANCODE_UNKNOWN, button); break;
+          case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: action = hold("right", SDL_SCANCODE_UNKNOWN, button); break;
           case SDL_CONTROLLER_BUTTON_A: action = "confirm"; break;
           case SDL_CONTROLLER_BUTTON_B: action = "back"; break;
+          default: break;
         }
       }
       if (action && !dispatch(action)) return false;
     }
+    if (held_action) {
+      // Polled state, not key-up events: synthetic self-test presses never stay held.
+      const bool down = held_key != SDL_SCANCODE_UNKNOWN ? SDL_GetKeyboardState(nullptr)[held_key]
+        : controller && SDL_GameControllerGetButton(controller, held_button);
+      const Uint32 ticks = SDL_GetTicks();
+      if (!down) held_action = nullptr;
+      else if (SDL_TICKS_PASSED(ticks, next_repeat)) {
+        next_repeat = ticks + 110;
+        if (!dispatch(held_action)) return false;
+      }
+    }
     if (!running) return true;
     ps5_react_set_gamepad(read_gamepad(controller));
+    stats.lap(FrameStats::input, now_us());
     er_runtime_pump(); er_commit();
+    stats.lap(FrameStats::update, now_us());
     if (ps5_react_exit_requested()) {
       running = false;
       return true;
     }
     int sw = 0, sh = 0;
     SDL_GL_GetDrawableSize(window, &sw, &sh);
-    if (sw > 0 && sh > 0 && !presenter.draw(er_software_framebuffer(), sw, sh)) return false;
+    if (sw > 0 && sh > 0) {
+      if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), sw, sh)) return false;
+      damage_tracker_clear();
+    }
+    stats.lap(FrameStats::present, now_us());
     if (swap) SDL_GL_SwapWindow(window);
+    stats.lap(FrameStats::swap, now_us());
     const Uint32 now = SDL_GetTicks();
     embedded_renderer_tick(std::min<Uint32>(now - previous_tick, 50));
     previous_tick = now;
@@ -298,6 +345,7 @@ int main(int argc, char** argv) {
   }
   const bool testing = argc > 2 && !std::strcmp(argv[2], "--self-test");
   Host host;
+  host.log_frames = !testing;
   bool ok = host.start();
   if (ok && testing) ok = color_test(host);
   if (ok) ok = host.boot(argv[1]);

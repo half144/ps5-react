@@ -45,6 +45,8 @@ watcher rebuilds and restarts the app; state resets. It is not Fast Refresh.
 
 Use `npm run create -- --name my-app --title-id PPSA99054` to scaffold an app.
 Apps should not require copied hosts or edits to C++ for ordinary UI changes.
+Apps navigate with focusable elements, `onPress`, and `FocusScope`
+(`docs/NAVIGATION.md`), not manual focus indices driven by `useController`.
 Keep configuration errors actionable and report them before expensive builds.
 
 ## Validation and hardware claims

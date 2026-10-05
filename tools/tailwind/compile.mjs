@@ -4,6 +4,7 @@
 // Class string → engine style objects, at build time. Utilities are logical pixels scaled by
 // render.width / baseWidth, so every value lands in the bundle as a literal.
 import {basename, resolve} from 'node:path';
+import {addMotion, resolveMotion} from './motion.mjs';
 import {resolveTheme} from './theme.mjs';
 import {UtilityError, resolveUtility} from './utilities.mjs';
 import {parseLength} from './values.mjs';
@@ -14,7 +15,7 @@ export const VARIANTS = ['focused', 'selected', 'disabled', 'active', 'checked',
 const ALIASES = {hover: 'focused', focus: 'focused', 'focus-visible': 'focused'};
 
 const REJECTED_VARIANTS = {
-  'focus-within': 'use focused: with a focused={...} prop',
+  'focus-within': 'use focused: on the focusable element itself, or with a focused={...} prop',
   dark: 'there is no color-scheme query; choose colors from app state',
   first: 'structural variants need selectors; compute the class from the index in JavaScript',
   last: 'structural variants need selectors; compute the class from the index in JavaScript',
@@ -57,13 +58,14 @@ export function createCompiler({config = {}, renderWidth, renderHeight, appDir})
   const theme = resolveTheme(config);
   const scale = renderWidth / (config.baseWidth ?? 1280);
   let imports;
+  const logical = value => {
+    const parsed = parseLength(value);
+    if (parsed?.px === undefined) throw new UtilityError(`theme value "${value}" is not a px/rem length`);
+    return parsed.px;
+  };
   const ctx = {
-    theme, scale, renderWidth, renderHeight,
-    px(value) {
-      const parsed = parseLength(value);
-      if (parsed?.px === undefined) throw new UtilityError(`theme value "${value}" is not a px/rem length`);
-      return Math.round(parsed.px * scale);
-    },
+    theme, scale, renderWidth, renderHeight, logical,
+    px: value => Math.round(logical(value) * scale),
     font(family) {
       if (!/\.(ttf|otf)$/i.test(family)) return {fontFamily: family};
       const path = resolve(appDir, family);
@@ -74,12 +76,14 @@ export function createCompiler({config = {}, renderWidth, renderHeight, appDir})
 
   /**
    * Parses a class string into a base fragment and variant fragments, still unresolved, so
-   * conditional parts can be finalized against the static ones.
+   * conditional parts can be finalized against the static ones. Animation classes collect into
+   * `motion` (see motion.mjs) instead of the style.
    */
   function parse(classes) {
     imports = new Set();
     const base = {};
     const variants = new Map();
+    let motion = null;
     for (const token of classes.split(/\s+/).filter(Boolean)) {
       const parts = splitVariants(token).map(part => ALIASES[part] ?? part);
       const utility = parts.pop();
@@ -94,6 +98,13 @@ export function createCompiler({config = {}, renderWidth, renderHeight, appDir})
         'later classes and the style prop already take precedence');
       let fragment;
       try {
+        const animation = resolveMotion(utility, ctx);
+        if (animation && parts.length) throw new ClassError(token, 'animation classes take no ' +
+          'variants; a variant\'s opacity and transforms animate when the element has transition');
+        if (animation) {
+          motion = addMotion(motion ?? {tokens: {}}, animation, token);
+          continue;
+        }
         fragment = resolveUtility(utility, ctx);
       } catch (error) {
         if (error instanceof UtilityError) throw new ClassError(token, error.message);
@@ -107,7 +118,7 @@ export function createCompiler({config = {}, renderWidth, renderHeight, appDir})
       if (!variants.has(key)) variants.set(key, {props: key.split(':'), fragment: {}});
       merge(variants.get(key).fragment, fragment);
     }
-    return {base, variants: [...variants.values()], imports: [...imports]};
+    return {base, variants: [...variants.values()], imports: [...imports], motion};
   }
 
   /**
