@@ -33,14 +33,22 @@ bool touches(const ERRect& a, const ERRect& b) {
 
 long long area(const ERRect& r) { return static_cast<long long>(r.w) * r.h; }
 
+// Uploads may overlap, so two rects merge only when their bounding box is almost all their own pixels
+// (the engine's damage set uses the same rule):
+// a full-width scroll strip and a card overlapping one end of it are uploaded separately.
+bool cheap(const ERRect& a, const ERRect& b) {
+  const long long waste = area(unite(a, b)) - area(a) - area(b);
+  return touches(a, b) && (waste * 4 <= area(unite(a, b)) || waste <= 4096);
+}
+
 void note(int x, int y, int w, int h) {
   const int x0 = std::max(x, 0), y0 = std::max(y, 0);
   const int x1 = std::min(x + w, fb_width), y1 = std::min(y + h, fb_height);
   if (x1 <= x0 || y1 <= y0) return;
   const ERRect r = {x0, y0, x1 - x0, y1 - y0};
-  if (count && touches(rects[last], r)) { rects[last] = unite(rects[last], r); return; }
+  if (count && cheap(rects[last], r)) { rects[last] = unite(rects[last], r); return; }
   for (int i = 0; i < count; ++i)
-    if (touches(rects[i], r)) { rects[last = i] = unite(rects[i], r); return; }
+    if (cheap(rects[i], r)) { rects[last = i] = unite(rects[i], r); return; }
   if (count < ER_DAMAGE_RECTS_MAX) { rects[last = count++] = r; return; }
   // Budget exhausted: grow whichever rect wastes the least area.
   int best = 0;
