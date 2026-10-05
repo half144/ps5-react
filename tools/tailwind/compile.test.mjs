@@ -102,6 +102,19 @@ const cases = {
     ['object-cover', {resizeMode: 'cover'}], ['object-fill', {resizeMode: 'stretch'}],
     ['object-none', {resizeMode: 'center'}], ['pointer-events-none', {pointerEvents: 'none'}],
   ],
+  gradients: [
+    ['bg-gradient-to-r from-sky-500 to-indigo-500', {backgroundGradient: {type: 'linear', to: 'right',
+      stops: [{color: '#0ea5e9', offset: 0}, {color: '#6366f1', offset: 1}]}}],
+    ['bg-gradient-to-t from-black via-black/80 to-transparent', {backgroundGradient: {type: 'linear', to: 'top',
+      stops: [{color: '#000', offset: 0}, {color: '#000000cc', offset: 0.5}, {color: 'transparent', offset: 1}]}}],
+    ['bg-gradient-to-br from-[#123]', {backgroundGradient: {type: 'linear', to: 'bottom right',
+      stops: [{color: '#123', offset: 0}, {color: '#11223300', offset: 1}]}}],
+    ['bg-gradient-to-tl from-red-500 from-10% via-[35%] via-white to-75% to-blue-500/50', {backgroundGradient: {
+      type: 'linear', to: 'top left', stops: [{color: '#ef4444', offset: 0.1}, {color: '#fff', offset: 0.35},
+        {color: '#3b82f680', offset: 0.75}]}}],
+    ['to-white from-black bg-gradient-to-l bg-gradient-to-b', {backgroundGradient: {type: 'linear', to: 'bottom',
+      stops: [{color: '#000', offset: 0}, {color: '#fff', offset: 1}]}}],
+  ],
   'later class wins': [
     ['p-4 p-2', {padding: 8}], ['bg-red-500 bg-blue-500', {backgroundColor: '#3b82f6'}],
     ['text-sm text-lg', {fontSize: 18, lineHeight: 28}], ['leading-7 text-xl leading-none', {fontSize: 20, lineHeight: 20}],
@@ -168,12 +181,23 @@ test('variants group by prop set and compose with the base', () => {
   assert.deepEqual(c.parse('active:checked:pressed:p-1').variants[0].props, ['active', 'checked', 'pressed']);
 });
 
+test('gradient variants compose with the base stops and direction', () => {
+  const c = compiler();
+  const {base, variants} = c.parse('bg-gradient-to-r from-black to-white focused:from-sky-500 selected:bg-gradient-to-b');
+  const [focused, selected] = variants.map(v => c.finalize(v.fragment, base));
+  assert.deepEqual(focused.backgroundGradient,
+    {type: 'linear', to: 'right', stops: [{color: '#0ea5e9', offset: 0}, {color: '#fff', offset: 1}]});
+  assert.equal(selected.backgroundGradient.to, 'bottom');
+});
+
 test('rejected utilities and variants raise ClassError with guidance', () => {
   for (const [classes, message] of [
     ['shadow-lg', /shadows are disabled/], ['drop-shadow', /shadows are disabled/],
     ['space-x-4', /gap-x/], ['divide-y', /borders on the children/], ['grid-cols-3', /flexbox only/],
     ['block', /only flex/], ['fixed', /relative and absolute/], ['uppercase', /JavaScript/],
-    ['ring-2', /border/], ['animate-wiggle', /ANIMATION.md/], ['bg-gradient-to-r', /gradients/],
+    ['ring-2', /border/], ['animate-wiggle', /ANIMATION.md/], ['bg-gradient-radial', /bg-gradient-to-/],
+    ['bg-gradient-to-r', /needs a from-\* color/], ['from-red-500', /need a bg-gradient-to-\* direction/],
+    ['bg-gradient-to-r from-red-500 via-[12px]', /percentages from 0% to 100%/], ['bg-none', /bg-gradient-to/],
     ['blur-sm', /filters/], ['bg-opacity-50', /bg-black\/50/], ['skew-x-3', /skew/],
     ['invisible', /opacity-0/], ['overflow-auto', /overflow-hidden/], ['items-baseline', /alignment/],
     ['order-1', /layout engine/], ['cursor-pointer', /browser-only/], ['w-auto', /default/],

@@ -37,6 +37,7 @@ export const defaultTheme = {
   borderRadius: {none: 0, sm: 2, DEFAULT: 4, md: 6, lg: 8, xl: 12, '2xl': 16, '3xl': 24, full: 9999},
   borderWidth: {DEFAULT: 1, 0: 0, 2: 2, 4: 4, 8: 8},
   opacity: Object.fromEntries(Array.from({length: 21}, (_, i) => [i * 5, i / 20])),
+  gradientColorStopPositions: Object.fromEntries(Array.from({length: 21}, (_, i) => [`${i * 5}%`, `${i * 5}%`])),
   zIndex: {0: 0, 10: 10, 20: 20, 30: 30, 40: 40, 50: 50},
   scale: {0: 0, 50: 0.5, 75: 0.75, 90: 0.9, 95: 0.95, 100: 1, 105: 1.05, 110: 1.1, 125: 1.25, 150: 1.5},
   rotate: {0: 0, 1: 1, 2: 2, 3: 3, 6: 6, 12: 12, 45: 45, 90: 90, 180: 180},

@@ -1,8 +1,8 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// One Tailwind utility → one style fragment. Fragments may carry `$transform`, `$leading`, and
-// `$tracking`, which compile.mjs resolves once a whole class list is merged.
+// One Tailwind utility → one style fragment. Fragments may carry `$transform`, `$gradient`,
+// `$leading`, and `$tracking`, which compile.mjs resolves once a whole class list is merged.
 import {STATIC, REJECTED} from './static.mjs';
 import {arbitrary, fraction, isColor, paletteColor, parseLength, parseNumber, withAlpha} from './values.mjs';
 
@@ -198,6 +198,23 @@ function themeNumber(scale, integer = false) {
 const sized = (keys, options) => (value, ctx) =>
   sides(keys, length(value, ctx, ctx.theme.spacing, options));
 
+const GRADIENT_DIRECTIONS = {t: 'top', tr: 'top right', r: 'right', br: 'bottom right', b: 'bottom',
+  bl: 'bottom left', l: 'left', tl: 'top left'};
+
+/** `from-*`/`via-*`/`to-*`: a stop color, or its position (`from-10%`, `via-[35%]`). */
+function gradientStop(stop) {
+  return (value, ctx) => {
+    const position = parseLength(ctx.theme.gradientColorStopPositions[value] ?? arbitrary(value) ?? '');
+    if (position) {
+      const fraction = parseFloat(position.pct) / 100;
+      if (!(fraction >= 0 && fraction <= 1)) unsupported('gradient stop positions must be percentages from 0% to 100%');
+      return {$gradient: {[`${stop}Position`]: fraction}};
+    }
+    const c = color(value, ctx);
+    return c === null ? null : {$gradient: {[stop]: c}};
+  };
+}
+
 const zIndex = themeNumber('zIndex', true);
 const opacity = themeNumber('opacity');
 const lineClamp = themeNumber('lineClamp', true);
@@ -243,6 +260,8 @@ const FUNCTIONAL = [
     return w > 0 && h > 0 ? {aspectRatio: w / h} : null;
   }],
   ['bg', (value, ctx) => sides(['backgroundColor'], color(value, ctx))],
+  ['bg-gradient-to', value => value in GRADIENT_DIRECTIONS ? {$gradient: {direction: GRADIENT_DIRECTIONS[value]}} : null],
+  ...['from', 'via', 'to'].map(stop => [stop, gradientStop(stop)]),
   ['text', (value, ctx) => fontSize(value, ctx) ?? sides(['color'], color(value, ctx))],
   ['font', (value, ctx) => fontWeight(value, ctx) ?? fontFamily(value, ctx)],
   ['leading', (value, ctx) => {

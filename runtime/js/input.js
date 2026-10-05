@@ -3,9 +3,18 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 const listeners = new Set();
 
-// ABI v2: hosts emit up/down/left/right/confirm/back on the JS/render thread.
+const pending = [];
+
+function deliver() {
+  for (const action of pending.splice(0)) for (const listener of listeners) listener(action);
+}
+
+// ABI v2: hosts emit up/down/left/right/confirm/back on the JS/render thread, before the frame's
+// pump. Actions are delivered from the pump's microtask drain, which runs inside React's batch like
+// the bridge's own events: a direct host call is outside it, so each setState of a handler would
+// render and commit on its own, and the frame log would count that render outside `react`.
 globalThis.__ps5ReactDispatch = action => {
-  for (const listener of listeners) listener(action);
+  if (pending.push(action) === 1) Promise.resolve().then(deliver);
 };
 
 /**

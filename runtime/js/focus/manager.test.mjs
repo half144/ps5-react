@@ -249,3 +249,46 @@ test('scrolled frames shift rectangles and are revealed innermost first', () => 
   assert.equal(t.key(), 'deep');
   assert.deepEqual(revealed, [['inner', 400], ['outer', 100]]);
 });
+
+test('an inert scope is out of navigation; a move with nothing visible stays put', () => {
+  const t = setup();
+  const browse = t.scope(t.focus.root, {inert: true});
+  t.node('hidden', 0, 800, browse, {autoFocus: true});
+  t.focus.mountScope(browse);
+  assert.equal(t.key(), null);
+  const game = t.scope(t.focus.root, {autoFocus: true});
+  t.node('top', 0, 0, game);
+  t.node('last', 0, 200, game);
+  t.focus.mountScope(game);
+  t.focus.focus('last');
+  t.focus.move('down');
+  assert.equal(t.key(), 'last');
+  assert.equal(t.focus.focus('hidden'), false);
+  browse.props = {};
+  t.focus.move('down');
+  assert.equal(t.key(), 'hidden');
+});
+
+test('a scope that becomes inert hands focus back once the commit settles', () => {
+  const t = setup();
+  t.node('header', 0, 0);
+  const page = t.scope(t.focus.root);
+  t.node('card', 0, 300, page);
+  t.node('other', 120, 300, page);
+  t.focus.mountScope(page);
+  t.focus.focus('header');
+  t.focus.focus('card');
+  t.focus.setProps(page, {inert: true});
+  assert.equal(t.key(), 'card');
+  t.flush();
+  assert.equal(t.key(), 'header');
+
+  t.focus.setProps(page, {});
+  t.focus.focus('card');
+  const screen = t.scope(t.focus.root, {autoFocus: true});
+  t.node('play', 0, 600, screen);
+  t.focus.setProps(page, {inert: true});
+  t.focus.mountScope(screen);
+  t.flush();
+  assert.equal(t.key(), 'play', 'a screen that took focus in the same commit keeps it');
+});

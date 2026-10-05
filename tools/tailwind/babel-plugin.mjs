@@ -155,7 +155,8 @@ export default function tailwindPlugin({types: t}, {compiler}) {
   function build(segments, element, imports, node, context = {}, animated = false) {
     const {base, variants, imports: fonts, motion} = parse(segments);
     fonts.forEach(path => imports.add(path));
-    const scope = {...context, ...base, $transform: {...context.$transform, ...base.$transform}};
+    const scope = {...context, ...base, $transform: {...context.$transform, ...base.$transform},
+      $gradient: {...context.$gradient, ...base.$gradient}};
     const entries = [];
     const [target, rest] = animated ? splitTarget(base) : [{}, base];
     const layers = [];

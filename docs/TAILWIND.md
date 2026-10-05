@@ -196,6 +196,35 @@ An opacity modifier is accepted on every color utility: `/0`–`/100` in steps o
 5, `/[0.35]`, or `/[35%]`. The result is emitted as `#rrggbbaa`, multiplied
 with any alpha the color already has. `bg-opacity-*` and similar are rejected.
 
+### Gradients
+
+`bg-gradient-to-{t,tr,r,br,b,bl,l,tl}` with `from-*`, optional `via-*`, and
+`to-*` colors compile to a `backgroundGradient` style, as in Tailwind v3.3+:
+
+```jsx
+<View className="absolute inset-0 bg-gradient-to-r from-canvas via-canvas/80 to-transparent" />
+<View className="absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-canvas to-transparent" />
+```
+
+- Stops sit at 0%, 50% (`via-*`), and 100% unless positioned with
+  `from-10%`, `via-35%`, `to-75%` (0%–100% in steps of 5, extended through
+  `theme.gradientColorStopPositions`) or an arbitrary `from-[12.5%]`.
+  Pixel positions are rejected.
+- Without `to-*` the gradient fades to a transparent `from` color. A gradient
+  needs `from-*` and a `bg-gradient-to-*` direction; the build fails otherwise.
+- Colors take the usual palette, arbitrary values, and opacity modifiers.
+  Stops are interpolated premultiplied, as browsers do, so `to-transparent`
+  fades without a dark fringe.
+- Corner directions (`bg-gradient-to-br`) follow the element's aspect ratio,
+  as CSS `to bottom right` does.
+- The gradient replaces `backgroundColor`, is clipped to `rounded-*`, and is
+  drawn with an ordered dither, so long dark ramps show no 8-bit bands.
+- Variants compose with the static parts: `focused:from-sky-500` keeps the
+  base direction and other stops.
+- At most four stops. `bg-gradient-radial`, conic gradients, and `bg-none` are
+  not available as classes; a radial gradient is available through
+  `style={{backgroundGradient: {type: 'radial', stops: [...]}}}`.
+
 ### Typography
 
 | Class | Style |
@@ -263,6 +292,19 @@ only: `fontWeight` 600 and above is bold, everything else regular.
 Transform classes compose into one `transform` array in the order translate,
 rotate, scale. A variant such as `focused:scale-105` keeps the element's base
 `rotate-*` or `translate-*`. Percentage translations are rejected.
+
+`Svg`, `Path`, `Circle`, `Rect`, `Line`, and `G` are exported from
+`@ps5-react/core` for icons and other vector shapes; they take the Embedded
+React SVG props (`d`, `stroke`, `strokeWidth`, `fill`) rather than classes. Up
+to 64 `<Svg>` nodes can be mounted at once (`ERUI_MAX_VECTOR_NODES`); further
+ones draw nothing. The 32 most recent static ones skip re-flattening on repaint
+(`ERUI_VECTOR_CACHE_NODES`).
+
+Images drawn larger or smaller than their baked size are scaled bilinearly. The
+engine profile (`native/ps5/CMakeLists.txt`, shared by both hosts) enables
+`ERUI_BILINEAR_SCALE`, scales rows up to the full 2560-pixel render width
+(`ERUI_MAX_IMG_ROW_PIXELS`), and registers up to 256 baked images
+(`ERUI_IMAGE_REGISTRY_MAX`); images past that limit never draw.
 
 ## State variants
 
@@ -511,7 +553,7 @@ export default {
 - Supported keys: `colors`, `spacing`, `fontSize`, `fontFamily`, `fontWeight`,
   `lineHeight`, `letterSpacing`, `borderRadius`, `borderWidth`, `opacity`,
   `zIndex`, `scale`, `rotate`, `aspectRatio`, `maxWidth`, `lineClamp`,
-  `transitionDuration`, `transitionDelay`. Any other
+  `transitionDuration`, `transitionDelay`, `gradientColorStopPositions`. Any other
   key is a configuration error.
 - Lengths may be numbers (logical px) or `'Npx'` / `'Nrem'` strings.
 - `fontSize` entries may be a number, a string, or `[size, lineHeight]`; a line
@@ -536,7 +578,7 @@ These fail the build with the reason shown. Any other unknown class fails with
 | `uppercase`, `lowercase`, `capitalize`, `normal-case` | No text-transform; transform the string in JavaScript |
 | `ring-*`, `outline-*` | Use `border-*` |
 | `transition-colors`, `transition-shadow`, `animate-<other>`, other `transition-*`, `duration-*`, `ease-*`, `delay-*` values | Only the [animation classes](#animation-classes) are supported |
-| `bg-gradient-*`, `from-*`, `via-*`, `to-*`, `bg-none` | No View gradients |
+| `bg-gradient-<other>`, `bg-none` | Only `bg-gradient-to-*` linear [gradients](#gradients); remove the class to drop one |
 | `blur`, `brightness`, `contrast`, `grayscale`, `hue-rotate`, `invert`, `saturate`, `sepia`, `backdrop-*`, `filter`, `mix-blend-*`, `bg-blend-*` | No filters or blending |
 | `bg-opacity-*`, `text-opacity-*`, `border-opacity-*` | Use a color opacity modifier such as `bg-black/50` |
 | `skew-*` | No skew transform |

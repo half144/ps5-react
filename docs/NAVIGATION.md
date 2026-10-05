@@ -110,7 +110,8 @@ Rectangles are the elements' laid-out screen rectangles (pre-transform), kept
 up to date as layout and scrolling change. If nothing qualifies in the scope,
 the search continues in the parent scope unless the scope traps. A `wrap`
 scope first wraps within the same row or column; with nothing there, the search
-continues outward as usual.
+continues outward as usual. When no scope has a candidate, focus stays where it
+is.
 
 Because rectangles are pre-transform, `focused:scale-105`, `whileFocus` lifts,
 and animated translations never change where focus goes next. Let the layout
@@ -126,10 +127,15 @@ express the order you want, and use `nextFocus*` only for exceptions.
 | `restoreFocus` | Re-entering the scope focuses the element focused when it was left (default `true`) |
 | `onBack` | Handles Circle while focus is inside; return `true` to consume |
 | `focusKey` | Name for `focus(key)` on the scope (focuses its remembered element) |
+| `inert` | Takes the scope's subtree out of navigation while true: no candidates, no `autoFocus`, no `focus(key)`; focus inside moves out after the commit |
 
 Scopes nest. The active scope is the innermost scope containing the focused
 element. Unmounting the focused element moves focus to the nearest focusable in
 the same scope (or the scope's remembered/first element).
+
+Use `inert` for a layer that stays mounted while hidden (`display: none`, or
+covered by another screen). The engine stops laying out a hidden subtree, so its
+elements keep their last rectangles and would otherwise remain reachable.
 
 `FocusScope` renders no element of its own, so it does not affect layout.
 
@@ -152,7 +158,7 @@ returns whether something took focus, so it can be returned from `onBack`.
 ## ScrollView
 
 A `ScrollView` scrolls its focused descendant into view (minimal movement with a
-margin), animated with `transitions.focus` when possible.
+margin), with a short ease-out (about 250 ms) driven through the native scroll offset.
 
 ```jsx
 <ScrollView className="flex-1 gap-1">
