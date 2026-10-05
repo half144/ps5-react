@@ -35,6 +35,8 @@ constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT
 
 void react_log(const char* line) { hui::sys::log("[REACT] %s", line); }
 
+std::uint32_t perf_clock() { return static_cast<std::uint32_t>(hui::sys::monotonic_us()); }
+
 // Indexed like kButtonNames.
 constexpr hui::Action kButtonActions[] = {
   hui::Action::up, hui::Action::down, hui::Action::left, hui::Action::right,
@@ -66,6 +68,7 @@ const char* nav_action(hui::Direction direction) {
 }
 
 bool dispatch(const char* action) {
+  er_perf_phase_begin(ER_PERF_PHASE_JS);
   JSContext* ctx = er_runtime_context();
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue fn = JS_GetPropertyStr(ctx, global, "__ps5ReactDispatch");
@@ -81,6 +84,7 @@ bool dispatch(const char* action) {
   }
   JS_FreeValue(ctx, result); JS_FreeValue(ctx, value);
   JS_FreeValue(ctx, fn); JS_FreeValue(ctx, global);
+  er_perf_phase_end(ER_PERF_PHASE_JS);
   return ok;
 }
 
@@ -133,6 +137,7 @@ bool run_proof() {
     hui::sys::log("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
     std::uint64_t frames = 0;
+    er_perf_set_clock(perf_clock);
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
@@ -147,10 +152,15 @@ bool run_proof() {
       if (ok && input.is_pressed(hui::Action::back)) ok = dispatch("back");
       if (!ok) break;
       stats.lap(FrameStats::input, hui::sys::monotonic_us());
-      er_runtime_pump(); er_commit();
+      er_perf_phase_begin(ER_PERF_PHASE_JS);
+      er_runtime_pump();
+      er_perf_phase_end(ER_PERF_PHASE_JS);
+      er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
       stats.lap(FrameStats::update, hui::sys::monotonic_us());
+      er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
       ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), display.width(), display.height());
+      er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
       ok = ok && display.swap();
@@ -164,6 +174,7 @@ bool run_proof() {
       embedded_renderer_tick(static_cast<std::uint32_t>(std::clamp<std::int64_t>((now-previous)/1000, 0, 50)));
       previous = now;
       ++frames;
+      if (const char* line = stats.end_frame(33000)) hui::sys::log("[PS5-REACT] %s", line);
       if (ps5_react_exit_requested()) break;
     }
     hui::sys::log("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));

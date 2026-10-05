@@ -3,7 +3,8 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useLayoutEffect, useRef} from 'react';
 import {subscribeInput} from './input.js';
-export {AppRegistry, Text, Animated, useAnimatedValue, Easing, LayoutAnimation} from 'embedded-react';
+export {AppRegistry, Text, Animated, useAnimatedValue, Easing, LayoutAnimation, Svg, Path, Circle, Rect, Line, G}
+  from 'embedded-react';
 export {View, Image, Pressable, ScrollView, FocusScope, useFocusable, useFocus, useIsFocused} from './focus/index.js';
 export {motion, AnimatePresence, transitions} from './motion/index.js';
 export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useGamepad, Linking, BackHandler}

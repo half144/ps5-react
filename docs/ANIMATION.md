@@ -298,7 +298,7 @@ Both hosts always print a summary every two seconds (illustrative values, not
 a PS5 measurement):
 
 ```text
-[PS5-REACT] frame: fps=59.9 total avg=16.7ms p95=17.1 max=21.4 | input=0.1 update=3.2 present=1.9 swap=11.4
+[PS5-REACT] frame: fps=59.9 total avg=16.7ms p95=17.1 max=21.4 | input=0.1 update=3.2 present=1.9 swap=11.4 | js=0.4 (dispatch=0.1 react=0.2 marshal=0.1) layout=0.1 raster=2.7 (prepass=0.1 render=1.6 blit=1.0) dirty=310kpx blit=820kpx
 ```
 
 On the PS5, the line goes to the kernel log (`sceKernelDebugOutText`), which
@@ -310,19 +310,57 @@ omits it.
 | --- | --- |
 | `fps` | Frames per second over the two-second window |
 | `total avg`, `p95`, `max` | Time between frame starts in ms: mean, 95th percentile, and worst |
-| `input` | Controller polling and action dispatch to JavaScript |
+| `input` | Controller polling and action dispatch to JavaScript, including any render a handler causes |
 | `update` | The JavaScript pump, React commits, layout, and CPU rasterization |
-| `present` | Converting the framebuffer to RGBA on the CPU, uploading it, and drawing it with OpenGL |
+| `present` | Uploading the damaged framebuffer rectangles and drawing them with OpenGL |
 | `swap` | Buffer swap, including any wait for vertical sync |
+| `js` | JavaScript, split into `dispatch` (handlers, timers, microtasks), `react` (component renders) and `marshal` (props pushed into the engine) |
+| `layout` | Flex layout and text measurement |
+| `raster` | CPU rasterization, split into `prepass` (deciding what to repaint), `render` (compositing) and `blit` (framebuffer writes) |
+| `dirty`, `blit` | Thousands of pixels repainted, and written, per frame; `blit` well above `dirty` means overlapping layers |
 
-Phase values are per-frame means in ms. `total` minus the four phases is the
-engine's animation tick plus loop overhead. A large `swap` with a small `update`
-means the frame finished early and waited for vsync, which is healthy. When
-`fps` drops, look at `update`: if it rises only while an animation runs, the
-animation repaints too much (a large fade, or a loop inside a scaled element).
-A `p95` or `max` far above the mean points at hitches, such as a page
-transition mounting a large tree in one frame. Desktop timings do not predict
-PS5 timings; measure on the console before claiming a frame rate.
+Phase values are per-frame means in ms. `total` minus the four host phases is
+the engine's animation tick plus loop overhead. The second group comes from the
+engine's own instrumentation (`ERUI_PERF_STATS`, enabled in
+`native/ps5/CMakeLists.txt`) and adds `js + layout + raster ≈ input + update`.
+A large `swap` with a small `update` means the frame finished early and waited
+for vsync, which is healthy. When `fps` drops, look at `update`: if it rises
+only while an animation runs, the animation repaints too much (a large fade, a
+loop inside a scaled element, or a large image drawn at a size other than its
+baked size, which is rescaled on every repaint). A `p95` or `max` far above the
+mean points at hitches, such as a page transition mounting a large tree in one
+frame. Desktop timings do not predict PS5 timings; measure on the console
+before claiming a frame rate.
+
+Frames longer than 33 ms also print one line each (at most eight per window),
+with the same split for that frame and the bounding box of its repaint:
+
+```text
+[PS5-REACT] slow frame: 41.2ms | js=24.1 (dispatch=0.6 react=22.0 marshal=1.0) layout=0.2 raster=9.8 (prepass=0.1 render=6.4 blit=3.2) present=2.6 other=4.5 | dirty=2356x1250@142,190 1849kpx blit=7013kpx
+```
+
+`other` is host work outside those phases, including the vsync wait. The host
+clamps the animation step to 50 ms, so frames beyond that make animations run
+in slow motion.
+
+#### Reproducible profiling on the desktop
+
+The preview replays a scripted input sequence when `PS5_REACT_INPUT_SCRIPT` is
+set, through the same dispatch path as the keyboard and controller. Steps are
+comma-separated: an action (`up`, `down`, `left`, `right`, `confirm`, `back`)
+takes one frame, `action*N` repeats it at the held-key repeat interval
+(110 ms), `wait:MS` pauses for wall-clock milliseconds, and `quit` closes the
+preview. `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
+action is echoed as a `script:` line, so the log reads as a timeline. Run the
+preview binary directly to set them:
+
+```sh
+PS5_REACT_SANDBOX=.build/my-app/sandbox PS5_REACT_SLOW_FRAME_MS=20 \
+PS5_REACT_INPUT_SCRIPT="wait:3000,right*3,wait:1500,confirm,wait:2000,back,wait:2000,quit" \
+  .build/my-app/desktop/ps5-react-preview .build/my-app/generated/app.bundle.js
+```
+
+The variables have no effect on `--self-test`.
 
 ## Design guidelines
 

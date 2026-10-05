@@ -3,7 +3,12 @@
     "url": "https://github.com/TheMasterCoder007/embedded-react.git",
     "revision": "cf5dfe4fae966fe21a265acc3dd3b054d245f981",
     "patches": [
-      "patches/embeddedReact-flex-wrap-auto-height.patch"
+      "patches/embeddedReact-flex-wrap-auto-height.patch",
+      "patches/embeddedReact-scaled-image-clip.patch",
+      "patches/embeddedReact-identity-scale.patch",
+      "patches/embeddedReact-view-gradient.patch",
+      "patches/embeddedReact-scroll-offset.patch",
+      "patches/embeddedReact-scroll-to.patch"
     ]
   },
   "platform": {

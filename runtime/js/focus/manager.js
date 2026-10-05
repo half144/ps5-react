@@ -14,7 +14,8 @@ import {findClosest, findNearest, findWrap} from './geometry.js';
  *   autoFocus?: boolean, disabled?: boolean, nextFocusUp?: string, nextFocusDown?: string,
  *   nextFocusLeft?: string, nextFocusRight?: string}} NodeProps
  * @typedef {{focusKey?: string, autoFocus?: boolean, trap?: boolean, wrap?: boolean,
- *   restoreFocus?: boolean, onBack?: () => boolean | void}} ScopeProps
+ *   restoreFocus?: boolean, inert?: boolean, onBack?: () => boolean | void}} ScopeProps
+ *   `inert` takes the scope's subtree out of navigation (a hidden layer that stays mounted).
  * @typedef {{kind: 'scope', parent: Scope | null, props: ScopeProps, remembered: Node | null,
  *   returnTo: Node | null, dead: boolean}} Scope
  * @typedef {{kind: 'node', scope: Scope, frame: Frame | null, props: NodeProps, rect: Rect | null,
@@ -28,6 +29,12 @@ const NEXT = {up: 'nextFocusUp', down: 'nextFocusDown', left: 'nextFocusLeft', r
 function within(scope, ancestor) {
   for (; scope; scope = scope.parent) if (scope === ancestor) return true;
   return false;
+}
+
+/** Whether no scope from `scope` up is inert. @param {Scope | null} scope */
+function navigable(scope) {
+  for (; scope; scope = scope.parent) if (scope.props.inert) return false;
+  return true;
 }
 
 export class FocusManager {
@@ -68,7 +75,10 @@ export class FocusManager {
   /** Replaces an entry's props, keeping its `focusKey` registered. @param {Node | Scope} entry @param {object} props */
   setProps(entry, props) {
     const previous = entry.props.focusKey;
+    const becameInert = props.inert && !entry.props.inert;
     entry.props = props;
+    // Deferred like recovery, so a screen mounted in the same commit can take focus first.
+    if (becameInert) this.schedule(() => this.evict());
     if (entry.dead || previous === props.focusKey) return;
     if (previous != null && this.keys.get(previous) === entry) this.keys.delete(previous);
     if (props.focusKey != null) this.keys.set(props.focusKey, entry);
@@ -79,7 +89,9 @@ export class FocusManager {
     node.dead = false;
     this.nodes.add(node);
     if (node.props.focusKey != null) this.keys.set(node.props.focusKey, node);
-    if (node.props.autoFocus && !(this.focused && within(this.focused.scope, node.scope))) this.setFocus(node);
+    if (node.props.autoFocus && navigable(node.scope) && !(this.focused && within(this.focused.scope, node.scope))) {
+      this.setFocus(node);
+    }
   }
 
   /** @param {Node} node */
@@ -98,7 +110,7 @@ export class FocusManager {
   mountScope(scope) {
     scope.dead = false;
     if (scope.props.focusKey != null) this.keys.set(scope.props.focusKey, scope);
-    if (scope.props.autoFocus && !(this.focused && within(this.focused.scope, scope))) {
+    if (scope.props.autoFocus && navigable(scope) && !(this.focused && within(this.focused.scope, scope))) {
       const target = this.firstOf(scope);
       if (target) this.setFocus(target);
     }
@@ -129,7 +141,7 @@ export class FocusManager {
   focus(target) {
     const entry = typeof target === 'string' ? this.keys.get(target) : target;
     const node = entry?.kind === 'scope' ? this.firstOf(entry) : entry;
-    if (!node || node.dead) return false;
+    if (!node || node.dead || !navigable(node.scope)) return false;
     this.setFocus(node);
     return true;
   }
@@ -200,7 +212,7 @@ export class FocusManager {
   candidates(scope) {
     const result = [];
     for (const node of this.nodes) {
-      if (!within(node.scope, scope)) continue;
+      if (!within(node.scope, scope) || !navigable(node.scope)) continue;
       const rect = this.rectOf(node);
       if (rect && (rect.width > 0 || rect.height > 0)) result.push({node, rect, order: node.order});
     }
@@ -209,10 +221,13 @@ export class FocusManager {
 
   /** @param {Scope} scope @returns {Node | null} */
   firstOf(scope) {
-    if (scope.remembered && !scope.remembered.dead && scope.props.restoreFocus !== false) return scope.remembered;
+    const remembered = scope.remembered;
+    if (remembered && !remembered.dead && navigable(remembered.scope) && scope.props.restoreFocus !== false) {
+      return remembered;
+    }
     let first = null;
     for (const node of this.nodes) {
-      if (within(node.scope, scope) && (!first || node.order < first.order)) first = node;
+      if (within(node.scope, scope) && navigable(node.scope) && (!first || node.order < first.order)) first = node;
     }
     return first;
   }
@@ -222,7 +237,8 @@ export class FocusManager {
     let entered = null;
     for (let scope = winner.scope; scope && !within(current.scope, scope); scope = scope.parent) entered = scope;
     const remembered = entered?.remembered;
-    return remembered && !remembered.dead && entered.props.restoreFocus !== false ? remembered : winner;
+    return remembered && !remembered.dead && navigable(remembered.scope) && entered.props.restoreFocus !== false
+      ? remembered : winner;
   }
 
   /** @param {Node | null} next */
@@ -257,23 +273,37 @@ export class FocusManager {
   }
 
   /** After the focused node unmounted: a dead scope's previous focus, else the nearest survivor. */
-  recover({scope, rect}) {
+  recover(lost) {
     if (this.focused) return;
+    const target = this.fallback(lost);
+    if (target) this.setFocus(target);
+    else for (const listener of this.listeners) listener();
+  }
+
+  /** Moves focus out of a subtree that became inert, the way recovery leaves an unmounted one. */
+  evict() {
+    const node = this.focused;
+    if (!node || navigable(node.scope)) return;
+    this.setFocus(this.fallback({scope: node.scope, rect: this.rectOf(node)}));
+  }
+
+  /**
+   * Where focus goes when it must leave `scope`: an unusable (dead or inert) scope's previous focus,
+   * else the navigable element nearest `rect`, else the scope's remembered or first one, outward.
+   * @param {{scope: Scope | null, rect: Rect | null}} from
+   * @returns {Node | null}
+   */
+  fallback({scope, rect}) {
     for (; scope; scope = scope.parent) {
-      if (scope.dead) {
-        if (scope.returnTo && !scope.returnTo.dead) {
-          this.setFocus(scope.returnTo);
-          return;
-        }
+      if (scope.dead || !navigable(scope)) {
+        const back = scope.returnTo;
+        if (back && !back.dead && navigable(back.scope)) return back;
         continue;
       }
       const target = (rect && findClosest(rect, this.candidates(scope))?.node) ?? this.firstOf(scope);
-      if (target) {
-        this.setFocus(target);
-        return;
-      }
+      if (target) return target;
     }
-    for (const listener of this.listeners) listener();
+    return null;
   }
 
   /** @param {Node} node */

@@ -70,6 +70,43 @@
   `apps/system-explorer`, and `apps/motion-lab` navigate with focusable elements
   and scopes instead of manual focus indices. The starter's snapshots are
   unchanged.
+- `Svg`, `Path`, `Circle`, `Rect`, `Line`, and `G` are re-exported from
+  `@ps5-react/core`.
+- The engine profile scales images bilinearly, across the full 2560-pixel
+  render width, registers up to 256 images, and holds 64 `<Svg>` nodes with 32
+  cached (about 2.9 MB more static memory). The starter's snapshots are
+  unchanged.
+- `ScrollView` scrolls its focused descendant into view with the engine's
+  native scroll offset (Embedded React is patched with
+  `NativeUI.scrollTo`) instead of translating a content wrapper, so layout
+  props stay on the ScrollView and nested rails scroll innermost first.
+- `FocusScope` takes `inert`: its subtree leaves D-pad navigation, autoFocus,
+  and focus restoration, and focus leaves it when it becomes inert. Use it for
+  mounted but hidden screens. When no scope has a candidate, focus stays put.
+- The engine profile raises the node pool and bridge handles to 2048, so two
+  full screens fit during a transition; the bridge warns once when node
+  creation fails instead of dropping nodes silently.
+- Views take a `backgroundGradient` style (CSS linear and radial gradients,
+  up to four stops), and Tailwind compiles `bg-gradient-to-*`, `from-*`,
+  `via-*`, and `to-*` with stop positions to it. The engine profile enables
+  `ERUI_GRADIENT` (about 23 KB more static memory). The starter's snapshots are
+  unchanged.
+- The frame-time summary adds the engine's own split (`js` with dispatch,
+  React render, and marshal; `layout`; `raster` with pre-pass, render, and
+  blit) and the repainted and written pixels per frame. Frames over 33 ms print
+  a `slow frame:` line with that split and the repaint bounds. The engine
+  profile enables `ERUI_PERF_STATS` for this; no overlay is drawn.
+- The desktop preview replays `PS5_REACT_INPUT_SCRIPT` (for example
+  `wait:3000,right*3,confirm,wait:2000,back,quit`) through the normal input
+  path for reproducible profiling; `PS5_REACT_SLOW_FRAME_MS` sets the
+  slow-frame threshold. See `docs/ANIMATION.md`.
+- Embedded React is patched so a repaint over an image converts and scales only
+  the repainted part instead of the whole image, bilinear scaling uses integer
+  weights, and a scale animation resting at 1 no longer renders its subtree
+  through the transform buffer. The starter's snapshots are unchanged.
+- Controller actions reach JavaScript inside React's batch, from the frame's
+  microtask drain: a handler that sets several pieces of state renders and
+  commits once, and its render counts as `react` in the frame log.
 
 ## 0.1.0 — 2026-10-05
 

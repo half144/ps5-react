@@ -15,6 +15,8 @@ Tenths tenths(std::uint64_t value, std::uint64_t divisor) {
   const std::uint64_t t = (value * 10 + divisor / 2) / divisor;
   return {static_cast<unsigned>(t / 10), static_cast<unsigned>(t % 10)};
 }
+
+#define MS(t) (t).whole, (t).tenth
 } // namespace
 
 const char* FrameStats::start_frame(std::int64_t now_us) {
@@ -42,20 +44,69 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
                  max = tenths(total_max_, 1000);
     Tenths phase[phase_count];
     for (int i = 0; i < phase_count; ++i) phase[i] = tenths(phase_sum_[i], std::uint64_t{frames_} * 1000);
-    std::snprintf(line_, sizeof line_,
+    const int length = std::snprintf(line_, sizeof line_,
                   "frame: fps=%u.%u total avg=%u.%ums p95=%u.%u max=%u.%u | input=%u.%u update=%u.%u present=%u.%u swap=%u.%u",
-                  fps.whole, fps.tenth, avg.whole, avg.tenth, p.whole, p.tenth, max.whole, max.tenth,
-                  phase[input].whole, phase[input].tenth, phase[update].whole, phase[update].tenth,
-                  phase[present].whole, phase[present].tenth, phase[swap].whole, phase[swap].tenth);
+                  MS(fps), MS(avg), MS(p), MS(max), MS(phase[input]), MS(phase[update]), MS(phase[present]),
+                  MS(phase[swap]));
+    if (perf_frames_ && length > 0 && length < static_cast<int>(sizeof line_)) {
+      const std::uint64_t ms = std::uint64_t{perf_frames_} * 1000;
+      // Mean ms per frame, and mean kilopixels repainted (dirty) and written (blit) per frame.
+      std::snprintf(line_ + length, sizeof line_ - length,
+                    " | js=%u.%u (dispatch=%u.%u react=%u.%u marshal=%u.%u) layout=%u.%u raster=%u.%u"
+                    " (prepass=%u.%u render=%u.%u blit=%u.%u) dirty=%llukpx blit=%llukpx",
+                    MS(tenths(engine_sum_[ER_PERF_PHASE_JS], ms)), MS(tenths(js_sub_sum_[ER_PERF_JS_DISPATCH], ms)),
+                    MS(tenths(js_sub_sum_[ER_PERF_JS_RECONCILE], ms)), MS(tenths(js_sub_sum_[ER_PERF_JS_MARSHAL], ms)),
+                    MS(tenths(engine_sum_[ER_PERF_PHASE_LAYOUT], ms)), MS(tenths(engine_sum_[ER_PERF_PHASE_RASTER], ms)),
+                    MS(tenths(raster_sub_sum_[ER_PERF_RASTER_PREPASS], ms)),
+                    MS(tenths(raster_sub_sum_[ER_PERF_RASTER_RENDER], ms)),
+                    MS(tenths(raster_sub_sum_[ER_PERF_RASTER_BLIT], ms)),
+                    static_cast<unsigned long long>(dirty_px_sum_ / ms),
+                    static_cast<unsigned long long>(blit_px_sum_ / ms));
+    }
     summary = line_;
     std::fill(std::begin(phase_sum_), std::end(phase_sum_), 0);
     total_sum_ = 0; total_max_ = 0; frames_ = 0;
+    std::fill(std::begin(engine_sum_), std::end(engine_sum_), 0);
+    std::fill(std::begin(js_sub_sum_), std::end(js_sub_sum_), 0);
+    std::fill(std::begin(raster_sub_sum_), std::end(raster_sub_sum_), 0);
+    dirty_px_sum_ = blit_px_sum_ = 0;
+    perf_frames_ = slow_lines_ = 0;
     window_start_ = now_us;
   }
+  er_perf_frame_begin();
   return summary;
 }
 
 void FrameStats::lap(Phase phase, std::int64_t now_us) {
   phase_sum_[phase] += static_cast<std::uint64_t>(std::max<std::int64_t>(now_us - mark_, 0));
   mark_ = now_us;
+}
+
+const char* FrameStats::end_frame(std::uint32_t slow_us) {
+  er_perf_frame_end();
+  ERPerfFrame f;
+  if (!er_perf_get_last(&f)) return nullptr;
+  for (int i = 0; i < ER_PERF_PHASE_COUNT; ++i) engine_sum_[i] += f.phase_us[i];
+  for (int i = 0; i < ER_PERF_JS_COUNT; ++i) js_sub_sum_[i] += f.js_us[i];
+  for (int i = 0; i < ER_PERF_RASTER_COUNT; ++i) raster_sub_sum_[i] += f.raster_us[i];
+  dirty_px_sum_ += f.dirty_px;
+  blit_px_sum_ += f.blit_px;
+  ++perf_frames_;
+  if (f.frame_us <= slow_us || slow_lines_ >= slow_lines_per_window) return nullptr;
+  ++slow_lines_;
+  // `other` is host work outside js/layout/raster/present: input polling, swap, the animation tick.
+  std::snprintf(slow_line_, sizeof slow_line_,
+                "slow frame: %u.%ums | js=%u.%u (dispatch=%u.%u react=%u.%u marshal=%u.%u) layout=%u.%u"
+                " raster=%u.%u (prepass=%u.%u render=%u.%u blit=%u.%u) present=%u.%u other=%u.%u"
+                " | dirty=%dx%d@%d,%d %ukpx blit=%ukpx",
+                MS(tenths(f.frame_us, 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_JS], 1000)),
+                MS(tenths(f.js_us[ER_PERF_JS_DISPATCH], 1000)), MS(tenths(f.js_us[ER_PERF_JS_RECONCILE], 1000)),
+                MS(tenths(f.js_us[ER_PERF_JS_MARSHAL], 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_LAYOUT], 1000)),
+                MS(tenths(f.phase_us[ER_PERF_PHASE_RASTER], 1000)), MS(tenths(f.raster_us[ER_PERF_RASTER_PREPASS], 1000)),
+                MS(tenths(f.raster_us[ER_PERF_RASTER_RENDER], 1000)), MS(tenths(f.raster_us[ER_PERF_RASTER_BLIT], 1000)),
+                MS(tenths(f.phase_us[ER_PERF_PHASE_PRESENT], 1000)), MS(tenths(f.other_us, 1000)),
+                static_cast<int>(f.dirty_w), static_cast<int>(f.dirty_h), static_cast<int>(f.dirty_x),
+                static_cast<int>(f.dirty_y), static_cast<unsigned>(f.dirty_px / 1000),
+                static_cast<unsigned>(f.blit_px / 1000));
+  return slow_line_;
 }

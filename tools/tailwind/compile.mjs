@@ -7,7 +7,7 @@ import {basename, resolve} from 'node:path';
 import {addMotion, resolveMotion} from './motion.mjs';
 import {resolveTheme} from './theme.mjs';
 import {UtilityError, resolveUtility} from './utilities.mjs';
-import {parseLength} from './values.mjs';
+import {parseLength, withAlpha} from './values.mjs';
 
 export const VARIANTS = ['focused', 'selected', 'disabled', 'active', 'checked', 'pressed'];
 
@@ -49,7 +49,7 @@ function splitVariants(token) {
 
 function merge(target, fragment) {
   for (const [key, value] of Object.entries(fragment)) {
-    target[key] = key === '$transform' ? {...target.$transform, ...value} : value;
+    target[key] = key === '$transform' || key === '$gradient' ? {...target[key], ...value} : value;
   }
   return target;
 }
@@ -122,13 +122,26 @@ export function createCompiler({config = {}, renderWidth, renderHeight, appDir})
   }
 
   /**
+   * Tailwind v3.3 stops: `from` (0%), optional `via` (50%), `to` (100%); without `to-*` the
+   * gradient fades to a transparent `from`.
+   */
+  function gradient({direction, from, via, to, fromPosition = 0, viaPosition = 0.5, toPosition = 1}) {
+    if (!direction) throw new ClassError('from', 'from-*, via-*, and to-* need a bg-gradient-to-* direction');
+    if (from === undefined) throw new ClassError('bg-gradient-to', 'a gradient needs a from-* color');
+    const stops = [{color: from, offset: fromPosition}];
+    if (via !== undefined) stops.push({color: via, offset: viaPosition});
+    stops.push({color: to ?? withAlpha(from, 0), offset: toPosition});
+    return {type: 'linear', to: direction, stops};
+  }
+
+  /**
    * Turns a fragment into an engine style. `context` (the static base) supplies the font size for
    * relative leading/tracking and the transform parts a variant composes with. As in Tailwind's
    * CSS order, leading-* beats the line height bundled with text-*, so a fragment that changes
    * the font size re-resolves the context's leading/tracking against it.
    */
   function finalize(fragment, context = {}) {
-    const {$transform, $leading, $textLeading, $tracking, ...style} = fragment;
+    const {$transform, $gradient, $leading, $textLeading, $tracking, ...style} = fragment;
     const fontSize = style.fontSize ?? context.fontSize;
     const inherited = style.fontSize === undefined ? {} : context;
     for (const [key, value, name] of [['lineHeight', $leading ?? inherited.$leading ?? $textLeading, 'leading'],
@@ -151,6 +164,7 @@ export function createCompiler({config = {}, renderWidth, renderHeight, appDir})
           : ['scaleX', 'scaleY'].filter(k => k in t).map(k => ({[k]: t[k]}))),
       ];
     }
+    if ($gradient) style.backgroundGradient = gradient({...(fragment === context ? {} : context.$gradient), ...$gradient});
     return style;
   }
 
