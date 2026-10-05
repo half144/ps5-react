@@ -1,0 +1,12 @@
+PS5 React
+Copyright (C) 2026 half144 and PS5 React contributors
+
+PS5 React — created by half144 and PS5 React contributors.
+https://github.com/half144/ps5-react
+
+Framework-owned code: GPL-3.0-or-later with the attribution-preservation term
+in LICENSE-ATTRIBUTION (GPLv3 section 7(b)).
+
+Built on Embedded React, ps5-homebrew-ui, ps5-opengl, PS5 Payload SDK,
+QuickJS-ng, React, and Inter. These dependencies retain their original authors,
+licenses, and notices. See docs/DEPENDENCIES.md and licenses/.

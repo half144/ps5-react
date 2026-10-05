@@ -1,0 +1,155 @@
+// Copyright (C) 2026 half144 and PS5 React contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Additional attribution term: see LICENSE-ATTRIBUTION.
+// Independent React proof: PS5 lifecycle/display/input, software UI and GL texture.
+
+#include "app_config.hpp"
+#include "platform/ps5/display_egl.hpp"
+#include "platform/ps5/pad.hpp"
+#include "platform/ps5/system.hpp"
+#include "core/input.hpp"
+#include "gl_presenter.hpp"
+#include <algorithm>
+#include <cstdint>
+#include <pthread.h>
+
+extern "C" {
+#include "er_runtime.h"
+#include "er_scene.h"
+#include "native_renderer.h"
+#include "software_backend.h"
+void er_register_assets(void);
+extern const char proof_bundle[];
+extern const unsigned long proof_bundle_length;
+}
+
+namespace {
+constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
+constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT) * 1000000;
+
+void react_log(const char* line) { hui::sys::log("[REACT] %s", line); }
+
+bool dispatch(const char* action) {
+  JSContext* ctx = er_runtime_context();
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue fn = JS_GetPropertyStr(ctx, global, "__ps5ReactDispatch");
+  JSValue value = JS_NewString(ctx, action);
+  JSValue result = JS_Call(ctx, fn, global, 1, &value);
+  const bool ok = !JS_IsException(result);
+  if (!ok) {
+    JSValue error = JS_GetException(ctx);
+    const char* message = JS_ToCString(ctx, error);
+    hui::sys::log("[PS5-REACT] input exception: %s", message ? message : "unknown");
+    if (message) JS_FreeCString(ctx, message);
+    JS_FreeValue(ctx, error);
+  }
+  JS_FreeValue(ctx, result); JS_FreeValue(ctx, value);
+  JS_FreeValue(ctx, fn); JS_FreeValue(ctx, global);
+  return ok;
+}
+
+// Owned resources are released while the context is valid; closing the title
+// happens after this scope, through the platform's lifecycle API.
+bool run_proof() {
+  hui::ps5::Display display;
+  hui::ps5::Pad pad;
+  GlPresenter presenter;
+  hui::InputTracker tracker;
+  hui::PadSample samples[64];
+  bool runtime = false, software = false;
+  bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT);
+  hui::sys::log("[PS5-REACT] display=%d", ok);
+  if (ok) {
+    ok = presenter.init(width, height);
+    hui::sys::log("[PS5-REACT] presenter=%d", ok);
+  }
+  if (ok) {
+    software = er_software_backend_init(width, height);
+    ok = software;
+    hui::sys::log("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
+  }
+  if (ok) {
+    ErRuntimeConfig config = {};
+    config.screen_width = width; config.screen_height = height;
+    config.screen_scale = 2;
+    config.log = react_log;
+    config.max_stack_size = 1024 * 1024;
+    config.memory_limit = 32 * 1024 * 1024;
+    runtime = er_runtime_init(&config);
+    ok = runtime;
+    hui::sys::log("[PS5-REACT] runtime=%d", ok);
+  }
+  if (ok) {
+    er_register_assets();
+    ok = er_runtime_load_source(proof_bundle, proof_bundle_length, "app.jsx.bundle");
+    hui::sys::log("[PS5-REACT] bundle=%d gc_accounting=%d", ok, er_runtime_gc_accounting_ok());
+  }
+  if (ok) {
+    // Input failure is logged; timeout still allows the display-only proof to end.
+    hui::sys::log("[PS5-REACT] pad=%d; Options closes; timeout=%ds after first frame", pad.open(), PS5_REACT_TIMEOUT);
+    std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
+    std::uint64_t frames = 0;
+    while (ok) {
+      const std::int64_t now = hui::sys::monotonic_us();
+      if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
+      const auto count = pad.read(samples);
+      const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
+      if (input.is_pressed(hui::Action::menu)) break;
+      if (input.nav == hui::Direction::left || input.nav == hui::Direction::up)
+        ok = dispatch("previous");
+      else if (input.nav == hui::Direction::right || input.nav == hui::Direction::down)
+        ok = dispatch("next");
+      if (ok && input.is_pressed(hui::Action::confirm)) ok = dispatch("confirm");
+      if (ok && input.is_pressed(hui::Action::back)) ok = dispatch("back");
+      if (!ok) break;
+      er_runtime_pump(); er_commit();
+      if (*er_runtime_last_error()) { ok = false; break; }
+      ok = presenter.draw(er_software_framebuffer(), display.width(), display.height()) && display.swap();
+      if (!ok) break;
+      if (!first_present) {
+        first_present = hui::sys::monotonic_us();
+        hui::sys::hide_splash_screen();
+        hui::sys::log("[PS5-REACT] first frame presented");
+      }
+      embedded_renderer_tick(static_cast<std::uint32_t>(std::clamp<std::int64_t>((now-previous)/1000, 0, 50)));
+      previous = now;
+      ++frames;
+    }
+    hui::sys::log("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
+  }
+  if (!ok && runtime) hui::sys::log("[PS5-REACT] error=%s", er_runtime_last_error());
+  if (runtime) er_runtime_shutdown();
+  if (software) er_software_backend_destroy();
+  pad.close();
+  presenter.release();
+  display.close();
+  return ok;
+}
+
+void* render_thread(void*) {
+  hui::sys::log("[PS5-REACT] render thread started, 8 MiB stack");
+  const bool ok = run_proof();
+  hui::sys::log("[PS5-REACT] cleanup complete, result=%d; requesting title closure", ok);
+  hui::sys::quit();
+  return nullptr;
+}
+} // namespace
+
+int main() {
+  hui::sys::log("[PS5-REACT] %s (%s)", PS5_REACT_NAME, PS5_REACT_TITLE);
+  pthread_attr_t attributes;
+  int result = pthread_attr_init(&attributes);
+  if (!result) {
+    result = pthread_attr_setstacksize(&attributes, 8 * 1024 * 1024);
+    pthread_t thread;
+    if (!result) result = pthread_create(&thread, &attributes, render_thread, nullptr);
+    pthread_attr_destroy(&attributes);
+  }
+  if (result) {
+    hui::sys::log("[PS5-REACT] thread creation failed=%d", result);
+    hui::sys::quit();
+  }
+  // Native titles must not return to CRT exit(); the render thread owns closure.
+  hui::sys::park();
+  return 0;
+}

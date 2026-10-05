@@ -1,0 +1,23 @@
+# Copyright (C) 2026 half144 and PS5 React contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Additional attribution term: see LICENSE-ATTRIBUTION.
+cmake_minimum_required(VERSION 3.16)
+project(overdrive-react-ps5 C)
+if(NOT ER_ROOT)
+  message(FATAL_ERROR "ER_ROOT must name the pinned embedded-react checkout")
+endif()
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ERUI_BORDER_AA ON CACHE BOOL "" FORCE)
+set(ERUI_TRANSFORMS FULL CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_W 512 CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_H 512 CACHE STRING "" FORCE)
+foreach(FEATURE SMOKE RUNTEST SPLITTEST GCTEST COMPILE)
+  set(ER_BRIDGE_QUICKJS_${FEATURE} OFF CACHE BOOL "" FORCE)
+endforeach()
+add_subdirectory("${ER_ROOT}/bridges/quickjs" bridge)
+get_target_property(ENGINE_LIBRARIES embedded-react INTERFACE_LINK_LIBRARIES)
+list(REMOVE_ITEM ENGINE_LIBRARIES m)
+set_property(TARGET embedded-react PROPERTY INTERFACE_LINK_LIBRARIES "${ENGINE_LIBRARIES}")
+add_library(er-software STATIC "${ER_ROOT}/backends/software/renderer_backend.c")
+target_include_directories(er-software PUBLIC "${ER_ROOT}/backends/software")
+target_link_libraries(er-software PUBLIC embedded-react)

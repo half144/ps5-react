@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {"@ps5-react/core": ["runtime/js/index.js"]}
+  },
+  "include": ["apps/**/*.jsx", "runtime/js/**/*.js"],
+  "exclude": [".deps", ".build", "dist", "node_modules"]
+}
