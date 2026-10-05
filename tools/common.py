@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,17 +65,30 @@ def checkout(path, url, revision, patches=()):
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
     if actual != revision:
         raise RuntimeError(f"Dependency at {actual}, expected {revision}: {path}")
-    # The tree must be the pinned revision plus exactly the repository's patches.
-    git = lambda *args: subprocess.run(["git", *map(str, args)], cwd=path, capture_output=True, text=True)
-    expected = set()
-    for patch in (ROOT / p for p in patches):
-        if git("apply", "--reverse", "--check", patch).returncode:
-            # Intent-to-add, so files a patch creates count in the diff checked below.
-            run(["git", "apply", "--intent-to-add", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
-        expected |= {line.split("\t")[-1] for line in git("apply", "--numstat", patch).stdout.splitlines()}
-    changed = set(git("diff", "--name-only", "HEAD").stdout.split())
-    if changed != expected:
-        raise RuntimeError(f"Unexpected local changes in {path}: {', '.join(sorted(changed ^ expected))}")
+    # The tree must be the pinned revision plus a prefix of the repository's patches, in order; the rest
+    # are applied. Trees are compared rather than reverse-checking each patch, because a later patch may
+    # change lines an earlier one added.
+    patches = [ROOT / p for p in patches]
+    with tempfile.TemporaryDirectory() as scratch:
+        def tree(index, *steps):
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / index)}
+            git = lambda *args: subprocess.run(["git", *map(str, args)], cwd=path, env=env, capture_output=True,
+                                               text=True, check=True).stdout.strip()
+            git("read-tree", "HEAD")
+            for step in steps: git(*step)
+            return git("write-tree")
+        # Tracked files, plus the files the patches create (an untracked node_modules is not the tree).
+        touched = {line.split("\t")[-1] for patch in patches for line in subprocess.run(
+            ["git", "apply", "--numstat", patch], cwd=path, capture_output=True, text=True).stdout.splitlines()}
+        current = tree("current", ("add", "-u"), ("add", "--", *[f for f in touched if (path / f).exists()]))
+        prefix = [tree("pinned")]
+        for count in range(1, len(patches) + 1):
+            prefix.append(tree(f"stack{count}", *[("apply", "--cached", patch) for patch in patches[:count]]))
+    if current not in prefix:
+        raise RuntimeError(f"Unexpected local changes in {path}: not the pinned revision plus its patches")
+    for patch in patches[prefix.index(current):]:
+        # Intent-to-add, so files a patch creates show up in git diff like the rest.
+        run(["git", "apply", "--intent-to-add", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
 
 
 def dependency(name, override=None):
