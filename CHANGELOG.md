@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Scroll layer: one page ScrollView is painted into a separate buffer, and the
+  GPU shows its visible window, so a scroll repaints nothing. It falls back to
+  scroll by copy when an overlay covers the page or the backend has no layer.
+  The layer lives in a GPU texture (width × height × 4 bytes); the CPU stages
+  one 128-row region at a time (at most 1 MiB). See
+  `docs/SCROLL-LAYER.md`. `PS5_REACT_LAYER_CHECK` verifies the composite on
+  the desktop.
+- The presenter uploads whole rows through a pixel buffer; on the PS5 a direct
+  `glTexSubImage2D` cost about 17 µs per thousand pixels.
+- Gradient dithering and the 2D transform blit no longer depend on where on
+  the screen a node is painted, so scrolled content matches a fresh paint.
+
 - `--app-dir <path>` previews, watches, and builds an app outside `apps/`;
   `create --dir <parent>` scaffolds one. Build receipts record app sources as
   `app/<path>` instead of `apps/<name>/<path>`.

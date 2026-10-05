@@ -24,6 +24,7 @@ void er_register_assets(void);
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "input_script.hpp"
+#include "scroll_layer.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
 #include <algorithm>
@@ -98,6 +99,7 @@ struct Host {
   const char* held_action = nullptr;
   InputScript script;
   Uint32 slow_frame_us = 33000;
+  int layer_check_frames = 0, layer_check_countdown = 0; // PS5_REACT_LAYER_CHECK
   SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
 
@@ -137,7 +139,10 @@ struct Host {
 
   bool boot(const char* path) {
     backend_started = er_software_backend_init(width, height);
-    if (!backend_started || !damage_tracker_install(width, height)) return false;
+    if (!backend_started) return false;
+    if (const char* layer = std::getenv("PS5_REACT_SCROLL_LAYER"); !layer || std::strcmp(layer, "0"))
+      scroll_layer_enable(presenter);
+    if (!damage_tracker_install(width, height)) return false;
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;
@@ -197,8 +202,47 @@ struct Host {
     return true;
   }
 
+  // Compares what GL drew (framebuffer and layer, read back at one pixel per framebuffer pixel) with the
+  // viewport repainted on the framebuffer without the layer, then puts the layer back.
+  void check_layer(int sw, int sh) {
+    ERScrollLayer l;
+    if (sw != width || sh != height || !er_scroll_layer_get(&l)) return;
+    std::vector<std::uint32_t> drawn(static_cast<std::size_t>(width) * height);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadBuffer(GL_BACK);
+    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, drawn.data());
+    // A commit that lays out again shows a newer scene than the one drawn: no comparison then.
+    const std::uint32_t passes = er_layout_pass_count();
+    er_scroll_layer_enable(false);
+    er_commit();
+    if (er_layout_pass_count() != passes) {
+      er_scroll_layer_enable(true);
+      er_commit();
+      return;
+    }
+    const std::uint32_t* fb = er_software_framebuffer();
+    int differ = 0, first = -1, most = 0;
+    for (int i = 0; i < width * height; ++i) {
+      const std::uint32_t got = drawn[static_cast<std::size_t>(height - 1 - i / width) * width + i % width];
+      if ((got ^ fb[i]) & 0xffffff) {
+        if (differ++ == 0) first = i;
+        for (int shift = 0; shift < 24; shift += 8)
+          most = std::max(most, std::abs(int(got >> shift & 255) - int(fb[i] >> shift & 255)));
+      }
+    }
+    if (differ)
+      std::printf("[PS5-REACT] layer check: %d pixels differ by up to %d, first at (%d,%d)\n", differ, most,
+                  first % width, first / width);
+    else std::printf("[PS5-REACT] layer check: exact (view %d,%d %dx%d, layer %dx%d at %d)\n", l.view.x, l.view.y,
+                     l.view.w, l.view.h, l.width, l.height, l.src_y);
+    std::fflush(stdout);
+    er_scroll_layer_enable(true);
+    er_commit();
+  }
+
   bool frame(bool swap = true) {
-    if (const char* line = stats.start_frame(now_us()); line && log_frames) {
+    const std::int64_t frame_start = now_us();
+    if (const char* line = stats.start_frame(frame_start); line && log_frames) {
       std::printf("[PS5-REACT] %s\n", line);
       std::fflush(stdout); // The dev watcher reads a pipe, where stdout is fully buffered.
     }
@@ -251,6 +295,7 @@ struct Host {
     er_runtime_pump();
     er_perf_phase_end(ER_PERF_PHASE_JS);
     er_commit();
+    scroll_layer_prefetch(now_us, frame_start + kPrefetchUntilUs);
     stats.lap(FrameStats::update, now_us());
     if (ps5_react_exit_requested()) {
       running = false;
@@ -260,7 +305,14 @@ struct Host {
     SDL_GL_GetDrawableSize(window, &sw, &sh);
     if (sw > 0 && sh > 0) {
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
-      if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), sw, sh)) return false;
+      if (const char* line = scroll_layer_change(); line && log_frames) std::printf("[PS5-REACT] %s\n", line);
+      ERScrollLayer placement;
+      if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(),
+                          scroll_layer_frame(placement), sw, sh)) return false;
+      if (layer_check_frames && --layer_check_countdown <= 0) {
+        layer_check_countdown = layer_check_frames;
+        check_layer(sw, sh);
+      }
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       damage_tracker_clear();
     }
@@ -478,6 +530,7 @@ int main(int argc, char** argv) {
       if (*ms && !*rest && value > 0 && value <= 60000) host.slow_frame_us = static_cast<Uint32>(value) * 1000;
       else std::fprintf(stderr, "PS5_REACT_SLOW_FRAME_MS: expected milliseconds (1-60000), got '%s'\n", ms);
     }
+    if (const char* frames = std::getenv("PS5_REACT_LAYER_CHECK")) host.layer_check_frames = std::atoi(frames);
     if (const char* text = std::getenv("PS5_REACT_INPUT_SCRIPT")) {
       char error[160];
       ok = host.script.parse(text, error, sizeof error);

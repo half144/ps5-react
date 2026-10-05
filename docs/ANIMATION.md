@@ -361,14 +361,16 @@ PS5_REACT_INPUT_SCRIPT="wait:3000,right*3,wait:1500,confirm,wait:2000,back,wait:
   .build/my-app/desktop/ps5-react-preview .build/my-app/generated/app.bundle.js
 ```
 
-The variables have no effect on `--self-test`.
+The variables have no effect on `--self-test`. `PS5_REACT_SCROLL_LAYER=0` and
+`PS5_REACT_LAYER_CHECK` control the scroll layer ([SCROLL-LAYER.md](SCROLL-LAYER.md)).
 
 On the PS5, the host reads the same syntax from `dev/input-script.txt` in the
 app folder (`/app0/dev/input-script.txt`) when that file exists; commas,
 spaces and newlines all separate steps, and the `script:` lines go to the kernel
 log. The file is never part of a build: add it to the built title folder
 (`dist/<titleId>/dev/`) for a test deploy only, and end the script with `quit`
-so the run closes itself.
+so the run closes itself. A `dev/scroll-layer-off` file turns the scroll layer
+off for that deploy.
 
 While such a test deploy runs, the PS5 host also takes live commands: about once
 a second it reads `dev/commands.txt` and runs, in the same syntax, every line of

@@ -101,3 +101,24 @@ trace or a measurement of every mount. It does not qualify unrelated native
 modules, every filesystem operation, other firmware, or later rebuilt hashes.
 Generated build receipts continue to default to `hardware_tested: false`; use
 this record to identify the qualified artifacts.
+
+## Buffer-texture presenter run — 2026-10-05
+
+An experimental presenter that sampled the framebuffer and the scroll layer as
+`GL_TEXTURE_BUFFER` images (`texelFetch` on a `samplerBuffer`, `GL_RGBA8`)
+was uploaded as `PPSA99058` (Overdrive example) around 20:17 local time and
+launched on the same PS5 Slim Digital, firmware 13.60, through the PS5Upload
+engine. Launch was acknowledged. About 3 seconds later the kernel-log request
+failed, and the console stopped answering on the network ("No route to host").
+The user confirmed the console had entered power-saving rest mode; it did not
+crash. The sampled buffer-texture path was therefore not measured.
+
+The buffers held 1920 × 1080 texels (framebuffer) and 1920 × 4096 texels
+(layer). `eboot.bin` SHA-256:
+`0cfa2d08ae885c790635ac8b5d806af43aefe9622074b23a1813c24011431cc5`. An earlier
+build in the same session only wrote such a buffer with `glBufferSubData` and
+never sampled it, and that build ran normally. That earlier build also measured
+the upload costs that motivated the experiment: about 0.5 ms for 300,000 pixels
+through `glBufferSubData`, against about 6.5 ms through `glTexSubImage2D` from
+client memory. Whether sampling a buffer texture works or performs on the PS5
+is unknown; the presenter keeps 2D textures.

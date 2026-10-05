@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <span>
 
-// Presents an opaque software framebuffer. The caller owns the GL context.
+// Presents an opaque software framebuffer, with the scroll layer over it. The caller owns the GL context.
 // No components, fonts, layout, platform calls or dependencies on the UI kit.
 class GlPresenter {
 public:
@@ -21,18 +21,31 @@ public:
   bool draw(const std::uint32_t* argb, int surface_width, int surface_height);
   // Replays `moves` on the texture, then uploads only `damage` (damage_tracker's
   // contract); the first draw and any surface size change upload the whole buffer.
+  // `layer` (er_scroll_layer_get), when not null, is drawn over its viewport from the layer texture.
   bool draw(const std::uint32_t* argb, std::span<const ERRect> damage, std::span<const DamageMove> moves,
-            int surface_width, int surface_height);
+            const ERScrollLayer* layer, int surface_width, int surface_height);
+  // The scroll layer texture, which the engine paints region by region (ERSoftwareLayerHost).
+  bool resize_layer(int width, int height, bool* kept);
+  void upload_layer(const std::uint32_t* pixels, int x, int y, int width, int height);
+  // Tallest layer a texture can hold.
+  int max_layer_rows() const { return max_texture_; }
   void release();
 
 private:
   unsigned int program_ = 0, texture_ = 0, vao_ = 0;
   // A second texture and two framebuffers, created on the first move: GL cannot blit a texture onto itself.
   unsigned int scratch_ = 0, read_fbo_ = 0, draw_fbo_ = 0;
+  // Layer texture: layer_width_ x layer_capacity_, grown in steps so a taller page rarely reallocates.
+  unsigned int layer_texture_ = 0;
+  // Pixel buffer every upload goes through.
+  unsigned int unpack_ = 0;
+  int layer_width_ = 0, layer_capacity_ = 0, max_texture_ = 0;
+  int uv_rect_ = -1;
   int width_ = 0, height_ = 0, surface_width_ = 0, surface_height_ = 0;
   bool synced_ = false;
 
-  void upload(const std::uint32_t* argb, const ERRect& rect);
+  void upload(const std::uint32_t* pixels, int stride, int x, int y, int w, int h);
+  void upload_rows(const std::uint32_t* argb, std::span<const ERRect> rects);
   bool move(const DamageMove& move);
-  bool present(int surface_width, int surface_height);
+  bool present(int surface_width, int surface_height, const ERScrollLayer* layer);
 };

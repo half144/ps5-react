@@ -20,6 +20,8 @@ ERRect rects[ER_DAMAGE_RECTS_MAX];
 int count = 0, last = 0;
 DamageMove moves[4];
 int move_count = 0;
+// Between layer_begin and layer_end blits go to the scroll layer, which its host uploads itself.
+bool in_layer = false;
 
 ERRect unite(const ERRect& a, const ERRect& b) {
   const int x = std::min(a.x, b.x), y = std::min(a.y, b.y);
@@ -42,6 +44,7 @@ bool cheap(const ERRect& a, const ERRect& b) {
 }
 
 void note(int x, int y, int w, int h) {
+  if (in_layer) return;
   const int x0 = std::max(x, 0), y0 = std::max(y, 0);
   const int x1 = std::min(x + w, fb_width), y1 = std::min(y + h, fb_height);
   if (x1 <= x0 || y1 <= y0) return;
@@ -75,6 +78,16 @@ void blend(const void* src, int stride, std::uint8_t alpha, int x, int y, int w,
   note(x, y, w, h);
 }
 
+bool begin_layer(int x, int y, int w, int h, void* ctx) {
+  in_layer = inner.layer_begin(x, y, w, h, ctx);
+  return in_layer;
+}
+
+void end_layer(void* ctx) {
+  inner.layer_end(ctx);
+  in_layer = false;
+}
+
 void move(int src_x, int src_y, int w, int h, int dst_x, int dst_y, void* ctx) {
   inner.move_rect(src_x, src_y, w, h, dst_x, dst_y, ctx);
   if (move_count == static_cast<int>(std::size(moves))) {
@@ -105,6 +118,10 @@ bool damage_tracker_install(int width, int height) {
   wrapper.copy_rect = copy;
   wrapper.blend_rect = blend;
   if (inner.move_rect) wrapper.move_rect = move;
+  if (inner.layer_begin) {
+    wrapper.layer_begin = begin_layer;
+    wrapper.layer_end = end_layer;
+  }
   fb_width = width; fb_height = height;
   count = last = move_count = 0;
   embedded_renderer_set_backend(&wrapper);

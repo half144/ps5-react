@@ -14,7 +14,7 @@
 // outside the pump's batch, and layout handlers can commit inside er_commit).
 // Wrapping the backend's blits observes all of them.
 
-// Call right after er_software_backend_init(), before any asset or runtime setup:
+// Call right after er_software_backend_init() and er_software_enable_layer(), before any asset or runtime setup:
 // re-registering the backend resets the engine's font and image registries.
 bool damage_tracker_install(int width, int height);
 // A framebuffer move (backend move_rect): the src rect's pixels went to src + (dx, dy).

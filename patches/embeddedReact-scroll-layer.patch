@@ -1,0 +1,2224 @@
+Embedded React: paint a page ScrollView's content into a separate scroll layer.
+
+Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
+revision pinned in dependencies.lock.json, after the patches listed before this
+one there. Changed files: engine/include/native_renderer.h,
+engine/include/er_scene.h, engine/scene/compositor.c, engine/rendering/gradient.c,
+engine/rendering/transform.c, engine/rendering/transform.h,
+backends/software/renderer_backend.c, backends/software/software_backend.h,
+engine/tests/scroll/CMakeLists.txt and engine/tests/scroll/test_scroll_layer.c
+(new). Not yet proposed upstream.
+
+Scroll by copy still rasterizes the strip a scroll exposes on the scroll frame.
+A backend that implements the new optional layer_resize/layer_begin/layer_end
+callbacks lets its host keep one ScrollView's content, unscrolled, as a separate
+image (a GPU texture); the host shows its visible window over the framebuffer
+(er_scroll_layer_get), so a scroll repaints nothing. The engine paints the layer
+in regions of at most 128 rows, each from scratch inside its own clip, so the
+backend needs only a staging buffer of one region. It layers the largest
+vertical ScrollView whose ancestors paint one opaque color behind the viewport
+and over which nothing else paints; any other case keeps the existing path.
+The damage pre-pass, moved into damage_node(), runs once per space. The layer
+is tracked in 128-row bands: a commit paints the visible ones that are stale,
+damage far from the viewport only marks bands stale, and
+er_scroll_layer_prefetch() paints quiet stale bands. The software backend
+implements the callbacks when er_software_enable_layer() is given a host.
+test_scroll_layer stages each region in a garbage-filled buffer and compares
+the composite with a full repaint without the layer after scrolls, a shadow,
+gradient, scale and opacity across a region edge, content changes, layout
+shifts, removed and added rows, a nested horizontal scroll, an overlay and a
+refused layer.
+Two paints depended on where on the framebuffer they landed, so content
+painted in the layer, or moved by scroll copy, could differ by one level from
+a fresh paint: gradient dithering is now keyed to the box, and the 2D transform
+blit maps points relative to its source with a matrix built about the node's
+own origin.
+
+diff --git a/backends/software/renderer_backend.c b/backends/software/renderer_backend.c
+index ffe13a1..9b42995 100644
+--- a/backends/software/renderer_backend.c
++++ b/backends/software/renderer_backend.c
+@@ -30,9 +30,20 @@
+  */
+ typedef struct
+ {
+-    uint32_t* fb; /**< ARGB8888 framebuffer (0xAARRGGBB), fb_w * fb_h pixels, row-major. */
+-    int fb_w;     /**< Framebuffer width in pixels. */
+-    int fb_h;     /**< Framebuffer height in pixels. */
++    uint32_t* fb;    /**< ARGB8888 framebuffer (0xAARRGGBB), fb_w * fb_h pixels, row-major. */
++    int fb_w;        /**< Framebuffer width in pixels. */
++    int fb_h;        /**< Framebuffer height in pixels. */
++    uint32_t* dst;          /**< Where fill/copy/blend write: the framebuffer, or the layer staging buffer. */
++    int dst_w;              /**< Width of dst in pixels (its row stride). */
++    int dst_h;              /**< Height of dst in pixels. */
++    int dst_x;              /**< Engine coordinates of dst's top-left pixel. */
++    int dst_y;              /**< @see dst_x */
++    uint32_t* staging;      /**< One layer region at a time, staging_px pixels; the host keeps the layer. */
++    size_t staging_px;      /**< Pixels allocated for staging. */
++    int layer_x;            /**< Engine coordinates of the layer's top-left pixel. */
++    int layer_y;            /**< @see layer_x */
++    int layer_max;          /**< Most rows er_software_enable_layer() allows. */
++    ERSoftwareLayerHost host; /**< Where layer regions go. */
+ } SoftCtx;
+ 
+ /*----------------------------------------------------------------------------------------------------------------------
+@@ -109,10 +120,10 @@ static bool clip_rect(int* x, int* y, int* w, int* h, int* sx, int* sy)
+         ch += cy;
+         cy = 0;
+     }
+-    if (cx + cw > s_ctx.fb_w)
+-        cw = s_ctx.fb_w - cx;
+-    if (cy + ch > s_ctx.fb_h)
+-        ch = s_ctx.fb_h - cy;
++    if (cx + cw > s_ctx.dst_w)
++        cw = s_ctx.dst_w - cx;
++    if (cy + ch > s_ctx.dst_h)
++        ch = s_ctx.dst_h - cy;
+     if (cw <= 0 || ch <= 0)
+         return false;
+ 
+@@ -143,6 +154,8 @@ static void fill_rect_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+ {
+     SoftCtx* c = ctx;
+     const uint32_t a = (argb >> 24) & 0xFFU;
++    x -= c->dst_x;
++    y -= c->dst_y;
+     if (a == 0U || !clip_rect(&x, &y, &w, &h, NULL, NULL))
+         return;
+ 
+@@ -151,7 +164,7 @@ static void fill_rect_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+         const uint32_t px = 0xFF000000U | (argb & 0x00FFFFFFU);
+         for (int row = 0; row < h; row++)
+         {
+-            uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
++            uint32_t* d = c->dst + (size_t)(y + row) * c->dst_w + x;
+             for (int col = 0; col < w; col++)
+                 d[col] = px;
+         }
+@@ -164,7 +177,7 @@ static void fill_rect_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+     const uint32_t sb = div255((argb & 0xFFU) * a);
+     for (int row = 0; row < h; row++)
+     {
+-        uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
++        uint32_t* d = c->dst + (size_t)(y + row) * c->dst_w + x;
+         for (int col = 0; col < w; col++)
+             d[col] = over_premul(d[col], a, sr, sg, sb);
+     }
+@@ -185,6 +198,8 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
+ {
+     SoftCtx* c = ctx;
+     int sx = 0, sy = 0;
++    x -= c->dst_x;
++    y -= c->dst_y;
+     if (!src || !clip_rect(&x, &y, &w, &h, &sx, &sy))
+         return;
+ 
+@@ -192,7 +207,7 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
+     for (int row = 0; row < h; row++)
+     {
+         const uint32_t* s = (const uint32_t*)(base + (size_t)(sy + row) * src_stride_bytes) + sx;
+-        uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
++        uint32_t* d = c->dst + (size_t)(y + row) * c->dst_w + x;
+         for (int col = 0; col < w; col++)
+         {
+             const uint32_t sp = s[col];
+@@ -236,6 +251,8 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha,
+     SoftCtx* c = ctx;
+     int sx = 0, sy = 0;
+     const uint32_t ga = alpha;
++    x -= c->dst_x;
++    y -= c->dst_y;
+     if (!src || ga == 0U || !clip_rect(&x, &y, &w, &h, &sx, &sy))
+         return;
+ 
+@@ -243,7 +260,7 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha,
+     for (int row = 0; row < h; row++)
+     {
+         const uint32_t* s = (const uint32_t*)(base + (size_t)(sy + row) * src_stride_bytes) + sx;
+-        uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
++        uint32_t* d = c->dst + (size_t)(y + row) * c->dst_w + x;
+         for (int col = 0; col < w; col++)
+         {
+             const uint32_t sp = s[col];
+@@ -299,6 +316,57 @@ static void move_rect_cb(int src_x, int src_y, int w, int h, int dst_x, int dst_
+     }
+ }
+ 
++/** @brief Points fill/copy/blend back at the framebuffer. */
++static void target_framebuffer(SoftCtx* c)
++{
++    c->dst = c->fb;
++    c->dst_w = c->fb_w;
++    c->dst_h = c->fb_h;
++    c->dst_x = 0;
++    c->dst_y = 0;
++}
++
++/** @brief Backend layer_resize: forwards the size to the host, within the allowed rows. */
++static bool layer_resize_cb(int x0, int y0, int w, int h, bool* kept, void* ctx)
++{
++    SoftCtx* c = ctx;
++    if (w <= 0 || h <= 0 || h > c->layer_max || !c->host.resize(w, h, kept, c->host.ctx))
++        return false;
++    *kept = *kept && x0 == c->layer_x && y0 == c->layer_y;
++    c->layer_x = x0;
++    c->layer_y = y0;
++    return true;
++}
++
++/** @brief Backend layer_begin: sends fill/copy/blend to the staging buffer, grown to the region. */
++static bool layer_begin_cb(int x, int y, int w, int h, void* ctx)
++{
++    SoftCtx* c = ctx;
++    const size_t px = (size_t)w * (size_t)h;
++    if (px > c->staging_px)
++    {
++        uint32_t* ns = realloc(c->staging, px * sizeof(uint32_t));
++        if (!ns)
++            return false;
++        c->staging = ns;
++        c->staging_px = px;
++    }
++    c->dst = c->staging;
++    c->dst_w = w;
++    c->dst_h = h;
++    c->dst_x = x;
++    c->dst_y = y;
++    return true;
++}
++
++/** @brief Backend layer_end: hands the painted region to the host, then writes to the framebuffer again. */
++static void layer_end_cb(void* ctx)
++{
++    SoftCtx* c = ctx;
++    c->host.region(c->staging, c->dst_x - c->layer_x, c->dst_y - c->layer_y, c->dst_w, c->dst_h, c->host.ctx);
++    target_framebuffer(c);
++}
++
+ bool er_software_backend_init(int fb_w, int fb_h)
+ {
+     if (fb_w <= 0 || fb_h <= 0)
+@@ -310,6 +378,7 @@ bool er_software_backend_init(int fb_w, int fb_h)
+ 
+     s_ctx.fb_w = fb_w;
+     s_ctx.fb_h = fb_h;
++    target_framebuffer(&s_ctx);
+     er_software_clear(0xFF000000U); /* opaque black, like a freshly-cleared panel */
+ 
+     s_backend.fill_rect = fill_rect_cb;
+@@ -330,9 +399,23 @@ bool er_software_backend_init(int fb_w, int fb_h)
+ void er_software_backend_destroy(void)
+ {
+     free(s_ctx.fb);
+-    s_ctx.fb = NULL;
+-    s_ctx.fb_w = 0;
+-    s_ctx.fb_h = 0;
++    free(s_ctx.staging);
++    s_ctx = (SoftCtx){0};
++    s_backend.layer_resize = NULL;
++    s_backend.layer_begin = NULL;
++    s_backend.layer_end = NULL;
++}
++
++void er_software_enable_layer(int max_rows, const ERSoftwareLayerHost* host)
++{
++    const bool on = max_rows > 0 && host;
++    s_ctx.layer_max = on ? max_rows : 0;
++    if (on)
++        s_ctx.host = *host;
++    s_backend.layer_resize = on ? layer_resize_cb : NULL;
++    s_backend.layer_begin = on ? layer_begin_cb : NULL;
++    s_backend.layer_end = on ? layer_end_cb : NULL;
++    embedded_renderer_set_backend(&s_backend);
+ }
+ 
+ bool er_software_backend_resize(int fb_w, int fb_h)
+@@ -347,6 +430,7 @@ bool er_software_backend_resize(int fb_w, int fb_h)
+     s_ctx.fb = nf;
+     s_ctx.fb_w = fb_w;
+     s_ctx.fb_h = fb_h;
++    target_framebuffer(&s_ctx);
+     er_software_clear(0xFF000000U);
+     return true;
+ }
+diff --git a/backends/software/software_backend.h b/backends/software/software_backend.h
+index 265185f..d80248f 100644
+--- a/backends/software/software_backend.h
++++ b/backends/software/software_backend.h
+@@ -87,6 +87,33 @@ extern "C"
+      */
+     uint32_t* er_software_framebuffer(void);
+ 
++    /**
++     * @brief Where the scroll layer lives: the host keeps it (typically as a GPU texture), the backend only
++     *        stages one region of it at a time.
++     */
++    typedef struct
++    {
++        /** @brief Size the layer to w x h; set *kept when its rows survived (same width, room for h). Return
++         *         false when it cannot hold that. */
++        bool (*resize)(int w, int h, bool* kept, void* ctx);
++        /** @brief Copy a painted region (w x h pixels, row stride w) into the layer at (x, y). */
++        void (*region)(const uint32_t* pixels, int x, int y, int w, int h, void* ctx);
++        void* ctx; /**< Passed to both. */
++    } ERSoftwareLayerHost;
++
++    /**
++     * @brief Lets the engine paint a scroll layer of up to @p max_rows rows into @p host (see layer_resize in
++     *        EmbeddedRenderBackend); 0 or NULL removes the ability. Off by default.
++     *
++     * The backend keeps only a staging buffer the size of one region (at most the layer width x 128 rows),
++     * allocated on first use and freed by er_software_backend_destroy(). Re-registers the backend, which
++     * resets the engine's font and image registries: call it right after er_software_backend_init().
++     *
++     * @param[in] max_rows  Tallest layer to accept; a taller page keeps scrolling on the framebuffer.
++     * @param[in] host      Callbacks that keep the layer; copied.
++     */
++    void er_software_enable_layer(int max_rows, const ERSoftwareLayerHost* host);
++
+     /**
+      * @brief Returns the framebuffer width in pixels (0 before init).
+      */
+diff --git a/engine/include/er_scene.h b/engine/include/er_scene.h
+index 0038add..ecd1f1c 100644
+--- a/engine/include/er_scene.h
++++ b/engine/include/er_scene.h
+@@ -1574,6 +1574,54 @@ extern "C"
+      */
+     void er_scroll_view_set_offset(ERNode* node, float x, float y);
+ 
++    /**
++     * @brief Where the scroll layer is shown, as of the last commit.
++     *
++     * When the backend implements layer_resize(), the engine may paint one ScrollView's content into a
++     * separate layer the host keeps instead of the framebuffer (see EmbeddedRenderBackend). The framebuffer then
++     * holds everything else, and the host shows the layer over it: the layer pixel at (src_x, src_y),
++     * and the view.w x view.h pixels from there, go to the screen rect `view`.
++     */
++    typedef struct
++    {
++        ERRect view;       /**< Screen rect the layer is shown in (the ScrollView's visible viewport). */
++        int src_x;         /**< Layer pixel shown at the view's top-left. */
++        int src_y;         /**< @see src_x */
++        int width;         /**< Layer size in pixels, as last passed to layer_resize(). */
++        int height;        /**< @see width */
++        uint32_t entries;  /**< Times a ScrollView has entered the layer: a change means it was painted anew. */
++    } ERScrollLayer;
++
++    /**
++     * @brief Reports the scroll layer the last commit painted.
++     *
++     * @param[out] out  Receives the layer's placement when one is active.
++     *
++     * @return false when no ScrollView is layered: the framebuffer alone is the frame.
++     */
++    bool er_scroll_layer_get(ERScrollLayer* out);
++
++    /**
++     * @brief Allows or forbids the scroll layer (allowed by default).
++     *
++     * Forbidding it moves a layered ScrollView back to the framebuffer on the next commit, which
++     * repaints its viewport there.
++     */
++    void er_scroll_layer_enable(bool enabled);
++
++    /**
++     * @brief Paints parts of the scroll layer that are not current yet, nearest to the viewport first.
++     *
++     * A commit paints only what the viewport shows; the rest of the layer is painted here, so a host
++     * calls this when a frame leaves time to spare, after er_commit() and before the next input or
++     * runtime work.
++     *
++     * @param[in] max_rows  Layer rows to paint at most; work is done in whole bands of rows.
++     *
++     * @return Rows painted; 0 when the whole layer is current or no ScrollView is layered.
++     */
++    int er_scroll_layer_prefetch(int max_rows);
++
+     /**
+      * @brief Registers an event handler on a node.
+      *
+diff --git a/engine/include/native_renderer.h b/engine/include/native_renderer.h
+index a857fc0..af30e28 100644
+--- a/engine/include/native_renderer.h
++++ b/engine/include/native_renderer.h
+@@ -120,6 +120,28 @@ extern "C"
+ 
+         /** @brief Move a framebuffer rect to another position in the framebuffer (overlap allowed). */
+         void (*move_rect)(int src_x, int src_y, int w, int h, int dst_x, int dst_y, void* ctx);
++
++        /*------------------------------------------------------------------------------------------------
++         - Scroll layer (optional). The engine may paint one ScrollView's content into a w x h layer the
++           host keeps (typically as a GPU texture) and shows where er_scroll_layer_get() says. A pixel the
++           engine addresses at (x, y) is layer pixel (x - x0, y - y0). layer_resize() announces the layer;
++           the engine then paints it region by region: between layer_begin() and layer_end() the
++           fill/copy/blend callbacks write that region only, every pixel of it from scratch, and never
++           read pixels outside it, so a staging buffer of the region's size is enough; layer_end() is
++           where the host moves the region into the layer. A region is at most 128 rows tall. Never
++           called in banded mode. Leave all three NULL to keep every ScrollView on the framebuffer.
++         ------------------------------------------------------------------------------------------------*/
++
++        /** @brief Size the layer; set *kept when the rows it already had are still there (same x0, y0, w
++         *         and room for h). Return false when the host cannot hold it: the ScrollView stays on
++         *         the framebuffer. */
++        bool (*layer_resize)(int x0, int y0, int w, int h, bool* kept, void* ctx);
++
++        /** @brief Redirect the following blits into the layer region (x, y, w, h); false skips it. */
++        bool (*layer_begin)(int x, int y, int w, int h, void* ctx);
++
++        /** @brief The region is painted: send blits back to the framebuffer. */
++        void (*layer_end)(void* ctx);
+     } EmbeddedRenderBackend;
+ 
+     /**
+diff --git a/engine/rendering/gradient.c b/engine/rendering/gradient.c
+index faa498e..688fa48 100644
+--- a/engine/rendering/gradient.c
++++ b/engine/rendering/gradient.c
+@@ -130,7 +130,8 @@ uint32_t er_gradient_premul(uint32_t sa)
+  * so a pixel is one load, one add and a byte gather. */
+ static uint64_t s_grad_lut_pool[ERUI_RENDER_WORKERS][GRAD_LUT_MAX];
+ 
+-/** @brief 4x4 Bayer matrix; a threshold is (k * 16 + 8) / 256 of a level, so flat colours stay exact. */
++/** @brief 4x4 Bayer matrix; a threshold is (k * 16 + 8) / 256 of a level, so flat colours stay exact. Indexed by
++ *         the pixel's position in the box, so a gradient moved or scrolled by copy matches a fresh paint. */
+ static const uint8_t k_bayer4[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+ 
+ /** @brief Broadcasts a dither threshold to all four lanes of a ramp entry. */
+@@ -384,17 +385,16 @@ static void mask_blit_row(const GradMask* m, const GradWindow* win, const uint32
+  * @param[in]  f      Ramp index at column c0, 16.16 fixed point.
+  * @param[in]  step   Ramp index change per column, 16.16 fixed point.
+  * @param[in]  bayer  The row's k_bayer4 line.
+- * @param[in]  x      Box left edge in framebuffer pixels (keys the dither column).
+  * @param[in]  c0     First column.
+  * @param[in]  c1     One past the last column.
+  */
+ static void assemble_row(uint32_t* buf, const uint64_t* lut, int n, int32_t f, int32_t step, const uint8_t* bayer,
+-                         int x, int c0, int c1)
++                         int c0, int c1)
+ {
+     /* The dither threshold cycles every 4 columns: hoist the four lane-broadcast thresholds. */
+     uint64_t thr[4];
+     for (int k = 0; k < 4; k++)
+-        thr[k] = ((uint64_t)bayer[(x + c0 + k) & 3] * 16u + 8u) * GRAD_LANES;
++        thr[k] = ((uint64_t)bayer[(c0 + k) & 3] * 16u + 8u) * GRAD_LANES;
+ 
+     /* A ramp that runs purely along y is one colour per row: only the 4-pixel dither cycle varies. */
+     const int end = (step == 0 && c1 - c0 > 4) ? c0 + 4 : c1;
+@@ -513,7 +513,7 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
+         const int32_t f = (int32_t)lrintf(((float)win.c0 * ddx - min_p) * to_idx * 65536.0f);
+         for (int first = win.r0; first < win.r0 + 4 && first < win.r1; first++)
+         {
+-            assemble_row(buf, lut, n, f, step, k_bayer4[(y + first) & 3], x, win.c0, win.c1);
++            assemble_row(buf, lut, n, f, step, k_bayer4[first & 3], win.c0, win.c1);
+             for (int row = first; row < win.r1; row += 4)
+                 mask_blit_row(&mask, &win, buf, x, y + row, row);
+         }
+@@ -522,7 +522,7 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
+     for (int row = win.r0; row < win.r1; row++)
+     {
+         const int32_t f = (int32_t)lrintf(((float)win.c0 * ddx + (float)row * ddy - min_p) * to_idx * 65536.0f);
+-        assemble_row(buf, lut, n, f, step, k_bayer4[(y + row) & 3], x, win.c0, win.c1);
++        assemble_row(buf, lut, n, f, step, k_bayer4[row & 3], win.c0, win.c1);
+         mask_blit_row(&mask, &win, buf, x, y + row, row);
+     }
+ }
+@@ -566,7 +566,7 @@ static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
+     uint32_t* buf = grow();
+     for (int row = win.r0; row < win.r1; row++)
+     {
+-        const uint8_t* bayer = k_bayer4[(y + row) & 3];
++        const uint8_t* bayer = k_bayer4[row & 3];
+         const float dy2 = ((float)row - cy) * ((float)row - cy);
+         for (int col = win.c0; col < win.c1; col++)
+         {
+@@ -574,7 +574,7 @@ static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
+             int idx = (int)(sqrtf(dx * dx + dy2) * to_idx + 0.5f);
+             if (idx >= n)
+                 idx = n - 1;
+-            buf[col] = dither_px(lut[idx] + ((uint64_t)bayer[(x + col) & 3] * 16u + 8u) * GRAD_LANES);
++            buf[col] = dither_px(lut[idx] + ((uint64_t)bayer[col & 3] * 16u + 8u) * GRAD_LANES);
+         }
+         mask_blit_row(&mask, &win, buf, x, y + row, row);
+     }
+diff --git a/engine/rendering/transform.c b/engine/rendering/transform.c
+index b4af7c9..8f4624e 100644
+--- a/engine/rendering/transform.c
++++ b/engine/rendering/transform.c
+@@ -204,7 +204,7 @@ static void xform_emit_2d(int src_x,
+             const int seg_w = (ex1 - seg) < ERUI_XFORM_W ? (ex1 - seg) : ERUI_XFORM_W;
+             for (int ox = 0; ox < seg_w; ox++)
+             {
+-                const float flx = ia * (float)(seg + ox) + itx - (float)src_x;
++                const float flx = ia * (float)(seg + ox - src_x) + itx;
+                 /* Off the source there is no neighbour to read, and a column that far out (or NaN, which
+                  * fails every comparison) would make the cast undefined. -2 reads as out, like x0 + 1. */
+                 if (!(flx >= -1.0f && flx < (float)src_w))
+@@ -219,7 +219,7 @@ static void xform_emit_2d(int src_x,
+             }
+             for (int oy = ey0; oy < ey1; oy++)
+             {
+-                const float fly = id * (float)oy + ity - (float)src_y;
++                const float fly = id * (float)(oy - src_y) + ity;
+                 if (!(fly >= -1.0f && fly < (float)src_h))
+                     continue; /* the row reads nothing, as for the columns above */
+                 const int y0 = (int)floorf(fly);
+@@ -254,7 +254,7 @@ static void xform_emit_2d(int src_x,
+      * inverse-map to the source scratch and sample bilinearly. */
+     for (int oy = ey0; oy < ey1; oy++)
+     {
+-        const float sy = (float)oy;
++        const float sy = (float)(oy - src_y);
+ 
+         for (int seg = ex0; seg < ex1; seg += ERUI_XFORM_W)
+         {
+@@ -262,11 +262,12 @@ static void xform_emit_2d(int src_x,
+             uint32_t any = 0u;
+             for (int ox = 0; ox < seg_w; ox++)
+             {
+-                const float sx = (float)(seg + ox);
++                const float sx = (float)(seg + ox - src_x);
+ 
+-                /* Inverse-transform screen point → source-local sub-pixel coordinates. */
+-                const float flx = (ia * sx + ic * sy + itx) - (float)src_x;
+-                const float fly = (ib * sx + id * sy + ity) - (float)src_y;
++                /* Inverse-transform the screen point, relative to the source origin, to source-local
++                 * sub-pixel coordinates. */
++                const float flx = ia * sx + ic * sy + itx;
++                const float fly = ib * sx + id * sy + ity;
+ 
+                 /* Coarse bounds reject: skip if all four bilinear neighbours are outside. Written to pass
+                  * only an in-range point: NaN fails every comparison and would reach er_bilerp's cast. */
+diff --git a/engine/rendering/transform.h b/engine/rendering/transform.h
+index c5a011c..5396b67 100644
+--- a/engine/rendering/transform.h
++++ b/engine/rendering/transform.h
+@@ -376,6 +376,10 @@ void er_transform_source_replay_blit(int src_x,
+  * @param[in] src_y  World-space Y origin.
+  * @param[in] src_w  Logical source width.
+  * @param[in] src_h  Logical source height.
++ * The matrix is the one er_transform_compute_matrix() builds about the source origin (ref 0, 0), and
++ * screen points are mapped relative to (src_x, src_y): the result does not depend on where the source is,
++ * so a transformed node scrolled or painted elsewhere matches a fresh paint pixel for pixel.
++ *
+  * @param[in] ia     Inverse matrix [0,0].
+  * @param[in] ib     Inverse matrix [1,0].
+  * @param[in] ic     Inverse matrix [0,1].
+diff --git a/engine/scene/compositor.c b/engine/scene/compositor.c
+index a1742a8..0ee504e 100644
+--- a/engine/scene/compositor.c
++++ b/engine/scene/compositor.c
+@@ -110,6 +110,30 @@ static ERDamageSet s_removed_set;
+ static uint16_t s_scroll_pending[ER_SCROLL_PENDING_MAX];
+ static uint8_t s_scroll_pending_count = 0U;
+ 
++#define ER_LAYER_BAND 128 /**< Scroll layer rows tracked as one unit of validity. */
++#define ER_LAYER_BANDS ((ER_PAINT_RECT_MAX + ER_LAYER_BAND) / ER_LAYER_BAND)
++#define ER_LAYER_LIVE_BANDS 2 /**< Bands either side of the viewport whose damage is painted at once. */
++#define ER_LAYER_QUIET 3      /**< Commits a stale band must go untouched before prefetch paints it. */
++
++/* The scroll layer (see "Scroll layer" above er_commit): one ScrollView whose children paint into a
++ * separate buffer, in its unscrolled space, so scrolling it is the host's composite and not a repaint. */
++static uint16_t s_layer_tag = ER_INVALID_TAG; /**< The layered ScrollView, or ER_INVALID_TAG. */
++static bool s_layer_enabled = true;           /**< er_scroll_layer_enable(). */
++static bool s_layer_pass = false;             /**< Painting into the layer: the ScrollView's children, unscrolled. */
++static ERRect s_layer_rect;                   /**< Layer bounds in layer space (= screen space without the scroll). */
++static ERRect s_layer_view;                   /**< Screen rect the layer is shown in, as of the last commit. */
++static int s_layer_sy = 0;                    /**< Whole-pixel vertical scroll offset the last commit showed. */
++static int s_layer_dir = 1;                   /**< Direction of the last vertical scroll: prefetch goes that way first. */
++static uint32_t s_layer_underlay = 0U;        /**< Opaque color the ancestors paint behind the viewport. */
++static bool s_layer_valid[ER_LAYER_BANDS];    /**< Bands whose layer pixels are current. */
++static uint32_t s_layer_touched[ER_LAYER_BANDS]; /**< Commit that last marked each band stale. */
++static bool s_in_layer[ERUI_MAX_NODES];       /**< Descendants of the layered ScrollView, as of this commit. */
++static ERDamageSet s_layer_removed;           /**< s_removed_set's counterpart for nodes in the layer. */
++static uint32_t s_layer_entries = 0U;         /**< ERScrollLayer::entries. */
++static void layer_leave(void);
++static uint16_t s_layer_refused_tag = ER_INVALID_TAG; /**< The backend refused this ScrollView at this size; */
++static ERRect s_layer_refused_rect;                    /**< it is not offered again until the size changes. */
++
+ /* Layout-dirty gate: er_commit() re-runs the flex + text-measure layout pass only when
+  * something that can change a computed rect has happened since the last commit (a prop set,
+  * a tree mutation, or a node destroy). Animations mutate render-only props and never set this,
+@@ -382,8 +406,8 @@ static inline CompCtx* cc(void)
+  */
+ static void union_dirty_rect(int x, int y, int w, int h)
+ {
+-    if (w <= 0 || h <= 0)
+-        return;
++    if (w <= 0 || h <= 0 || s_layer_pass)
++        return; /* layer pixels are not on the framebuffer this reports */
+ 
+     if (!cc()->has_dirty)
+     {
+@@ -674,7 +698,7 @@ static void node_ancestor_scroll(const ERNode* n, int* sx, int* sy)
+     const ERNode* a = er_get_node(n->parent_tag);
+     while (a)
+     {
+-        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
++        if ((a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST) && a->tag != s_layer_tag)
+         {
+             *sx += (int)a->scroll_offset_x;
+             *sy += (int)a->scroll_offset_y;
+@@ -825,7 +849,19 @@ static void note_vacated_rect(const ERNode* n, int x, int y, int w, int h)
+         w = (int)cap->last_paint_rect.w;
+         h = (int)cap->last_paint_rect.h;
+     }
+-    er_damage_set_add(&s_removed_set, x, y, w, h);
++    if (s_layer_tag == ER_INVALID_TAG)
++    {
++        er_damage_set_add(&s_removed_set, x, y, w, h);
++        return;
++    }
++    /* The rect is in the space the node painted in. A node already detached could be from either. */
++    const ERNode* a = er_get_node(n->parent_tag);
++    while (a && a->tag != s_layer_tag && a->tag != s_root_tag)
++        a = er_get_node(a->parent_tag);
++    if (!a || a->tag == s_layer_tag)
++        er_damage_set_add(&s_layer_removed, x, y, w, h);
++    if (!a || a->tag != s_layer_tag)
++        er_damage_set_add(&s_removed_set, x, y, w, h);
+ }
+ 
+ /**
+@@ -1156,11 +1192,14 @@ node_transformed_screen_rect(const ERNode* n, int sx, int sy, int* rx, int* ry,
+         return (*rw > 0 && *rh > 0);
+     }
+ #endif
++    /* About the node's own origin, as render_tree builds it, so the box is the same wherever the node is. */
+     float ma, mb, mc, md, mtx, mty;
+-    er_transform_compute_matrix(n, px, py, w, h, &ma, &mb, &mc, &md, &mtx, &mty);
++    er_transform_compute_matrix(n, 0, 0, w, h, &ma, &mb, &mc, &md, &mtx, &mty);
+     float ia, ib, ic, id, itx, ity;
+     *invertible = er_transform_invert(ma, mb, mc, md, mtx, mty, &ia, &ib, &ic, &id, &itx, &ity);
+-    er_transform_aabb(px, py, w, h, ma, mb, mc, md, mtx, mty, rx, ry, rw, rh);
++    er_transform_aabb(0, 0, w, h, ma, mb, mc, md, mtx, mty, rx, ry, rw, rh);
++    *rx += px;
++    *ry += py;
+     return (*rw > 0 && *rh > 0);
+ }
+ 
+@@ -1390,6 +1429,23 @@ static void clip_rect_to_clippers(const ERNode* n, int* rx, int* ry, int* rw, in
+     {
+         const bool clips = node_clips_children(a);
+         int ax, ay, aw, ah;
++        if (a->tag == s_layer_tag)
++        {
++            /* In the layer, which is the whole content: the screen-space clippers above do not apply. */
++            ax = s_layer_rect.x;
++            ay = s_layer_rect.y;
++            aw = s_layer_rect.w;
++            ah = s_layer_rect.h;
++            if (ax > x0)
++                x0 = ax;
++            if (ay > y0)
++                y0 = ay;
++            if (ax + aw < x1)
++                x1 = ax + aw;
++            if (ay + ah < y1)
++                y1 = ay + ah;
++            break;
++        }
+         if (clips && node_screen_rect(a, &ax, &ay, &aw, &ah))
+         {
+             if (ax > x0)
+@@ -2287,8 +2343,12 @@ static void render_tree(ERNode* n, bool parent_dirty, bool occluded, int transla
+         {
+             /* Full affine: render into scratch, then inverse-map blit. */
+             float a, b, c, d, ftx, fty;
+-            er_transform_compute_matrix(n, px, py, w, h, &a, &b, &c, &d, &ftx, &fty);
+-            er_transform_aabb(px, py, w, h, a, b, c, d, ftx, fty, &dst_x, &dst_y, &dst_w, &dst_h);
++            /* Built about the node's own origin and placed at (px, py) in whole pixels, so the output does
++             * not depend on where the node is (the scroll layer paints it unscrolled). */
++            er_transform_compute_matrix(n, 0, 0, w, h, &a, &b, &c, &d, &ftx, &fty);
++            er_transform_aabb(0, 0, w, h, a, b, c, d, ftx, fty, &dst_x, &dst_y, &dst_w, &dst_h);
++            dst_x += px;
++            dst_y += py;
+ 
+             if (er_transform_invert(a, b, c, d, ftx, fty, &xf_ia, &xf_ib, &xf_ic, &xf_id, &xf_itx, &xf_ity))
+             {
+@@ -2534,12 +2594,13 @@ static void render_node_content(
+     const bool clips = node_clips_children(n);
+ 
+     /* Scroll offset translation: ScrollView and FlatList children are shifted by the current offset. */
+-    const bool is_scroller = (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST);
++    const bool is_scroller = (n->type == ER_NODE_SCROLL_VIEW || n->type == ER_NODE_FLAT_LIST) && n->tag != s_layer_tag;
+     const int child_tx = is_scroller ? translate_x + (int)n->scroll_offset_x : translate_x;
+     const int child_ty = is_scroller ? translate_y + (int)n->scroll_offset_y : translate_y;
+ 
+     uint16_t child_tags[ERUI_MAX_NODES];
+-    const int child_count = er_collect_children(n, child_tags, ERUI_MAX_NODES);
++    /* The layered ScrollView's children paint into the layer, in their own pass (render_layer_rect). */
++    const int child_count = n->tag == s_layer_tag ? 0 : er_collect_children(n, child_tags, ERUI_MAX_NODES);
+     er_sort_children_by_z_index(child_tags, child_count);
+ 
+     /* --- Occlusion cull -------------------------------------------------------------------------
+@@ -3107,6 +3168,8 @@ void er_node_destroy(ERNode* node)
+         return;
+     /* Tags are recycled: never let the fade cache survive its owner (or a subtree member). */
+     fade_cache_invalidate();
++    if (node->tag == s_layer_tag)
++        layer_leave();
+     /* Erase the freed node's pixels on the next commit (damage-clipped, not a full repaint). */
+     if (node->has_last_paint)
+         note_vacated_rect(node,
+@@ -4818,6 +4881,9 @@ void er_reset(void)
+     er_damage_set_clear(&s_removed_set);
+     er_damage_set_clear(&s_last_paint_set);
+     s_scroll_pending_count = 0U;
++    s_layer_tag = ER_INVALID_TAG;
++    s_layer_refused_tag = ER_INVALID_TAG;
++    er_damage_set_clear(&s_layer_removed);
+     s_force_full_repaint = true;
+     s_layout_dirty = true;
+     s_subtree_bounds_dirty = false; /* the next commit's layout pass recomputes them */
+@@ -5016,8 +5082,8 @@ static bool scroll_by_copy(ERNode* sv, ERDamageSet* dmg, int rb_x0, int rb_y0, i
+     for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+     {
+         ERNode* n = er_get_node(tag);
+-        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv)
+-            continue;
++        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv || s_in_layer[tag])
++            continue; /* layer nodes are not on the framebuffer */
+         bool skip = false;
+         for (int i = 0; i < depth && !skip; i++)
+             skip = (chain[i] == tag);
+@@ -5099,7 +5165,7 @@ static bool scroll_by_copy(ERNode* sv, ERDamageSet* dmg, int rb_x0, int rb_y0, i
+     for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+     {
+         ERNode* n = er_get_node(tag);
+-        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv)
++        if (!n || n->subtree_hidden || !n->has_last_paint || n == sv || s_in_layer[tag])
+             continue;
+         int fx = (int)n->last_paint_rect.x, fy = (int)n->last_paint_rect.y, fw = (int)n->last_paint_rect.w,
+             fh = (int)n->last_paint_rect.h;
+@@ -5143,8 +5209,14 @@ static void resolve_scroll_moves(bool tracking, ERDamageSet* dmg, int rb_x0, int
+         ERNode* sv = er_get_node(s_scroll_pending[i]);
+         if (!sv || !sv->scroll_pending)
+             continue; /* destroyed (and possibly reused) since the offset changed */
+-        if (tracking && !scroll_by_copy(sv, dmg, rb_x0, rb_y0, rb_x1, rb_y1))
+-            er_mark_dirty_upward(sv);
++        if (sv->tag == s_layer_tag)
++        {
++            /* The composite shows the layer at the new offset: nothing to repaint. */
++        }
++        else if (s_in_layer[sv->tag] || (tracking && !scroll_by_copy(sv, dmg, rb_x0, rb_y0, rb_x1, rb_y1)))
++        {
++            er_mark_dirty_upward(sv); /* a ScrollView in the layer repaints its viewport there */
++        }
+         sv->scroll_pending = false;
+         sv->scroll_painted_x = (int16_t)sv->scroll_offset_x;
+         sv->scroll_painted_y = (int16_t)sv->scroll_offset_y;
+@@ -5152,6 +5224,783 @@ static void resolve_scroll_moves(bool tracking, ERDamageSet* dmg, int rb_x0, int
+     s_scroll_pending_count = 0U;
+ }
+ 
++/*----------------------------------------------------------------------------------------------------------------------
++ - Scroll layer
++ *
++ * Scroll by copy still rasterizes the strip a scroll exposes, on the scroll frame. With a backend whose host can
++ * keep a second image (layer_resize), one ScrollView's content is painted there instead, unscrolled: a descendant's
++ * layer position is its screen position without that ScrollView's offset, which node_ancestor_scroll and
++ * render_node_content leave out. The host shows the layer's visible window over the framebuffer, so a scroll
++ * changes which window it shows and repaints nothing. What makes the composite exact:
++ *   - every rect painted into the layer starts with the color the ScrollView and its ancestors paint behind
++ *     the viewport, which must be one opaque color with nothing else of theirs there;
++ *   - nothing outside the ScrollView's content paints into the viewport (an overlay ends the layer);
++ *   - the damage pre-pass measures layer nodes in layer space against their own set, so a change repaints
++ *     its layer rects exactly as it would its screen rects.
++ * The layer is tracked in bands of ER_LAYER_BAND rows. A commit paints the bands the viewport shows that are
++ * not current; er_scroll_layer_prefetch() paints the rest when the host has time. Each region is painted from
++ * scratch inside its own clip, so the backend stages one region at a time and the host keeps the layer.
++ ---------------------------------------------------------------------------------------------------------------------*/
++
++/**
++ * @brief Marks a node's descendants as layer nodes.
++ *
++ * @param[in]  n      Node whose descendants to mark (not the node itself).
++ * @param[out] modal  Set when a Modal is among them.
++ */
++static void layer_mark_subtree(const ERNode* n, bool* modal)
++{
++    for (uint16_t c = n->first_child_tag; c != ER_INVALID_TAG;)
++    {
++        ERNode* ch = er_get_node(c);
++        if (!ch)
++            break;
++        s_in_layer[c] = true;
++        if (ch->type == ER_NODE_MODAL)
++            *modal = true;
++        layer_mark_subtree(ch, modal);
++        c = ch->next_sibling_tag;
++    }
++}
++
++/** @brief Whether a node paints anything of its own, as opposed to only holding children. */
++static bool node_paints_self(const ERNode* n)
++{
++    if (n->type != ER_NODE_VIEW && n->type != ER_NODE_SCROLL_VIEW && n->type != ER_NODE_PRESSABLE
++        && n->type != ER_NODE_FLAT_LIST)
++        return true;
++    const ERViewProps* vp = &n->props.view;
++#if ERUI_GRADIENT
++    if (vp->gradient_type != ER_GRADIENT_NONE && vp->gradient_stop_count >= 2U)
++        return true;
++#endif
++    return (vp->background_color >> 24) != 0U || vp->border_width > 0 || vp->border_left_width > 0
++           || vp->border_top_width > 0 || vp->border_right_width > 0 || vp->border_bottom_width > 0
++           || vp->shadow_opacity > 0.0f || vp->elevation != 0U;
++}
++
++/**
++ * @brief Whether a ScrollView can be layered, and where.
++ *
++ * Leaves s_in_layer holding its descendants.
++ *
++ * @param[in]  s         ScrollView to test.
++ * @param[out] rect      Layer bounds in layer space.
++ * @param[out] view      Screen rect the layer would be shown in.
++ * @param[out] underlay  Opaque color painted behind the viewport.
++ *
++ * @return true when every condition of the layer holds for it.
++ */
++static bool layer_candidate(ERNode* s, ERRect* rect, ERRect* view, uint32_t* underlay)
++{
++    if ((s->type != ER_NODE_SCROLL_VIEW && s->type != ER_NODE_FLAT_LIST) || s->subtree_hidden)
++        return false;
++    if (s->scroll_content_h <= s->computed.h || s->scroll_content_w > s->computed.w || (int)s->scroll_offset_x != 0)
++        return false; /* only vertical scrolling pays for a layer */
++    const ERNode* root = er_get_node(s_root_tag);
++    if (!root || s_display_buffer_count != 1 || s_kbd_avoid_y != 0 || er_keyboard_active())
++        return false;
++    for (const ERNode* a = er_get_node(s->parent_tag); a; a = er_get_node(a->parent_tag))
++        if (a->type == ER_NODE_SCROLL_VIEW || a->type == ER_NODE_FLAT_LIST)
++            return false;
++    int sx, sy, sw, sh;
++    if (s->has_transform || !node_screen_rect(s, &sx, &sy, &sw, &sh))
++        return false;
++    const int h = s->scroll_content_h > sh ? s->scroll_content_h : sh;
++    if (sy < -ER_PAINT_RECT_MAX || sy + h > ER_PAINT_RECT_MAX || h / ER_LAYER_BAND >= ER_LAYER_BANDS)
++        return false;
++    int vx = sx, vy = sy, vw = sw, vh = sh;
++    clip_rect_to_clippers(s, &vx, &vy, &vw, &vh);
++    if (!rect_intersect(&vx, &vy, &vw, &vh, root->computed.x, root->computed.y, root->computed.w, root->computed.h)
++        || 4L * vw * vh < (long)root->computed.w * root->computed.h)
++        return false;
++
++    bool color_found = false;
++    for (const ERNode* a = s; a; a = er_get_node(a->parent_tag))
++    {
++        if (a->has_transform || !paints_uniformly_over(a, vx, vy, vw, vh))
++            return false;
++        const uint32_t bg = a->props.view.background_color;
++        if (!color_found && (bg >> 24) != 0U)
++        {
++            if ((bg >> 24) != 0xFFU)
++                return false;
++            *underlay = bg;
++            color_found = true;
++        }
++    }
++    if (!color_found)
++        return false;
++
++    memset(s_in_layer, 0, sizeof(s_in_layer));
++    bool modal = false;
++    layer_mark_subtree(s, &modal);
++    if (modal)
++        return false;
++
++    /* Foreign paint: anything else that painted, or is about to paint, into the viewport. */
++    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
++    {
++        ERNode* n = er_get_node(tag);
++        if (!n || n->subtree_hidden || s_in_layer[tag] || !node_paints_self(n))
++            continue;
++        bool chain = false;
++        for (const ERNode* a = s; a && !chain; a = er_get_node(a->parent_tag))
++            chain = (a == n);
++        if (chain)
++            continue;
++        int fx, fy, fw, fh;
++        if (n->has_last_paint)
++        {
++            fx = (int)n->last_paint_rect.x;
++            fy = (int)n->last_paint_rect.y;
++            fw = (int)n->last_paint_rect.w;
++            fh = (int)n->last_paint_rect.h;
++            int cx = fx, cy = fy, cw = fw, ch = fh;
++            if (rect_intersect(&cx, &cy, &cw, &ch, vx, vy, vw, vh))
++            {
++                clip_rect_to_clippers(n, &fx, &fy, &fw, &fh);
++                if (rect_intersect(&fx, &fy, &fw, &fh, vx, vy, vw, vh))
++                    return false;
++            }
++        }
++        if (node_screen_rect(n, &fx, &fy, &fw, &fh))
++        {
++            expand_for_arc(n, &fx, &fy, &fw, &fh);
++#if ERUI_SHADOWS
++            expand_for_shadow(n, &fx, &fy, &fw, &fh);
++#endif
++        }
++        else
++        {
++            NodeTransformDamage td = {0};
++            if (!node_transform_damage(n, &td))
++                return false;
++            fx = td.fx;
++            fy = td.fy;
++            fw = td.fw;
++            fh = td.fh;
++        }
++        int cx = fx, cy = fy, cw = fw, ch = fh;
++        if (rect_intersect(&cx, &cy, &cw, &ch, vx, vy, vw, vh))
++        {
++            clip_rect_to_clippers(n, &fx, &fy, &fw, &fh);
++            if (rect_intersect(&fx, &fy, &fw, &fh, vx, vy, vw, vh))
++                return false;
++        }
++    }
++
++    rect->x = sx;
++    rect->y = sy;
++    rect->w = sw;
++    rect->h = h;
++    view->x = vx;
++    view->y = vy;
++    view->w = vw;
++    view->h = vh;
++    return true;
++}
++
++/** @brief Number of bands the layer has. */
++static int layer_band_count(void)
++{
++    return (s_layer_rect.h + ER_LAYER_BAND - 1) / ER_LAYER_BAND;
++}
++
++/**
++ * @brief Tells the backend the layer's bounds (s_layer_rect).
++ *
++ * @param[out] kept  Whether the rows the layer already had are still there.
++ *
++ * @return false when the backend cannot hold a layer that size.
++ */
++static bool layer_resize(bool* kept)
++{
++    const EmbeddedRenderBackend* b = er_backend();
++    return b->layer_resize(s_layer_rect.x, s_layer_rect.y, s_layer_rect.w, s_layer_rect.h, kept, b->ctx);
++}
++
++/**
++ * @brief Moves the layered ScrollView back to the framebuffer, which repaints its viewport there.
++ *
++ * Safe while the ScrollView is being destroyed or hidden: the viewport is repainted as vacated pixels.
++ */
++static void layer_leave(void)
++{
++    ERNode* s = er_get_node(s_layer_tag);
++    for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
++    {
++        if (s_in_layer[i])
++            s_nodes[i].has_last_paint = false; /* layer-space footprints, never painted on the framebuffer */
++    }
++    memset(s_in_layer, 0, sizeof(s_in_layer));
++    s_layer_tag = ER_INVALID_TAG;
++    er_damage_set_clear(&s_layer_removed);
++    er_damage_set_add(&s_removed_set, s_layer_view.x, s_layer_view.y, s_layer_view.w, s_layer_view.h);
++    ERNode* root = er_get_node(s_root_tag);
++    if (root)
++        root->dirty = true; /* the vacated viewport repaints whatever is there now */
++    if (s && !s->subtree_hidden && s->in_use)
++        er_mark_dirty_upward(s);
++}
++
++/**
++ * @brief Moves a ScrollView into the layer; s_in_layer must hold its descendants.
++ *
++ * @return false when the backend could not provide the layer.
++ */
++static bool layer_enter(ERNode* s, const ERRect* rect, const ERRect* view, uint32_t underlay)
++{
++    s_layer_rect = *rect;
++    bool kept;
++    if (!layer_resize(&kept))
++    {
++        s_layer_refused_tag = s->tag;
++        s_layer_refused_rect = *rect;
++        memset(s_in_layer, 0, sizeof(s_in_layer));
++        return false;
++    }
++    s_layer_entries++;
++    s_layer_tag = s->tag;
++    s_layer_view = *view;
++    s_layer_underlay = underlay;
++    s_layer_sy = (int)s->scroll_offset_y;
++    memset(s_layer_valid, 0, sizeof(s_layer_valid));
++    er_damage_set_clear(&s_layer_removed);
++    for (int i = 0; i < (int)ERUI_MAX_NODES; i++)
++    {
++        if (s_in_layer[i])
++            s_nodes[i].has_last_paint = false; /* their pixels are on the framebuffer, not in the layer */
++    }
++    return true;
++}
++
++/**
++ * @brief Settles which ScrollView is layered for this commit, after layout and before the damage pre-pass.
++ *
++ * Keeps the current one while it qualifies at the same position and width (a new height keeps the rows
++ * above it); otherwise leaves it, then layers the largest qualifying ScrollView, if any.
++ */
++static void layer_update(void)
++{
++    ERRect rect, view;
++    uint32_t underlay = 0U;
++    const EmbeddedRenderBackend* b = er_backend();
++    const bool allowed =
++        s_layer_enabled && b && b->layer_resize && b->layer_begin && b->layer_end && b->band_height == 0;
++    ERNode* s = er_get_node(s_layer_tag);
++    if (s)
++    {
++        if (allowed && layer_candidate(s, &rect, &view, &underlay) && rect.x == s_layer_rect.x
++            && rect.y == s_layer_rect.y && rect.w == s_layer_rect.w && underlay == s_layer_underlay)
++        {
++            s_layer_view = view;
++            if (rect.h == s_layer_rect.h)
++                return;
++            /* Bands past the shorter height were never painted for this one, or not lately. */
++            const int same = (rect.h < s_layer_rect.h ? rect.h : s_layer_rect.h) / ER_LAYER_BAND;
++            s_layer_rect = rect;
++            bool kept;
++            if (layer_resize(&kept))
++            {
++                for (int band = kept ? same : 0; band < ER_LAYER_BANDS; band++)
++                    s_layer_valid[band] = false;
++                return;
++            }
++        }
++        layer_leave();
++    }
++    if (!allowed)
++        return;
++
++    ERNode* best = NULL;
++    long best_area = 0;
++    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
++    {
++        ERNode* n = er_get_node(tag);
++        if (!n || (n->type != ER_NODE_SCROLL_VIEW && n->type != ER_NODE_FLAT_LIST))
++            continue;
++        if (!layer_candidate(n, &rect, &view, &underlay))
++            continue;
++        if (tag == s_layer_refused_tag && rect.x == s_layer_refused_rect.x && rect.y == s_layer_refused_rect.y
++            && rect.w == s_layer_refused_rect.w && rect.h == s_layer_refused_rect.h)
++            continue;
++        if ((long)view.w * view.h > best_area)
++        {
++            best = n;
++            best_area = (long)view.w * view.h;
++        }
++    }
++    if (best && layer_candidate(best, &rect, &view, &underlay))
++        layer_enter(best, &rect, &view, underlay);
++    else
++        memset(s_in_layer, 0, sizeof(s_in_layer));
++}
++
++/**
++ * @brief Paints one layer rect from scratch: the underlay, then the ScrollView's children over it.
++ *
++ * @param[in] x,y,w,h  Rect in layer space; clipped to the layer.
++ */
++static void render_layer_rect(int x, int y, int w, int h)
++{
++    if (!rect_intersect(&x, &y, &w, &h, s_layer_rect.x, s_layer_rect.y, s_layer_rect.w, s_layer_rect.h))
++        return;
++    const EmbeddedRenderBackend* b = er_backend();
++    const ERNode* s = er_get_node(s_layer_tag);
++    uint16_t child_tags[ERUI_MAX_NODES];
++    const int child_count = er_collect_children(s, child_tags, ERUI_MAX_NODES);
++    er_sort_children_by_z_index(child_tags, child_count);
++    /* Every pixel of a region is painted from scratch inside its clip, so the backend never needs the
++     * layer's earlier pixels: regions of at most ER_LAYER_BAND rows fit a small staging buffer. */
++    for (int ry = y; ry < y + h; ry += ER_LAYER_BAND)
++    {
++        const int rh = (y + h - ry) < ER_LAYER_BAND ? (y + h - ry) : ER_LAYER_BAND;
++        if (!b->layer_begin(x, ry, w, rh, b->ctx))
++            continue;
++        er_push_clip_rect(x, ry, w, rh);
++        er_blit_fill(s_layer_underlay, x, ry, w, rh);
++        for (int i = 0; i < child_count; i++)
++        {
++            ERNode* child = er_get_node(child_tags[i]);
++            if (child)
++                render_tree(child, true, false, 0, 0);
++        }
++        er_pop_clip_rect();
++        b->layer_end(b->ctx);
++    }
++}
++
++/** @brief Paints band @p b in full and records it as current. */
++static void render_layer_band(int b)
++{
++    render_layer_rect(s_layer_rect.x, s_layer_rect.y + b * ER_LAYER_BAND, s_layer_rect.w, ER_LAYER_BAND);
++    s_layer_valid[b] = true;
++}
++
++/** @brief Takes the layered ScrollView's current whole-pixel offset as the one this commit shows. */
++static void layer_sync_offset(void)
++{
++    const int sy = (int)er_get_node(s_layer_tag)->scroll_offset_y;
++    if (sy != s_layer_sy)
++        s_layer_dir = sy > s_layer_sy ? 1 : -1;
++    s_layer_sy = sy;
++}
++
++/** @brief Marks the bands rows [y, y + h) of layer space touch as stale. */
++static void layer_invalidate(int y, int h)
++{
++    int b0 = (y - s_layer_rect.y) / ER_LAYER_BAND;
++    int b1 = (y + h - 1 - s_layer_rect.y) / ER_LAYER_BAND;
++    b0 = b0 < 0 ? 0 : b0;
++    b1 = b1 >= ER_LAYER_BANDS ? ER_LAYER_BANDS - 1 : b1;
++    for (int b = b0; b <= b1; b++)
++    {
++        s_layer_valid[b] = false;
++        s_layer_touched[b] = s_commit_seq;
++    }
++}
++
++/** @brief First and last band the viewport shows at the offset of the last commit. */
++static void layer_visible_bands(int* first, int* last)
++{
++    const int top = s_layer_view.y + s_layer_sy - s_layer_rect.y;
++    *first = top / ER_LAYER_BAND;
++    *last = (top + s_layer_view.h - 1) / ER_LAYER_BAND;
++    if (*last >= layer_band_count())
++        *last = layer_band_count() - 1;
++}
++
++/**
++ * @brief The layer half of a commit: brings the bands the viewport shows up to date and repaints the
++ *        layer's damage.
++ *
++ * @param[in] dmg  Layer damage from the pre-pass.
++ * @param[in] all  Whether the whole layer is stale (a full repaint, or a change the pre-pass cannot bound).
++ */
++static void layer_paint(const ERDamageSet* dmg, bool all)
++{
++    layer_sync_offset();
++    if (all)
++        memset(s_layer_valid, 0, sizeof(s_layer_valid));
++    s_layer_pass = true;
++    int first, last;
++    layer_visible_bands(&first, &last);
++    /* Each run of stale bands is one rect, so what the viewport shows is painted in as few passes as a
++     * framebuffer repaint would use. */
++    for (int b = first; b <= last; b++)
++    {
++        if (s_layer_valid[b])
++            continue;
++        int end = b;
++        while (end < last && !s_layer_valid[end + 1])
++            end++;
++        render_layer_rect(s_layer_rect.x, s_layer_rect.y + b * ER_LAYER_BAND, s_layer_rect.w,
++                          (end - b + 1) * ER_LAYER_BAND);
++        for (; b <= end; b++)
++            s_layer_valid[b] = true;
++    }
++    for (uint8_t i = 0U; i < dmg->count; i++)
++        render_layer_rect(dmg->r[i].x, dmg->r[i].y, dmg->r[i].w, dmg->r[i].h);
++    s_layer_pass = false;
++}
++
++bool er_scroll_layer_get(ERScrollLayer* out)
++{
++    if (s_layer_tag == ER_INVALID_TAG)
++        return false;
++    out->view = s_layer_view;
++    out->src_x = s_layer_view.x - s_layer_rect.x;
++    out->src_y = s_layer_view.y - s_layer_rect.y + s_layer_sy;
++    out->width = s_layer_rect.w;
++    out->height = s_layer_rect.h;
++    out->entries = s_layer_entries;
++    return true;
++}
++
++void er_scroll_layer_enable(bool enabled)
++{
++    s_layer_enabled = enabled;
++}
++
++int er_scroll_layer_prefetch(int max_rows)
++{
++    if (s_layer_tag == ER_INVALID_TAG || max_rows <= 0)
++        return 0;
++    int first, last;
++    layer_visible_bands(&first, &last);
++    const int count = layer_band_count();
++    int rows = 0;
++    s_layer_pass = true;
++    for (int d = 1; rows < max_rows && (first - d >= 0 || last + d < count); d++)
++    {
++        const int ahead = s_layer_dir > 0 ? last + d : first - d;
++        const int behind = s_layer_dir > 0 ? first - d : last + d;
++        const int order[2] = {ahead, behind};
++        for (int i = 0; i < 2 && rows < max_rows; i++)
++        {
++            const int b = order[i];
++            /* A band marked stale again within the last few commits is still changing (an animation off
++             * screen): painting it now would be wasted. It is painted once quiet, or when it shows. */
++            if (b < 0 || b >= count || s_layer_valid[b] || s_commit_seq - s_layer_touched[b] < ER_LAYER_QUIET)
++                continue;
++            render_layer_band(b);
++            rows += ER_LAYER_BAND;
++        }
++    }
++    s_layer_pass = false;
++    return rows;
++}
++
++/**
++ * @brief Adds one node's damage to the commit's set: where it is now and where it was painted, when either
++ *        changed.
++ *
++ * @param[in,out] n                        Node to measure.
++ * @param[in,out] dmg                      Damage set of the space the node paints in.
++ * @param[in]     rb_x0,rb_y0,rb_x1,rb_y1  Bounds of that space, which the damage is clamped to.
++ * @param[out]    footprint                When not NULL, receives the footprint a paint would record for a
++ *                                         changed plain node (no transform on it or above it, visible inside
++ *                                         its clippers); w is -1 otherwise.
++ *
++ * @return false when the change cannot be bounded and the whole space must be repainted.
++ */
++static bool
++damage_node(ERNode* n, ERDamageSet* dmg, int rb_x0, int rb_y0, int rb_x1, int rb_y1, ERRect* footprint)
++{
++    if (footprint)
++        footprint->w = -1;
++    if (n->subtree_hidden && !(n->type == ER_NODE_MODAL && n->modal_scrim_shown))
++        return true;
++    if (n->overflow_toggled)
++    {
++        /* Under a transformed ancestor the subtree bounds below are source-space, like every
++         * other measurement of this node — the ancestor's blit is what puts the toggled
++         * region on screen, and its AABB already covers the whole subtree. */
++        ERNode* const ov_cap = capturing_transform_ancestor(n);
++        if (ov_cap && escalate_damage_to_capture(n, ov_cap, dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
++            return true;
++        /* This node clipped or unclipped its children since the last commit. Its own box is
++         * damaged below like any visual change; the half the box cannot express is the region
++         * its descendants painted (or are about to paint) outside it, which is this — the
++         * post-layout subtree bounds. The pre-change bounds came in through the vacated set at
++         * the top, so the union of the two covers the toggle in either direction.
++         *
++         * Reported as well as damaged: the descendants out there are not necessarily
++         * source-dirty, and on the clipping side what repaints the region is an ancestor's
++         * background, so render_tree's accumulator would never contribute it. */
++        int sx, sy, sw, sh;
++        if (!node_subtree_screen_rect(n, &sx, &sy, &sw, &sh))
++            return false; /* transform we cannot bound: repaint everything */
++        clip_rect_to_clippers(n, &sx, &sy, &sw, &sh);
++        add_damage(dmg, sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
++        report_repaint_clamped(sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
++    }
++    /* Asked before the rect is measured, because the answer must not depend on which helper
++     * manages to measure it: the backdrop covers the root either way. Both branches below
++     * hand a changed scrim modal straight to modal_scrim_damage(). */
++    const bool scrim_modal = (n->type == ER_NODE_MODAL && (n->modal_visible || n->modal_scrim_shown));
++    int rx, ry, rw, rh;
++    if (!node_screen_rect(n, &rx, &ry, &rw, &rh))
++    {
++        /* Complex transform (scale/rotate). Bound the damage to the node's transformed AABB —
++         * current box plus where it was painted last commit, so a shrinking pulse erases its
++         * trail — instead of forcing a full-screen repaint.
++         */
++        NodeTransformDamage td = {0};
++        if (node_transform_damage(n, &td))
++        {
++            const bool moved = n->has_last_paint
++                               && (td.fx != (int)n->last_paint_rect.x || td.fy != (int)n->last_paint_rect.y
++                                   || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h
++                                   || spans_paint_window(td.fx, td.fy, td.fw, td.fh));
++            /* The third way this node's pixels can move: an ANCESTOR gained or lost a transform,
++             * which hands the capture to a different node and flips this one between its AABB and
++             * its raw box (issue #139). It leaves the node clean and its layout box where it was,
++             * so neither test above sees it — and `moved` never will, because the prediction that
++             * has to be checked against is the STALE flag's, which by definition still agrees with
++             * last_paint_rect. `hedge` is exactly the state of not knowing which footprint the
++             * paint will use, so it is the state in which a change above has to be listened for;
++             * a node whose footprint is certain stays as idle as it was. */
++            if (n->source_dirty || moved || (td.hedge && source_dirty_above(n)))
++            {
++                /* Asked before the ancestor-capture escalation below, for the same reason the
++                 * translate-only branch asks it before its own: the scrim covers the root
++                 * regardless of what any ancestor does to this node's pixels. */
++                if (scrim_modal)
++                {
++                    modal_scrim_damage(n, dmg, rb_x0, rb_y0, rb_x1, rb_y1);
++                    return true;
++                }
++                /* Refused the scratch because an ancestor holds it: this node painted into
++                 * that ancestor's capture in source space, so td measures a region its pixels
++                 * never reach. The ancestor's AABB is where they actually land. */
++                ERNode* const cap = capturing_transform_ancestor(n);
++                if (cap
++                    && escalate_damage_to_capture(n, cap, dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
++                    return true;
++                int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
++                clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
++                add_damage(dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new footprint */
++                if (!n->source_dirty)
++                    report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
++                if (td.hedge)
++                {
++                    /* Which footprint the paint lands on rests on the ancestor chain, not on
++                     * anything measurable here, so damage the other candidate too rather than
++                     * risk scissoring the node's own paint away. */
++                    int hx = td.hx, hy = td.hy, hw = td.hw, hh = td.hh;
++                    clip_rect_to_clippers(n, &hx, &hy, &hw, &hh);
++                    add_damage(dmg, hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
++                    if (!n->source_dirty)
++                        report_repaint_clamped(hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
++                }
++                if (n->has_last_paint)
++                {
++                    int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
++                        ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
++                    clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
++                    add_damage(dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old (erase trail) */
++                    report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
++                }
++            }
++            return true;
++        }
++        /*
++         * Could not bound it (a transform that projects to nothing): only forces a full repaint
++         * if actually changing. An oversized node no longer lands here — node_transform_damage()
++         * settles it on size and returns the raw box; neither does a spinning ActivityIndicator,
++         * which node_screen_rect() bounds at the box+translate it actually paints at.
++         * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still
++         * missed — that needs the 3D AABB path ().
++         */
++        if (n->source_dirty)
++        {
++            /* Bounded after all, and by the only rect that was ever right for it: a modal that
++             * cannot be measured still scrims exactly the root. Cheaper than the full-repaint
++             * fallback below, and unlike it, retires the scrim flag. */
++            if (scrim_modal)
++            {
++                modal_scrim_damage(n, dmg, rb_x0, rb_y0, rb_x1, rb_y1);
++                return true;
++            }
++            /* Inside an ancestor's capture this is bounded after all: whatever the node's own
++             * transform does, it does it in source space and reaches the screen only through
++             * the ancestor's blit. Beats a full-screen repaint per animated frame. */
++            ERNode* const cap = capturing_transform_ancestor(n);
++            if (cap && escalate_damage_to_capture(n, cap, dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
++                return true;
++            return false;
++        }
++        return true;
++    }
++    const int box_rx = rx, box_ry = ry; /* the layout box, before any arc inflation */
++    /* Measure the node by its painted footprint — the box plus the arc knob's reach past it and
++     * the shadow's bleed around it — which is what last_paint_rect records, so a steady node is
++     * not read as "moved" every commit. Both are folded in HERE, ahead of the comparison, and
++     * not again below: the new footprint and the recorded trail have to be the same measurement
++     * or they can never agree. */
++    expand_for_arc(n, &rx, &ry, &rw, &rh);
++#if ERUI_SHADOWS
++    expand_for_shadow(n, &rx, &ry, &rw, &rh);
++#endif
++    /* Clipped as the record is, or a footprint past the clip would never match it. */
++    clip_rect_axis(&rx, &rw);
++    clip_rect_axis(&ry, &rh);
++    const bool moved = n->has_last_paint
++                       && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
++                           || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h
++                           || spans_paint_window(rx, ry, rw, rh));
++    if (!n->source_dirty && !moved)
++        return true; /* unchanged and in place: contributes nothing to the damage */
++    if (scrim_modal)
++    {
++        modal_scrim_damage(n, dmg, rb_x0, rb_y0, rb_x1, rb_y1);
++        return true;
++    }
++    /* Everything below measures this node in plain layout-minus-scroll space. Under a
++     * transformed ancestor that space is the ancestor's CAPTURE, not the screen: the node's
++     * pixels are inverse-mapped out at the ancestor's transformed AABB, so that AABB — and
++     * not any rect derived from the node's own box — is what has to be repainted.
++     * (Asked after the Modal case, whose scrim covers the root regardless of any ancestor.) */
++    {
++        ERNode* const cap = capturing_transform_ancestor(n);
++        if (cap && escalate_damage_to_capture(n, cap, dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
++            return true;
++    }
++    if (footprint)
++        *footprint = (ERRect){rx, ry, rw, rh};
++    if ((n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC) && n->vec_has_dirty && !moved)
++    {
++        /* Sub-region vector update: damage only the app-supplied changed rect (node-local →
++         * screen), not the whole box. The caller's rect already covers old+new content, so the
++         * full last_paint_rect is intentionally NOT added (it would balloon back to the box). */
++        int vox, voy;
++        vec_dirty_offset(n, &vox, &voy);
++        add_damage(dmg,
++                   box_rx + vox + (int)n->vec_dirty_x,
++                   box_ry + voy + (int)n->vec_dirty_y,
++                   (int)n->vec_dirty_w,
++                   (int)n->vec_dirty_h,
++                   rb_x0,
++                   rb_y0,
++                   rb_x1,
++                   rb_y1);
++        return true;
++    }
++    /* Clip both contributions to any clipping ancestor (ScrollView / overflow:hidden) so a scrolled
++     * child's damage can't reach outside the list and pull a sibling (e.g. a title above) into the
++     * repaint, where it would be cleared but not restored for a frame. */
++    int nx = rx, ny = ry, nw = rw, nh = rh;
++    clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
++    add_damage(dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new position */
++    /* A node here that is NOT source_dirty is contributing purely because it MOVED, and
++     * render_tree's accumulator only ever unions source-dirty nodes — so it reports itself,
++     * exactly like the vacated footprints above. Without this a pure reflow repaints the
++     * framebuffer correctly and then tells a partial-update host that nothing changed. */
++    if (!n->source_dirty)
++        report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
++    if (n->has_last_paint)
++    {
++        int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
++            oh = (int)n->last_paint_rect.h;
++        clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
++        add_damage(dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old position (erase trail) */
++        /* Reported unconditionally, unlike the new position: render_tree's accumulator only
++         * ever sees where a node is NOW, so nothing else can report the trail it vacated. */
++        report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
++
++        /* A node with NO visible current position (scrolled out of its clipper, or otherwise
++         * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire
++         * its footprint now, because it will never be able to retire it itself.
++         *
++         * Without it, such a node is a permanent damage source: a scroll shifts its screen rect
++         * (node_screen_rect folds in ancestor scroll offsets) while last_paint_rect still holds
++         * where it was drawn, so it counts as `moved` and the pre-pass re-unions this same
++         * footprint EVERY commit. Refreshing last_paint_rect requires painting it, painting
++         * requires render_tree to reach it, and render_tree prunes it precisely because it is
++         * invisible — so the loop sustains itself until reboot.
++         *
++         * Scrolling it back into view still repaints it: er_mark_dirty_upward marks the scroller
++         * source_dirty, so its viewport enters the damage and the walk reaches the child again. */
++        if (nw <= 0 || nh <= 0)
++            n->has_last_paint = false;
++    }
++    if (footprint && (nw <= 0 || nh <= 0))
++        footprint->w = -1;
++    return true;
++}
++
++/**
++ * @brief The layer's damage pre-pass, in layer space.
++ *
++ * Damage on the viewport's bands, or ER_LAYER_LIVE_BANDS from them, is painted this commit. Farther away it
++ * only marks its bands stale, to be painted by prefetch once they are quiet or when scrolled into view, so
++ * an animation or a layout shift off screen costs no raster. A plain node's footprint is then recorded as if
++ * it had been painted, which is what that band repaint will do; a transformed one stays dirty and marks its
++ * bands again on every commit until a repaint reaches it.
++ *
++ * @param[out] dmg  Layer rects to paint this commit.
++ *
++ * @return false when a change cannot be bounded and the whole layer is stale.
++ */
++static bool layer_prepass(ERDamageSet* dmg)
++{
++    const int lx0 = s_layer_rect.x, ly0 = s_layer_rect.y;
++    const int lx1 = lx0 + s_layer_rect.w, ly1 = ly0 + s_layer_rect.h;
++    layer_sync_offset();
++    int first, last;
++    layer_visible_bands(&first, &last);
++    const int wy0 = ly0 + (first - ER_LAYER_LIVE_BANDS) * ER_LAYER_BAND;
++    const int wy1 = ly0 + (last + 1 + ER_LAYER_LIVE_BANDS) * ER_LAYER_BAND;
++    bool bounded = true;
++    s_layer_pass = true; /* nothing measured here is reported as framebuffer damage */
++    for (uint8_t ri = 0U; ri < s_layer_removed.count; ri++)
++    {
++        const ERRect* v = &s_layer_removed.r[ri];
++        if (v->y < wy1 && v->y + v->h > wy0)
++            add_damage(dmg, v->x, v->y, v->w, v->h, lx0, ly0, lx1, ly1);
++        else
++            layer_invalidate(v->y, v->h);
++    }
++    for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
++    {
++        ERNode* n = er_get_node(tag);
++        if (!n || !s_in_layer[tag])
++            continue;
++        ERDamageSet nd;
++        er_damage_set_clear(&nd);
++        ERRect fp;
++        if (!damage_node(n, &nd, lx0, ly0, lx1, ly1, &fp))
++        {
++            bounded = false;
++            break;
++        }
++        bool live = false;
++        for (uint8_t i = 0U; i < nd.count; i++)
++            live = live || (nd.r[i].y < wy1 && nd.r[i].y + nd.r[i].h > wy0);
++        for (uint8_t i = 0U; i < nd.count; i++)
++        {
++            if (live)
++                er_damage_set_add(dmg, nd.r[i].x, nd.r[i].y, nd.r[i].w, nd.r[i].h);
++            else
++                layer_invalidate(nd.r[i].y, nd.r[i].h);
++        }
++        if (live || nd.count == 0U || fp.w < 0)
++            continue;
++        n->last_paint_rect.x = (int16_t)fp.x;
++        n->last_paint_rect.y = (int16_t)fp.y;
++        n->last_paint_rect.w = (int16_t)fp.w;
++        n->last_paint_rect.h = (int16_t)fp.h;
++        n->has_last_paint = true;
++        n->last_paint_untransformed = true;
++        n->source_dirty = false;
++        n->vec_has_dirty = false;
++    }
++    s_layer_pass = false;
++    return bounded;
++}
++
+ void er_commit(void)
+ {
+     er_input_flush_moves();
+@@ -5281,6 +6130,7 @@ void er_commit(void)
+     ER_PERF_BEGIN(ER_PERF_PHASE_RASTER);
+     ER_PERF_BLIT_RESET();
+     ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_PREPASS);
++    layer_update();
+ 
+     /* Damage-clipped render. Unless we must repaint everything (first frame, an invalidated
+      * framebuffer, a removed node, or a changing node with a transform we can't bound), scissor
+@@ -5343,226 +6193,12 @@ void er_commit(void)
+         for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
+         {
+             ERNode* n = er_get_node(tag);
+-            if (!n)
+-                continue;
+-
+-            if (n->subtree_hidden && !(n->type == ER_NODE_MODAL && n->modal_scrim_shown))
+-                continue;
+-            if (n->overflow_toggled)
+-            {
+-                /* Under a transformed ancestor the subtree bounds below are source-space, like every
+-                 * other measurement of this node — the ancestor's blit is what puts the toggled
+-                 * region on screen, and its AABB already covers the whole subtree. */
+-                ERNode* const ov_cap = capturing_transform_ancestor(n);
+-                if (ov_cap && escalate_damage_to_capture(n, ov_cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
+-                    continue;
+-                /* This node clipped or unclipped its children since the last commit. Its own box is
+-                 * damaged below like any visual change; the half the box cannot express is the region
+-                 * its descendants painted (or are about to paint) outside it, which is this — the
+-                 * post-layout subtree bounds. The pre-change bounds came in through the vacated set at
+-                 * the top, so the union of the two covers the toggle in either direction.
+-                 *
+-                 * Reported as well as damaged: the descendants out there are not necessarily
+-                 * source-dirty, and on the clipping side what repaints the region is an ancestor's
+-                 * background, so render_tree's accumulator would never contribute it. */
+-                int sx, sy, sw, sh;
+-                if (!node_subtree_screen_rect(n, &sx, &sy, &sw, &sh))
+-                {
+-                    trackable = false; /* transform we cannot bound: repaint everything */
+-                    break;
+-                }
+-                clip_rect_to_clippers(n, &sx, &sy, &sw, &sh);
+-                add_damage(&dmg, sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
+-                report_repaint_clamped(sx, sy, sw, sh, rb_x0, rb_y0, rb_x1, rb_y1);
+-            }
+-            /* Asked before the rect is measured, because the answer must not depend on which helper
+-             * manages to measure it: the backdrop covers the root either way. Both branches below
+-             * hand a changed scrim modal straight to modal_scrim_damage(). */
+-            const bool scrim_modal = (n->type == ER_NODE_MODAL && (n->modal_visible || n->modal_scrim_shown));
+-            int rx, ry, rw, rh;
+-            if (!node_screen_rect(n, &rx, &ry, &rw, &rh))
+-            {
+-                /* Complex transform (scale/rotate). Bound the damage to the node's transformed AABB —
+-                 * current box plus where it was painted last commit, so a shrinking pulse erases its
+-                 * trail — instead of forcing a full-screen repaint.
+-                 */
+-                NodeTransformDamage td = {0};
+-                if (node_transform_damage(n, &td))
+-                {
+-                    const bool moved = n->has_last_paint
+-                                       && (td.fx != (int)n->last_paint_rect.x || td.fy != (int)n->last_paint_rect.y
+-                                           || td.fw != (int)n->last_paint_rect.w || td.fh != (int)n->last_paint_rect.h
+-                                           || spans_paint_window(td.fx, td.fy, td.fw, td.fh));
+-                    /* The third way this node's pixels can move: an ANCESTOR gained or lost a transform,
+-                     * which hands the capture to a different node and flips this one between its AABB and
+-                     * its raw box (issue #139). It leaves the node clean and its layout box where it was,
+-                     * so neither test above sees it — and `moved` never will, because the prediction that
+-                     * has to be checked against is the STALE flag's, which by definition still agrees with
+-                     * last_paint_rect. `hedge` is exactly the state of not knowing which footprint the
+-                     * paint will use, so it is the state in which a change above has to be listened for;
+-                     * a node whose footprint is certain stays as idle as it was. */
+-                    if (n->source_dirty || moved || (td.hedge && source_dirty_above(n)))
+-                    {
+-                        /* Asked before the ancestor-capture escalation below, for the same reason the
+-                         * translate-only branch asks it before its own: the scrim covers the root
+-                         * regardless of what any ancestor does to this node's pixels. */
+-                        if (scrim_modal)
+-                        {
+-                            modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
+-                            continue;
+-                        }
+-                        /* Refused the scratch because an ancestor holds it: this node painted into
+-                         * that ancestor's capture in source space, so td measures a region its pixels
+-                         * never reach. The ancestor's AABB is where they actually land. */
+-                        ERNode* const cap = capturing_transform_ancestor(n);
+-                        if (cap
+-                            && escalate_damage_to_capture(n, cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
+-                            continue;
+-                        int nx = td.fx, ny = td.fy, nw = td.fw, nh = td.fh;
+-                        clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
+-                        add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new footprint */
+-                        if (!n->source_dirty)
+-                            report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
+-                        if (td.hedge)
+-                        {
+-                            /* Which footprint the paint lands on rests on the ancestor chain, not on
+-                             * anything measurable here, so damage the other candidate too rather than
+-                             * risk scissoring the node's own paint away. */
+-                            int hx = td.hx, hy = td.hy, hw = td.hw, hh = td.hh;
+-                            clip_rect_to_clippers(n, &hx, &hy, &hw, &hh);
+-                            add_damage(&dmg, hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
+-                            if (!n->source_dirty)
+-                                report_repaint_clamped(hx, hy, hw, hh, rb_x0, rb_y0, rb_x1, rb_y1);
+-                        }
+-                        if (n->has_last_paint)
+-                        {
+-                            int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y,
+-                                ow = (int)n->last_paint_rect.w, oh = (int)n->last_paint_rect.h;
+-                            clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
+-                            add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old (erase trail) */
+-                            report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
+-                        }
+-                    }
+-                    continue;
+-                }
+-                /*
+-                 * Could not bound it (a transform that projects to nothing): only forces a full repaint
+-                 * if actually changing. An oversized node no longer lands here — node_transform_damage()
+-                 * settles it on size and returns the raw box; neither does a spinning ActivityIndicator,
+-                 * which node_screen_rect() bounds at the box+translate it actually paints at.
+-                 * TODO: A moved-but-not-source_dirty node here (e.g. a 3D-transformed node shifted by reflow) is still
+-                 * missed — that needs the 3D AABB path ().
+-                 */
+-                if (n->source_dirty)
+-                {
+-                    /* Bounded after all, and by the only rect that was ever right for it: a modal that
+-                     * cannot be measured still scrims exactly the root. Cheaper than the full-repaint
+-                     * fallback below, and unlike it, retires the scrim flag. */
+-                    if (scrim_modal)
+-                    {
+-                        modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
+-                        continue;
+-                    }
+-                    /* Inside an ancestor's capture this is bounded after all: whatever the node's own
+-                     * transform does, it does it in source space and reaches the screen only through
+-                     * the ancestor's blit. Beats a full-screen repaint per animated frame. */
+-                    ERNode* const cap = capturing_transform_ancestor(n);
+-                    if (cap && escalate_damage_to_capture(n, cap, &dmg, false, rb_x0, rb_y0, rb_x1, rb_y1))
+-                        continue;
+-                    trackable = false;
+-                    break;
+-                }
+-                continue;
+-            }
+-            const int box_rx = rx, box_ry = ry; /* the layout box, before any arc inflation */
+-            /* Measure the node by its painted footprint — the box plus the arc knob's reach past it and
+-             * the shadow's bleed around it — which is what last_paint_rect records, so a steady node is
+-             * not read as "moved" every commit. Both are folded in HERE, ahead of the comparison, and
+-             * not again below: the new footprint and the recorded trail have to be the same measurement
+-             * or they can never agree. */
+-            expand_for_arc(n, &rx, &ry, &rw, &rh);
+-#if ERUI_SHADOWS
+-            expand_for_shadow(n, &rx, &ry, &rw, &rh);
+-#endif
+-            /* Clipped as the record is, or a footprint past the clip would never match it. */
+-            clip_rect_axis(&rx, &rw);
+-            clip_rect_axis(&ry, &rh);
+-            const bool moved = n->has_last_paint
+-                               && (rx != (int)n->last_paint_rect.x || ry != (int)n->last_paint_rect.y
+-                                   || rw != (int)n->last_paint_rect.w || rh != (int)n->last_paint_rect.h
+-                                   || spans_paint_window(rx, ry, rw, rh));
+-            if (!n->source_dirty && !moved)
+-                continue; /* unchanged and in place: contributes nothing to the damage */
+-            if (scrim_modal)
+-            {
+-                modal_scrim_damage(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1);
+-                continue;
+-            }
+-            /* Everything below measures this node in plain layout-minus-scroll space. Under a
+-             * transformed ancestor that space is the ancestor's CAPTURE, not the screen: the node's
+-             * pixels are inverse-mapped out at the ancestor's transformed AABB, so that AABB — and
+-             * not any rect derived from the node's own box — is what has to be repainted.
+-             * (Asked after the Modal case, whose scrim covers the root regardless of any ancestor.) */
+-            {
+-                ERNode* const cap = capturing_transform_ancestor(n);
+-                if (cap && escalate_damage_to_capture(n, cap, &dmg, !n->source_dirty, rb_x0, rb_y0, rb_x1, rb_y1))
+-                    continue;
+-            }
+-            if ((n->type == ER_NODE_VECTOR || n->type == ER_NODE_ARC) && n->vec_has_dirty && !moved)
+-            {
+-                /* Sub-region vector update: damage only the app-supplied changed rect (node-local →
+-                 * screen), not the whole box. The caller's rect already covers old+new content, so the
+-                 * full last_paint_rect is intentionally NOT added (it would balloon back to the box). */
+-                int vox, voy;
+-                vec_dirty_offset(n, &vox, &voy);
+-                add_damage(&dmg,
+-                           box_rx + vox + (int)n->vec_dirty_x,
+-                           box_ry + voy + (int)n->vec_dirty_y,
+-                           (int)n->vec_dirty_w,
+-                           (int)n->vec_dirty_h,
+-                           rb_x0,
+-                           rb_y0,
+-                           rb_x1,
+-                           rb_y1);
+-                continue;
+-            }
+-            /* Clip both contributions to any clipping ancestor (ScrollView / overflow:hidden) so a scrolled
+-             * child's damage can't reach outside the list and pull a sibling (e.g. a title above) into the
+-             * repaint, where it would be cleared but not restored for a frame. */
+-            int nx = rx, ny = ry, nw = rw, nh = rh;
+-            clip_rect_to_clippers(n, &nx, &ny, &nw, &nh);
+-            add_damage(&dmg, nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1); /* new position */
+-            /* A node here that is NOT source_dirty is contributing purely because it MOVED, and
+-             * render_tree's accumulator only ever unions source-dirty nodes — so it reports itself,
+-             * exactly like the vacated footprints above. Without this a pure reflow repaints the
+-             * framebuffer correctly and then tells a partial-update host that nothing changed. */
+-            if (!n->source_dirty)
+-                report_repaint_clamped(nx, ny, nw, nh, rb_x0, rb_y0, rb_x1, rb_y1);
+-            if (n->has_last_paint)
++            if (!n || s_in_layer[tag])
++                continue; /* layer nodes are measured in the layer's own pass */
++            if (!damage_node(n, &dmg, rb_x0, rb_y0, rb_x1, rb_y1, NULL))
+             {
+-                int ox = (int)n->last_paint_rect.x, oy = (int)n->last_paint_rect.y, ow = (int)n->last_paint_rect.w,
+-                    oh = (int)n->last_paint_rect.h;
+-                clip_rect_to_clippers(n, &ox, &oy, &ow, &oh);
+-                add_damage(&dmg, ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1); /* old position (erase trail) */
+-                /* Reported unconditionally, unlike the new position: render_tree's accumulator only
+-                 * ever sees where a node is NOW, so nothing else can report the trail it vacated. */
+-                report_repaint_clamped(ox, oy, ow, oh, rb_x0, rb_y0, rb_x1, rb_y1);
+-
+-                /* A node with NO visible current position (scrolled out of its clipper, or otherwise
+-                 * clipped away entirely) owes exactly one thing: the erase just unioned above. Retire
+-                 * its footprint now, because it will never be able to retire it itself.
+-                 *
+-                 * Without it, such a node is a permanent damage source: a scroll shifts its screen rect
+-                 * (node_screen_rect folds in ancestor scroll offsets) while last_paint_rect still holds
+-                 * where it was drawn, so it counts as `moved` and the pre-pass re-unions this same
+-                 * footprint EVERY commit. Refreshing last_paint_rect requires painting it, painting
+-                 * requires render_tree to reach it, and render_tree prunes it precisely because it is
+-                 * invisible — so the loop sustains itself until reboot.
+-                 *
+-                 * Scrolling it back into view still repaints it: er_mark_dirty_upward marks the scroller
+-                 * source_dirty, so its viewport enters the damage and the walk reaches the child again. */
+-                if (nw <= 0 || nh <= 0)
+-                    n->has_last_paint = false;
++                trackable = false;
++                break;
+             }
+         }
+         /* Padding + clamping happened per-insert (add_damage), so an empty set covers both "nothing
+@@ -5585,6 +6221,14 @@ void er_commit(void)
+         /* !trackable: render_full stays true (repaint the whole root rect). */
+     }
+ 
++    /* The layer's own pre-pass, in layer space (a full repaint repaints the layer too). */
++    ERDamageSet layer_dmg;
++    er_damage_set_clear(&layer_dmg);
++    bool layer_all = s_force_full_repaint;
++    if (s_layer_tag != ER_INVALID_TAG && !layer_all)
++        layer_all = !layer_prepass(&layer_dmg);
++    er_damage_set_clear(&s_layer_removed);
++
+     /* --- Multi-buffer (page-flip) damage debt --------------------------------------------------------------
+      * At this point render_full / nothing_dirty / rb_* describe THIS commit's OWN damage. With >1 rotating
+      * display buffers, the buffer we render into was last painted (count-1) PRESENTS ago — and, crucially,
+@@ -5894,6 +6538,9 @@ void er_commit(void)
+         }
+     }
+ 
++    if (s_layer_tag != ER_INVALID_TAG)
++        layer_paint(&layer_dmg, layer_all);
++
+     ER_PERF_RASTER_END(ER_PERF_RASTER_RENDER);
+     /* Workers have joined: fold their backend-blit time + pixel counts into the frame. (RENDER was
+      * timed WITH the blits inside it; er_perf subtracts the blit total back out at frame end so the
+diff --git a/engine/tests/scroll/CMakeLists.txt b/engine/tests/scroll/CMakeLists.txt
+index 2e46717..93bdffd 100644
+--- a/engine/tests/scroll/CMakeLists.txt
++++ b/engine/tests/scroll/CMakeLists.txt
+@@ -5,3 +5,7 @@ add_test(NAME scroll COMMAND test_scroll)
+ add_executable(test_scroll_copy test_scroll_copy.c)
+ target_link_libraries(test_scroll_copy PRIVATE embedded-react)
+ add_test(NAME scroll_copy COMMAND test_scroll_copy)
++
++add_executable(test_scroll_layer test_scroll_layer.c)
++target_link_libraries(test_scroll_layer PRIVATE embedded-react)
++add_test(NAME scroll_layer COMMAND test_scroll_layer)
+diff --git a/engine/tests/scroll/test_scroll_layer.c b/engine/tests/scroll/test_scroll_layer.c
+new file mode 100644
+index 0000000..1a01dcb
+--- /dev/null
++++ b/engine/tests/scroll/test_scroll_layer.c
+@@ -0,0 +1,447 @@
++/*
++ * Copyright 2026 Cory Lamming
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/*
++ * Scroll layer: with a backend that provides layer_begin, a page ScrollView's content paints into a separate
++ * buffer and a scroll repaints nothing. Every check composites the framebuffer and the layer the way a host
++ * does (er_scroll_layer_get) and compares the result with a full repaint of the same scene by a backend
++ * without a layer, pixel for pixel.
++ */
++
++#include "er_scene.h"
++#include "native_renderer.h"
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define FB_W 160
++#define FB_H 160
++#define ROWS 80
++#define LAYER_MAX (160 * 1024)
++
++typedef struct
++{
++    uint32_t fb[FB_W * FB_H];
++    uint32_t layer[LAYER_MAX];       /* what a host keeps on the GPU */
++    uint32_t staging[FB_W * 128];    /* the region being painted */
++    int lw, lh, lx, ly;              /* layer size and the engine coordinates of its top-left */
++    int sx, sy, sw, sh;              /* region being painted, engine coordinates */
++    bool in_layer;                   /* between layer_begin and layer_end */
++    long painted_px;                 /* pixels written by fill/copy/blend since the last reset */
++} TestCtx;
++
++static TestCtx g_ctx;
++static EmbeddedRenderBackend g_be;
++static int g_failures = 0;
++
++/** @brief The pixel a blit at (x, y) writes, or NULL when it falls outside the current target. */
++static uint32_t* target(TestCtx* t, int x, int y)
++{
++    if (t->in_layer)
++    {
++        x -= t->sx;
++        y -= t->sy;
++        return (x >= 0 && y >= 0 && x < t->sw && y < t->sh) ? &t->staging[y * t->sw + x] : NULL;
++    }
++    return (x >= 0 && y >= 0 && x < FB_W && y < FB_H) ? &t->fb[y * FB_W + x] : NULL;
++}
++
++/** @brief Backend fill_rect: writes or source-over blends a straight-alpha colour; counts painted pixels. */
++static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
++{
++    TestCtx* t = ctx;
++    const uint32_t a = argb >> 24;
++    for (int row = y; row < y + h; row++)
++        for (int col = x; col < x + w; col++)
++        {
++            uint32_t* d = target(t, col, row);
++            if (!d)
++                continue;
++            if (a == 255U)
++                *d = argb;
++            else if (a != 0U)
++            {
++                uint32_t out = 0xFF000000U;
++                for (int sh = 0; sh < 24; sh += 8)
++                {
++                    const uint32_t s = (argb >> sh) & 0xFFU, dd = (*d >> sh) & 0xFFU;
++                    out |= ((s * a + dd * (255U - a)) / 255U) << sh;
++                }
++                *d = out;
++            }
++            t->painted_px++;
++        }
++}
++
++/** @brief Backend copy_rect: writes every non-transparent source pixel; counts painted pixels. */
++static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
++{
++    TestCtx* t = ctx;
++    for (int row = 0; row < h; row++)
++        for (int col = 0; col < w; col++)
++        {
++            const uint32_t p = ((const uint32_t*)((const uint8_t*)src + (size_t)row * stride))[col];
++            uint32_t* d = target(t, x + col, y + row);
++            if (d && (p >> 24) != 0U)
++                *d = p;
++            t->painted_px++;
++        }
++}
++
++/** @brief Backend blend_rect: the same as copy_cb (the scene's translucent sources are fills). */
++static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
++{
++    (void)alpha;
++    copy_cb(src, stride, x, y, w, h, ctx);
++}
++
++/** @brief Backend layer_resize: keeps the rows when only the height changes. */
++static bool layer_resize_cb(int x0, int y0, int w, int h, bool* kept, void* ctx)
++{
++    TestCtx* t = ctx;
++    if ((long)w * h > LAYER_MAX)
++        return false;
++    *kept = w == t->lw && x0 == t->lx && y0 == t->ly;
++    if (!*kept)
++        memset(t->layer, 0x5A, sizeof(t->layer)); /* garbage: anything shown before it is painted fails */
++    t->lw = w;
++    t->lh = h;
++    t->lx = x0;
++    t->ly = y0;
++    return true;
++}
++
++/** @brief Backend layer_begin: a staging buffer full of garbage, so a pixel the engine skips shows up. */
++static bool layer_begin_cb(int x, int y, int w, int h, void* ctx)
++{
++    TestCtx* t = ctx;
++    if (w > FB_W || h > 128)
++        return false;
++    memset(t->staging, 0x3C, sizeof(t->staging));
++    t->sx = x;
++    t->sy = y;
++    t->sw = w;
++    t->sh = h;
++    t->in_layer = true;
++    return true;
++}
++
++/** @brief Backend layer_end: the region goes into the layer, as a host uploads it. */
++static void layer_end_cb(void* ctx)
++{
++    TestCtx* t = ctx;
++    t->in_layer = false;
++    for (int row = 0; row < t->sh; row++)
++        memcpy(&t->layer[(t->sy - t->ly + row) * t->lw + t->sx - t->lx], &t->staging[row * t->sw], (size_t)t->sw * 4U);
++}
++
++/**
++ * @brief Installs the test backend, with or without the layer.
++ *
++ * @param[in] with_layer  Whether to provide layer_begin / layer_end.
++ */
++static void install(bool with_layer)
++{
++    memset(&g_be, 0, sizeof(g_be));
++    g_be.fill_rect = fill_cb;
++    g_be.copy_rect = copy_cb;
++    g_be.blend_rect = blend_cb;
++    g_be.layer_resize = with_layer ? layer_resize_cb : NULL;
++    g_be.layer_begin = with_layer ? layer_begin_cb : NULL;
++    g_be.layer_end = with_layer ? layer_end_cb : NULL;
++    g_be.ctx = &g_ctx;
++    embedded_renderer_set_backend(&g_be); /* also forces the next commit to repaint in full */
++}
++
++/** @brief Creates a sized View with a background colour and appends it to @p parent (when given). */
++static ERNode* view(ERNode* parent, int w, int h, uint32_t bg)
++{
++    ERNode* n = er_node_create(ER_NODE_VIEW);
++    ERProps p;
++    er_props_default(&p);
++    p.width = (int16_t)w;
++    p.height = (int16_t)h;
++    p.background_color = bg;
++    er_node_set_props(n, &p);
++    if (parent)
++        er_tree_append_child(parent, n);
++    return n;
++}
++
++/** @brief Reports a failed expectation. */
++static void expect(bool ok, const char* what, const char* detail)
++{
++    if (!ok)
++    {
++        fprintf(stderr, "FAIL %s: %s\n", what, detail);
++        g_failures++;
++    }
++}
++
++/**
++ * @brief Composites the framebuffer and the layer as a host would, then compares the result with a full
++ *        repaint of the same scene without a layer, pixel for pixel. Leaves the layer backend installed.
++ *
++ * @param[in] what     Name of the check, for the failure message.
++ * @param[in] layered  Whether the scene is expected to be layered.
++ */
++static void check(const char* what, bool layered)
++{
++    static uint32_t shown[FB_W * FB_H];
++    memcpy(shown, g_ctx.fb, sizeof(shown));
++    ERScrollLayer l;
++    const bool active = er_scroll_layer_get(&l);
++    expect(active == layered, what, layered ? "expected a layer" : "expected no layer");
++    if (active)
++        for (int row = 0; row < l.view.h; row++)
++            memcpy(&shown[(l.view.y + row) * FB_W + l.view.x],
++                   &g_ctx.layer[(l.src_y + row) * g_ctx.lw + l.src_x],
++                   (size_t)l.view.w * 4U);
++
++    memset(g_ctx.fb, 0, sizeof(g_ctx.fb));
++    install(false);
++    er_commit(); /* full repaint without the layer: the reference */
++    int diffs = 0, first = -1;
++    for (int i = 0; i < FB_W * FB_H; i++)
++        if (shown[i] != g_ctx.fb[i] && diffs++ == 0)
++            first = i;
++    if (diffs)
++    {
++        fprintf(stderr,
++                "FAIL %s: %d pixels differ from a full repaint, first at (%d,%d) %08x vs %08x\n",
++                what,
++                diffs,
++                first % FB_W,
++                first / FB_W,
++                shown[first],
++                g_ctx.fb[first]);
++        g_failures++;
++    }
++    install(true);
++    er_commit(); /* back in the layer, from scratch */
++}
++
++/** @brief Scrolls to @p y and commits. */
++static void scroll_to(ERNode* sv, float y)
++{
++    er_scroll_view_set_offset(sv, 0.0f, y);
++    er_commit();
++}
++
++int main(void)
++{
++    install(true);
++    er_reset();
++
++    /* An opaque root and a ScrollView of striped rows, some with translucent inner boxes. */
++    ERNode* root = view(NULL, FB_W, FB_H, 0xFF102030U);
++    ERProps sp;
++    er_props_default(&sp);
++    sp.position = ER_POS_ABSOLUTE;
++    sp.left = 20;
++    sp.top = 30;
++    sp.width = 110;
++    sp.height = 100;
++    ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
++    er_node_set_props(sv, &sp);
++    er_tree_append_child(root, sv);
++    ERNode* content = view(sv, 110, ROWS * 12, 0);
++    ERNode* rows[ROWS];
++    for (int i = 0; i < ROWS; i++)
++    {
++        rows[i] = view(content, 110, 12, 0xFF000000U | (uint32_t)(i * 2654435761U >> 8));
++        if (i % 3 == 0)
++            view(rows[i], 30 + i, 6, 0x80FFFFFFU);
++    }
++    /* Across the 128-row edge between two painted regions: a shadow, a gradient, a scale and opacity, whose
++     * blends must resolve inside each region. */
++    ERProps dp;
++    er_props_default(&dp);
++    dp.position = ER_POS_ABSOLUTE;
++    dp.left = 20;
++    dp.top = -20;
++    dp.width = 60;
++    dp.height = 62;
++    dp.opacity = 200;
++    dp.shadow_opacity = 0.6f;
++    dp.shadow_radius = 6;
++    dp.shadow_offset_y = 3.0f;
++    dp.transform_scale_x = 1.1f;
++    dp.transform_scale_y = 1.1f;
++    dp.gradient_type = ER_GRADIENT_LINEAR;
++    dp.gradient_stop_count = 2;
++    dp.gradient_stops[0].color = 0xFF20A0E0U;
++    dp.gradient_stops[0].position = 0.0f;
++    dp.gradient_stops[1].color = 0x80E04020U;
++    dp.gradient_stops[1].position = 1.0f;
++    ERNode* deco = er_node_create(ER_NODE_VIEW);
++    er_node_set_props(deco, &dp);
++    er_tree_append_child(rows[9], deco);
++    er_tree_set_root(root);
++    er_commit();
++    check("first frame", true);
++    while (er_scroll_layer_prefetch(256) > 0)
++    {
++    }
++    scroll_to(sv, 70.0f);
++    check("decorations across a region edge", true);
++
++    /* Steps down and up, each against a full repaint. */
++    const float steps[] = {5.0f, 17.0f, 40.5f, 39.0f, 0.0f, 99.0f, 250.0f, 260.0f};
++    for (size_t i = 0; i < sizeof steps / sizeof steps[0]; i++)
++    {
++        scroll_to(sv, steps[i]);
++        char what[64];
++        snprintf(what, sizeof what, "step to %.1f", (double)steps[i]);
++        check(what, true);
++    }
++
++    /* Once the whole layer is painted, a scroll paints nothing. */
++    scroll_to(sv, 0.0f);
++    while (er_scroll_layer_prefetch(256) > 0)
++    {
++    }
++    g_ctx.painted_px = 0;
++    for (int i = 1; i <= 12; i++)
++        scroll_to(sv, (float)(i * 19));
++    expect(g_ctx.painted_px == 0, "scroll after prefetch", "a scroll painted pixels");
++    check("chain of scrolls after prefetch", true);
++
++    /* Without prefetch the scroll paints the bands it reaches. */
++    for (int i = 1; i <= 12; i++)
++        scroll_to(sv, (float)(i * 21));
++    check("chain of scrolls without prefetch", true);
++
++    /* Changes in the content repaint in the layer, including rows out of view. */
++    ERProps rp;
++    er_props_default(&rp);
++    rp.width = 110;
++    rp.height = 12;
++    rp.background_color = 0xFFFFFFFFU;
++    er_node_set_props(rows[10], &rp);
++    er_node_set_props(rows[27], &rp);
++    scroll_to(sv, 80.0f);
++    check("row changes with a scroll", true);
++    er_node_set_props(rows[2], &rp);
++    er_commit();
++    while (er_scroll_layer_prefetch(256) > 0)
++    {
++    }
++    er_node_set_props(rows[25], &rp);
++    er_commit();
++    scroll_to(sv, 230.0f);
++    check("change out of view, then scroll to it", true);
++
++    /* A layout shift far from the viewport marks bands stale instead of painting them: what is shown later,
++     * after prefetch or by scrolling there, is still exact. */
++    scroll_to(sv, 800.0f);
++    while (er_scroll_layer_prefetch(256) > 0)
++    {
++    }
++    rp.height = 30;
++    er_node_set_props(rows[0], &rp);
++    er_commit();
++    check("layout shift above the viewport", true);
++    rp.height = 18;
++    er_node_set_props(rows[0], &rp);
++    er_commit();
++    scroll_to(sv, 0.0f);
++    check("scroll into a shifted, stale part", true);
++    rp.height = 12;
++    er_node_set_props(rows[0], &rp);
++    scroll_to(sv, 800.0f);
++    er_commit();
++    while (er_scroll_layer_prefetch(256) > 0)
++    {
++    }
++    scroll_to(sv, 10.0f);
++    check("prefetch over a shifted, stale part", true);
++
++    /* Removing and adding rows moves the ones below and changes the layer height. */
++    er_tree_remove_child(content, rows[5]);
++    er_node_destroy(rows[5]);
++    er_commit();
++    scroll_to(sv, 60.0f);
++    check("row removed", true);
++    for (int i = 0; i < 6; i++)
++        view(content, 110, 12, 0xFF406080U + (uint32_t)i * 0x10U);
++    ERProps cp;
++    er_props_default(&cp);
++    cp.width = 110;
++    cp.height = (ROWS + 5) * 12;
++    er_node_set_props(content, &cp);
++    er_commit();
++    scroll_to(sv, 400.0f);
++    check("rows added", true);
++
++    /* A horizontal ScrollView inside the content repaints its row in the layer when it scrolls. */
++    ERProps hp;
++    er_props_default(&hp);
++    hp.width = 110;
++    hp.height = 20;
++    hp.flex_direction = ER_FLEX_ROW;
++    ERNode* hsv = er_node_create(ER_NODE_SCROLL_VIEW);
++    er_node_set_props(hsv, &hp);
++    er_tree_insert_before(content, hsv, rows[12]);
++    for (int i = 0; i < 8; i++)
++        view(hsv, 30, 20, 0xFF000000U | (uint32_t)((i + 7) * 2654435761U >> 8));
++    er_commit();
++    scroll_to(sv, 100.0f);
++    er_scroll_view_set_offset(hsv, 33.0f, 0.0f);
++    er_commit();
++    check("nested horizontal scroll", true);
++
++    /* An overlay over the viewport ends the layer; removing it brings the layer back. */
++    ERNode* overlay = er_node_create(ER_NODE_VIEW);
++    ERProps op;
++    er_props_default(&op);
++    op.position = ER_POS_ABSOLUTE;
++    op.left = 60;
++    op.top = 22;
++    op.width = 40;
++    op.height = 16;
++    op.background_color = 0xC0FF8000U;
++    er_node_set_props(overlay, &op);
++    er_tree_append_child(root, overlay);
++    er_commit();
++    scroll_to(sv, 120.0f);
++    check("overlay ends the layer", false);
++    er_tree_remove_child(root, overlay);
++    er_node_destroy(overlay);
++    er_commit();
++    scroll_to(sv, 140.0f);
++    check("overlay gone", true);
++
++    /* Turning the layer off repaints the viewport on the framebuffer. */
++    er_scroll_layer_enable(false);
++    er_commit();
++    check("layer disabled", false);
++    er_scroll_layer_enable(true);
++    er_commit();
++
++    /* A backend that cannot hold the layer keeps the ScrollView on the framebuffer. */
++    cp.height = 1300 * 12;
++    er_node_set_props(content, &cp);
++    er_commit();
++    scroll_to(sv, 4000.0f);
++    check("layer too tall for the backend", false);
++
++    if (g_failures)
++        return EXIT_FAILURE;
++    printf("scroll layer: all checks passed\n");
++    return EXIT_SUCCESS;
++}

@@ -37,7 +37,15 @@ the `backgroundGradient` View style with dithered, damage-clipped rasterization.
 `embeddedReact-scroll-copy.patch` (Apache-2.0 engine, software backend and test
 files; not yet proposed upstream) scrolls a ScrollView by moving its painted
 pixels through a new backend `move_rect` and repainting the exposed strip.
-Patches apply in the order the lock lists them, and may add files.
+`embeddedReact-damage-split.patch` (Apache-2.0 engine and test files) keeps a
+scroll strip and a card apart when the damage set merges rects.
+`embeddedReact-scroll-layer.patch` (Apache-2.0 engine, software backend and
+test files; not yet proposed upstream) paints one page ScrollView into a
+separate image the host keeps, region by region, through new backend
+`layer_resize`/`layer_begin`/`layer_end` callbacks; see
+[SCROLL-LAYER.md](SCROLL-LAYER.md).
+Patches apply in the order the lock lists them, and may add files or change
+lines an earlier patch added.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
 This file is not covered by the framework's additional attribution term.

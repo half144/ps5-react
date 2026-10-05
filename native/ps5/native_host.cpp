@@ -11,6 +11,7 @@
 #include "damage_tracker.hpp"
 #include "frame_stats.hpp"
 #include "gl_presenter.hpp"
+#include "scroll_layer.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "input_script.hpp"
@@ -174,6 +175,10 @@ bool run_proof() {
   }
   if (ok) {
     software = er_software_backend_init(width, height);
+    // A test deploy can turn the scroll layer off with dev/scroll-layer-off, to compare.
+    struct stat info;
+    if (software && stat("/app0/dev/scroll-layer-off", &info) != 0)
+      scroll_layer_enable(presenter);
     ok = software && damage_tracker_install(width, height);
     hui::sys::log("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
   }
@@ -242,10 +247,15 @@ bool run_proof() {
       er_perf_phase_end(ER_PERF_PHASE_JS);
       er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
+      // Spare time early in the frame paints the layer ahead of the viewport. Not after the draw, which
+      // blocks until the next vsync here.
+      scroll_layer_prefetch(hui::sys::monotonic_us, now + kPrefetchUntilUs);
       stats.lap(FrameStats::update, hui::sys::monotonic_us());
+      if (const char* line = scroll_layer_change()) hui::sys::log("[PS5-REACT] %s", line);
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
-      ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
-                          display.height());
+      ERScrollLayer placement;
+      ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(),
+                          scroll_layer_frame(placement), display.width(), display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
