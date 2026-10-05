@@ -29,7 +29,9 @@ const char* fragment_source = R"(#version 410 core
 in vec2 uv;
 uniform sampler2D frame;
 out vec4 color;
-void main() { color = texture(frame, uv); }
+// The texture holds 0xAARRGGBB words uploaded as RGBA bytes; little-endian
+// storage puts them in B,G,R,A order.
+void main() { color = texture(frame, uv).bgra; }
 )";
 
 GLuint compile(GLenum type, const char* source) {
@@ -52,7 +54,7 @@ GLuint compile(GLenum type, const char* source) {
 bool GlPresenter::init(int width, int height) {
   if (width <= 0 || height <= 0 || program_) return false;
   width_ = width; height_ = height;
-  rgba_.resize(static_cast<std::size_t>(width) * height * 4);
+  synced_ = false;
   GLuint vertex = compile(GL_VERTEX_SHADER, vertex_source);
   GLuint fragment = compile(GL_FRAGMENT_SHADER, fragment_source);
   if (!vertex || !fragment) {
@@ -86,13 +88,34 @@ bool GlPresenter::init(int width, int height) {
 
 bool GlPresenter::draw(const std::uint32_t* argb, int sw, int sh) {
   if (!program_ || !argb || sw <= 0 || sh <= 0) return false;
-  for (std::size_t i = 0; i < rgba_.size() / 4; ++i) {
-    const std::uint32_t p = argb[i];
-    rgba_[4*i] = (p >> 16) & 255;
-    rgba_[4*i+1] = (p >> 8) & 255;
-    rgba_[4*i+2] = p & 255;
-    rgba_[4*i+3] = (p >> 24) & 255;
+  glBindTexture(GL_TEXTURE_2D, texture_);
+  upload(argb, {0, 0, width_, height_});
+  synced_ = false;
+  return present(sw, sh);
+}
+
+bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage, int sw, int sh) {
+  if (!program_ || !argb || sw <= 0 || sh <= 0) return false;
+  glBindTexture(GL_TEXTURE_2D, texture_);
+  // A new surface size also covers fullscreen changes and lost drawables.
+  if (!synced_ || sw != surface_width_ || sh != surface_height_) {
+    upload(argb, {0, 0, width_, height_});
+    synced_ = true;
+    surface_width_ = sw; surface_height_ = sh;
+  } else {
+    for (const ERRect& rect : damage) upload(argb, rect);
   }
+  return present(sw, sh);
+}
+
+void GlPresenter::upload(const std::uint32_t* argb, const ERRect& rect) {
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, width_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, rect.x, rect.y, rect.w, rect.h, GL_RGBA, GL_UNSIGNED_BYTE,
+                  argb + static_cast<std::size_t>(rect.y) * width_ + rect.x);
+}
+
+bool GlPresenter::present(int sw, int sh) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST);
   glDisable(GL_FRAMEBUFFER_SRGB);
@@ -103,8 +126,6 @@ bool GlPresenter::draw(const std::uint32_t* argb, int sw, int sh) {
   glViewport((sw-vw)/2, (sh-vh)/2, vw, vh);
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture_);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, rgba_.data());
   glUseProgram(program_);
   glUniform1i(glGetUniformLocation(program_, "frame"), 0);
   glBindVertexArray(vao_);
@@ -117,5 +138,5 @@ void GlPresenter::release() {
   if (vao_) glDeleteVertexArrays(1, &vao_);
   if (program_) glDeleteProgram(program_);
   texture_ = vao_ = program_ = 0;
-  rgba_.clear();
+  synced_ = false;
 }

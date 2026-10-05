@@ -2,29 +2,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useLayoutEffect, useRef} from 'react';
-export {AppRegistry, View, Text, Image, ScrollView} from 'embedded-react';
+import {subscribeInput} from './input.js';
+export {AppRegistry, Text, Animated, useAnimatedValue, Easing, LayoutAnimation} from 'embedded-react';
+export {View, Image, Pressable, ScrollView, FocusScope, useFocusable, useFocus, useIsFocused} from './focus/index.js';
+export {motion, AnimatePresence, transitions} from './motion/index.js';
 export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useGamepad, Linking, BackHandler}
   from './native.js';
 
-const handlers = new Set();
-
-// ABI v1: hosts emit previous/next/confirm/back on the JS/render thread.
-globalThis.__ps5ReactDispatch = action => {
-  for (const handler of handlers) handler(action);
-};
+// ABI v1 compatibility: each direction is followed by its legacy action.
+const legacyActions = {up: 'previous', left: 'previous', down: 'next', right: 'next'};
 
 /**
  * Subscribe while mounted; Options is reserved for the host's exit action.
- * @param {(action: 'previous' | 'next' | 'confirm' | 'back') => void} handler
+ * @param {(action: 'up' | 'down' | 'left' | 'right' | 'previous' | 'next' | 'confirm' | 'back') => void} handler
  */
 export function useController(handler) {
   const current = useRef(handler);
   useLayoutEffect(() => { current.current = handler; });
-  useLayoutEffect(() => {
-    const listener = action => current.current(action);
-    handlers.add(listener);
-    return () => { handlers.delete(listener); };
-  }, []);
+  useLayoutEffect(() => subscribeInput(action => {
+    current.current(action);
+    if (legacyActions[action]) current.current(legacyActions[action]);
+  }), []);
 }
 
 /**

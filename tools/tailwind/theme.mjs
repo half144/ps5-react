@@ -12,6 +12,8 @@ const spacing = {
   72: 288, 80: 320, 96: 384,
 };
 
+const timings = {0: 0, 75: 75, 100: 100, 150: 150, 200: 200, 300: 300, 500: 500, 700: 700, 1000: 1000};
+
 export const defaultTheme = {
   colors,
   spacing,
@@ -44,6 +46,9 @@ export const defaultTheme = {
     '4xl': 896, '5xl': 1024, '6xl': 1152, '7xl': 1280,
   },
   lineClamp: {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6},
+  // Milliseconds.
+  transitionDuration: timings,
+  transitionDelay: timings,
 };
 
 const SCALES = Object.keys(defaultTheme);

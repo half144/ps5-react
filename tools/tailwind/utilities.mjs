@@ -6,7 +6,12 @@
 import {STATIC, REJECTED} from './static.mjs';
 import {arbitrary, fraction, isColor, paletteColor, parseLength, parseNumber, withAlpha} from './values.mjs';
 
-export class UtilityError extends Error {}
+export class UtilityError extends Error {
+  constructor(message, token) {
+    super(message);
+    this.token = token;
+  }
+}
 
 const unsupported = message => { throw new UtilityError(message); };
 
@@ -165,10 +170,21 @@ function angle(value, ctx) {
   return inner && /^-?[\d.]+(deg|rad)$/.test(inner) ? inner : null;
 }
 
-function translate(value, ctx) {
+export function translate(value, ctx) {
   if (fraction(value) || arbitrary(value)?.endsWith('%'))
     unsupported('the engine translates by pixels only; percentage translations are not supported');
   return length(value, ctx, ctx.theme.spacing);
+}
+
+/** Scaled for the style, plus the logical `x`/`y` that motion targets use. */
+function translateUtility(axis) {
+  return (value, ctx, negative) => {
+    const v = translate(value, ctx);
+    if (v === null) return null;
+    const sign = negative ? -1 : 1;
+    return {$transform: {[`translate${axis.toUpperCase()}`]: sign * v,
+      [axis]: sign * translate(value, {...ctx, px: ctx.logical})}};
+  };
 }
 
 function themeNumber(scale, integer = false) {
@@ -264,14 +280,8 @@ const FUNCTIONAL = [
     const a = angle(value, ctx);
     return transform('rotate', a && negative ? negate(a) : a);
   }],
-  ['translate-x', (value, ctx, negative) => {
-    const v = translate(value, ctx);
-    return transform('translateX', v !== null && negative ? -v : v);
-  }],
-  ['translate-y', (value, ctx, negative) => {
-    const v = translate(value, ctx);
-    return transform('translateY', v !== null && negative ? -v : v);
-  }],
+  ['translate-x', translateUtility('x')],
+  ['translate-y', translateUtility('y')],
   ['tint', (value, ctx) => sides(['tintColor'], color(value, ctx))],
   ['caret', (value, ctx) => sides(['cursorColor'], color(value, ctx))],
 ].sort((a, b) => b[0].length - a[0].length);

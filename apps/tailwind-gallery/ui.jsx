@@ -8,10 +8,10 @@ export const caption = tw`font-inter text-xs text-slate-400 tracking-wider`;
 export const body = tw`font-inter text-sm text-slate-100`;
 export const code = tw`font-inter text-xs text-accent`;
 
-/** A focusable demo tile: `focused` and `selected` drive the variants below. */
-export function Card({title, focused, selected, children}) {
+/** A focusable demo tile: its own focus and the `selected` prop drive the variants below. */
+export function Card({title, selected, onPress, children}) {
   return (
-    <View focused={focused} selected={selected}
+    <View onPress={onPress} selected={selected}
       className="flex-1 p-5 gap-4 rounded-2xl border-2 border-slate-700 bg-panel
         focused:border-accent focused:bg-panel-focus selected:border-amber-400
         focused:selected:border-amber-200">

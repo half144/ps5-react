@@ -42,7 +42,9 @@ def desktop(name, test=False):
     run(["cmake", "--build", build, "--target", "ps5-react-preview", "-j", "6"], log=build / "build.log")
     command = [build / "ps5-react-preview", generated / "app.bundle.js"]
     if test:
-        run(["node", "--test", *sorted((ROOT / "tools/tailwind").glob("*.test.mjs"))], env={**os.environ, "PS5_REACT_ER": str(er)},
+        run(["node", "--test", *sorted((ROOT / "tools/tailwind").glob("*.test.mjs")),
+                *sorted((ROOT / "runtime/js/motion").glob("*.test.mjs")),
+                *sorted((ROOT / "runtime/js/focus").glob("*.test.mjs"))], env={**os.environ, "PS5_REACT_ER": str(er)},
             log=ROOT / ".build/tailwind-test.log")
         if name != "starter":
             raise ValueError("The scripted UI test belongs to starter; use preview for other apps")

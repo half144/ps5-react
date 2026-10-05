@@ -61,7 +61,7 @@ export const REJECTED = [
     'text-transform is not supported; transform the string in JavaScript'),
   ...reject(['ring', 'outline'], 'use border-* utilities instead'),
   ...reject(['transition', 'duration', 'ease', 'delay', 'animate'],
-    'CSS animation is not available; use the Animated API'),
+    'unsupported animation class; see docs/ANIMATION.md for the supported set'),
   ...reject(['bg-gradient', 'from', 'via', 'to', 'bg-none'], 'View gradients are not supported'),
   ...reject(['blur', 'brightness', 'contrast', 'grayscale', 'hue-rotate', 'invert', 'saturate',
     'sepia', 'backdrop', 'filter', 'mix-blend', 'bg-blend'], 'filters and blending are not supported'),

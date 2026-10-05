@@ -173,7 +173,7 @@ test('rejected utilities and variants raise ClassError with guidance', () => {
     ['shadow-lg', /shadows are disabled/], ['drop-shadow', /shadows are disabled/],
     ['space-x-4', /gap-x/], ['divide-y', /borders on the children/], ['grid-cols-3', /flexbox only/],
     ['block', /only flex/], ['fixed', /relative and absolute/], ['uppercase', /JavaScript/],
-    ['ring-2', /border/], ['transition', /Animated API/], ['bg-gradient-to-r', /gradients/],
+    ['ring-2', /border/], ['animate-wiggle', /ANIMATION.md/], ['bg-gradient-to-r', /gradients/],
     ['blur-sm', /filters/], ['bg-opacity-50', /bg-black\/50/], ['skew-x-3', /skew/],
     ['invisible', /opacity-0/], ['overflow-auto', /overflow-hidden/], ['items-baseline', /alignment/],
     ['order-1', /layout engine/], ['cursor-pointer', /browser-only/], ['w-auto', /default/],

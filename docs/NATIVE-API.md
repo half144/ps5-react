@@ -145,9 +145,10 @@ function Sticks() {
 }
 ```
 
-`useController` remains the way to receive `previous`, `next`, `confirm`, and
-`back` actions; `useGamepad` is for raw analog and button state. Options is
-still reserved for the host's exit action.
+Menus use focus navigation ([NAVIGATION.md](NAVIGATION.md)). `useController`
+receives the raw `up`, `down`, `left`, `right`, `confirm`, and `back` actions
+(plus `previous`/`next` for compatibility); `useGamepad` is for raw analog and
+button state. Options is still reserved for the host's exit action.
 
 ## Linking
 

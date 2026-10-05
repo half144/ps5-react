@@ -1,0 +1,251 @@
+// Copyright (C) 2026 half144 and PS5 React contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Additional attribution term: see LICENSE-ATTRIBUTION.
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {FocusManager} from './manager.js';
+
+/** A manager whose recovery and press timers run when the test says so. */
+function setup() {
+  const queue = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  const focus = new FocusManager({
+    schedule: fn => queue.push(fn),
+    setTimer: (fn, ms) => { timers.set(++nextTimer, {fn, ms}); return nextTimer; },
+    clearTimer: id => timers.delete(id),
+  });
+  const log = [];
+  const flush = () => { while (queue.length) queue.shift()(); };
+  const runTimers = () => {
+    for (const [id, {fn}] of timers) {
+      timers.delete(id);
+      fn();
+    }
+  };
+  /** Mounts a node at (x, y), 100×100. */
+  const node = (key, x, y, scope = focus.root, props = {}) => {
+    const created = focus.createNode(scope, null, {focusKey: key, onFocus: () => log.push(key), ...props});
+    focus.register(created);
+    focus.setRect(created, {x, y, width: 100, height: 100});
+    return created;
+  };
+  const scope = (parent, props = {}) => focus.createScope(parent, props);
+  const key = () => focus.focused?.props.focusKey ?? null;
+  return {focus, node, scope, key, log, flush, runTimers, timers};
+}
+
+function grid({focus, node}, scope, prefix, originX = 0) {
+  for (let row = 0; row < 3; row++) {
+    for (let column = 0; column < 3; column++) node(`${prefix}${row}${column}`, originX + column * 120, row * 120, scope);
+  }
+  focus.mountScope(scope);
+}
+
+test('scope autoFocus takes the first element, and moves stay inside the grid', () => {
+  const t = setup();
+  const scope = t.scope(t.focus.root, {autoFocus: true});
+  grid(t, scope, 'g');
+  assert.equal(t.key(), 'g00');
+  t.focus.move('right');
+  t.focus.move('down');
+  assert.equal(t.key(), 'g11');
+  t.focus.move('up');
+  t.focus.move('up');
+  assert.equal(t.key(), 'g01');
+});
+
+test('a move escapes to the parent scope unless the scope traps', () => {
+  const t = setup();
+  const left = t.scope(t.focus.root, {autoFocus: true});
+  grid(t, left, 'a');
+  const right = t.scope(t.focus.root);
+  grid(t, right, 'b', 400);
+  t.focus.focus('a02');
+  t.focus.move('right');
+  assert.equal(t.key(), 'b00');
+  const modal = t.scope(t.focus.root, {trap: true});
+  grid(t, modal, 'm', 800);
+  t.focus.focus('m00');
+  t.focus.move('left');
+  assert.equal(t.key(), 'm00');
+});
+
+test('wrap returns to the start of the row', () => {
+  const t = setup();
+  const scope = t.scope(t.focus.root, {wrap: true});
+  grid(t, scope, 'w');
+  const outside = t.node('outside', 400, 0);
+  t.focus.focus('w02');
+  t.focus.move('right');
+  assert.equal(t.key(), 'w00');
+  assert.notEqual(t.focus.focused, outside);
+});
+
+test('wrap stays on its row; other directions escape unless the scope traps', () => {
+  const t = setup();
+  const tabs = t.scope(t.focus.root, {wrap: true});
+  t.node('t0', 0, 0, tabs);
+  t.node('t1', 120, 0, tabs);
+  t.node('t2', 240, 0, tabs);
+  t.focus.mountScope(tabs);
+  const page = t.scope(t.focus.root);
+  t.node('content', 0, 200, page);
+  t.focus.focus('t2');
+  t.focus.move('right');
+  assert.equal(t.key(), 't0');
+  t.focus.move('down');
+  assert.equal(t.key(), 'content');
+
+  tabs.props = {wrap: true, trap: true};
+  t.focus.focus('t1');
+  t.focus.move('down');
+  assert.equal(t.key(), 't1');
+  t.focus.move('left');
+  t.focus.move('left');
+  assert.equal(t.key(), 't2');
+});
+
+test('re-entering a scope restores its remembered element unless restoreFocus is false', () => {
+  const t = setup();
+  const list = t.scope(t.focus.root);
+  grid(t, list, 'l');
+  t.node('side', 400, 240);
+  t.focus.focus('l22');
+  t.focus.move('right');
+  assert.equal(t.key(), 'side');
+  t.focus.move('left');
+  assert.equal(t.key(), 'l22');
+  t.focus.focus('l00');
+  t.focus.move('right');
+  t.focus.move('right');
+  t.focus.move('right');
+  t.focus.move('left');
+  assert.equal(t.key(), 'l02', 'restoreFocus off would land on the spatial winner l22');
+
+  const fresh = setup();
+  const plain = fresh.scope(fresh.focus.root, {restoreFocus: false});
+  grid(fresh, plain, 'p');
+  fresh.node('side', 400, 240);
+  fresh.focus.focus('p00');
+  fresh.focus.focus('side');
+  fresh.focus.move('left');
+  assert.equal(fresh.key(), 'p22');
+});
+
+test('nextFocus overrides the spatial choice', () => {
+  const t = setup();
+  t.node('a', 0, 0, t.focus.root, {nextFocusRight: 'c'});
+  t.node('b', 120, 0);
+  t.node('c', 240, 0);
+  t.focus.focus('a');
+  t.focus.move('right');
+  assert.equal(t.key(), 'c');
+});
+
+test('autoFocus applies only when nothing in its scope has focus', () => {
+  const t = setup();
+  t.node('first', 0, 0, t.focus.root, {autoFocus: true});
+  t.node('second', 120, 0, t.focus.root, {autoFocus: true});
+  assert.equal(t.key(), 'first');
+  const other = t.scope(t.focus.root);
+  t.node('elsewhere', 0, 200, other, {autoFocus: true});
+  assert.equal(t.key(), 'elsewhere');
+});
+
+test('unmounting the focused element focuses the nearest one in its scope', () => {
+  const t = setup();
+  const scope = t.scope(t.focus.root);
+  grid(t, scope, 'g');
+  t.focus.focus('g11');
+  t.focus.unregister(t.focus.keys.get('g11'));
+  assert.equal(t.focus.focused, null);
+  t.flush();
+  assert.ok(['g01', 'g10', 'g12', 'g21'].includes(t.key()));
+});
+
+test('closing a modal returns focus to where it came from', () => {
+  const t = setup();
+  t.node('open', 0, 0);
+  t.node('other', 120, 0);
+  t.focus.focus('open');
+  const modal = t.scope(t.focus.root, {autoFocus: true, trap: true});
+  const ok = t.node('ok', 500, 500, modal);
+  const cancel = t.node('cancel', 620, 500, modal);
+  t.focus.mountScope(modal);
+  assert.equal(t.key(), 'ok');
+  t.focus.unmountScope(modal);
+  t.focus.unregister(ok);
+  t.focus.unregister(cancel);
+  t.flush();
+  assert.equal(t.key(), 'open');
+});
+
+test('Circle bubbles through enclosing onBack handlers until one consumes it', () => {
+  const t = setup();
+  const calls = [];
+  const outer = t.scope(t.focus.root, {onBack: () => { calls.push('outer'); return true; }});
+  const inner = t.scope(outer, {onBack: () => { calls.push('inner'); return false; }});
+  t.node('button', 0, 0, inner, {autoFocus: true});
+  assert.equal(t.focus.back(), true);
+  assert.deepEqual(calls, ['inner', 'outer']);
+  calls.length = 0;
+  inner.props = {onBack: () => { calls.push('inner'); return true; }};
+  assert.equal(t.focus.back(), true);
+  assert.deepEqual(calls, ['inner']);
+  calls.length = 0;
+  outer.props = {onBack: () => { calls.push('outer'); }};
+  inner.props = {};
+  assert.equal(t.focus.back(), false);
+  assert.deepEqual(calls, ['outer']);
+});
+
+test('Cross presses for a while, then calls onPress', () => {
+  const t = setup();
+  const presses = [];
+  const outer = t.scope(t.focus.root, {onBack: () => { presses.push('outer'); return true; }});
+  const inner = t.scope(outer, {});
+  t.node('button', 0, 0, inner, {onPress: () => presses.push('press'), autoFocus: true});
+  t.focus.press();
+  assert.equal(t.focus.focused.pressed, true);
+  assert.equal([...t.timers.values()][0].ms, 120);
+  t.runTimers();
+  assert.equal(t.focus.focused.pressed, false);
+  assert.equal(t.focus.back(), true);
+  assert.deepEqual(presses, ['press', 'outer']);
+});
+
+test('focus by key reaches elements and scopes; listeners see each change', () => {
+  const t = setup();
+  const scope = t.scope(t.focus.root, {focusKey: 'menu'});
+  t.node('m1', 0, 0, scope);
+  t.node('m2', 0, 120, scope);
+  t.focus.mountScope(scope);
+  t.node('x', 400, 0);
+  let changes = 0;
+  t.focus.subscribe(() => changes++);
+  t.focus.focus('m2');
+  t.focus.focus('x');
+  assert.equal(t.focus.focus('menu'), true);
+  assert.equal(t.key(), 'm2');
+  t.focus.blur();
+  assert.equal(t.key(), null);
+  assert.equal(changes, 4);
+  assert.equal(t.focus.focus('missing'), false);
+});
+
+test('scrolled frames shift rectangles and are revealed innermost first', () => {
+  const t = setup();
+  const revealed = [];
+  const outer = {parent: null, x: 0, y: 0, reveal: rect => revealed.push(['outer', rect.y])};
+  const inner = {parent: outer, x: 0, y: 300, reveal: rect => revealed.push(['inner', rect.y])};
+  const top = t.node('top', 0, 0);
+  const node = t.focus.createNode(t.focus.root, inner, {focusKey: 'deep'});
+  t.focus.register(node);
+  t.focus.setRect(node, {x: 0, y: 400, width: 100, height: 100});
+  assert.equal(t.focus.rectOf(node).y, 100);
+  t.focus.focus(top);
+  t.focus.move('down');
+  assert.equal(t.key(), 'deep');
+  assert.deepEqual(revealed, [['inner', 400], ['outer', 100]]);
+});

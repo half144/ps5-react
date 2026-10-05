@@ -5,7 +5,7 @@
 ```text
 apps/<app>/index.jsx                 application, state, components
             ↓
-runtime/js (@ps5-react/core)         controller API, native modules, Embedded React primitives
+runtime/js (@ps5-react/core)         focus navigation, controller API, native modules, primitives
             ↓ React reconciler / NativeUI / QuickJS
 Embedded React C                    tree, layout, text, rasterization
             ↓ opaque ARGB8888 framebuffer
@@ -30,13 +30,18 @@ pair, and FSELF path used by the hardware-tested proof of concept.
 literal style objects; class names and CSS never reach QuickJS or the engine.
 See [TAILWIND.md](TAILWIND.md).
 
+Hosts send directional actions (`up`, `down`, `left`, `right`, `confirm`,
+`back`) through `globalThis.__ps5ReactDispatch`. `runtime/js/focus/` moves focus
+between focusable elements from their laid-out rectangles, in JavaScript on the
+render thread; hosts know nothing about focus. See [NAVIGATION.md](NAVIGATION.md).
+
 Only execution infrastructure and InputTracker are used from ps5-homebrew-ui.
 Its UI components, themes, and UI renderer are not used.
 
 | Directory | Responsibility |
 | --- | --- |
 | `apps/` | Independent JSX entry points, manifests, and assets |
-| `runtime/js/` | Public primitives, native modules, and host input contract |
+| `runtime/js/` | Public primitives, focus navigation, native modules, and host input contract |
 | `native/` | Shared presenter and desktop/PS5 hosts |
 | `tools/` | Bootstrap, bundle, `className` compiler, assets, builds, verification, CLI |
 | `docs/` | Decisions, evidence, limitations, provenance |
@@ -71,7 +76,7 @@ build stage retains its full log.
 
 ## Future work
 
-- Scoped controls and focus navigation, including modal, reconnect, and repeat tests.
+- Hardware validation of focus navigation, including modal, reconnect, and repeat tests.
 - Restart only the JS runtime while preserving the desktop graphics context.
 - Measure PS5 frame time and memory, then consider damaged-region uploads.
 - Add networking, audio, text input, save data, caching, and virtualization behind explicit APIs.

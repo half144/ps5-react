@@ -2,14 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useState} from 'react';
-import {View, Text, FileSystem} from '@ps5-react/core';
-import {Panel, Field, Button, Status, attempt, useMenu, body, mono} from '../ui.jsx';
+import {View, Text, ScrollView, FileSystem, FocusScope} from '@ps5-react/core';
+import {Panel, Field, Button, Label, Status, attempt, body, mono} from '../ui.jsx';
 import {bytes} from '../format.js';
 
 const ROOTS = [FileSystem.dataDir, FileSystem.appDir, FileSystem.tempDir, '/'];
 const TEST_FILE = `${FileSystem.dataDir}/system-explorer.txt`;
-const SHORTCUTS = ROOTS.length + 1;
-const ROWS = 11;
 const PREVIEW_BYTES = 4096;
 
 const join = (dir, name) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
@@ -32,18 +30,16 @@ function describe(path, entry) {
   return `${path}: ${bytes(entry.size)}\n${printable(FileSystem.readFile(path))}`;
 }
 
-function Entry({entry, focused}) {
+function Entry({entry, onPress}) {
   return (
-    <View focused={focused} className="flex-row justify-between px-3 py-1 rounded-md focused:bg-panel-focus">
-      <Text focused={focused} className="font-inter text-sm text-slate-300 focused:text-white">
-        {entry.isDirectory ? `${entry.name}/` : entry.name}
-      </Text>
+    <View onPress={onPress} className="flex-row justify-between px-3 py-1 rounded-md focused:bg-panel-focus">
+      <Label>{entry.isDirectory ? `${entry.name}/` : entry.name}</Label>
       <Text style={mono}>{entry.isDirectory ? 'dir' : bytes(entry.size)}</Text>
     </View>
   );
 }
 
-export function FilesPage({active, onBack}) {
+export function FilesPage() {
   const [dir, setDir] = useState(FileSystem.dataDir);
   const [listing, setListing] = useState(() => attempt(() => list(FileSystem.dataDir)));
   const [status, setStatus] = useState(null);
@@ -52,61 +48,60 @@ export function FilesPage({active, onBack}) {
   const open = path => {
     setDir(path);
     setListing(attempt(() => list(path)));
-    setFocus(0);
     setStatus(null);
   };
-  const confirm = index => {
-    if (index < ROOTS.length) return open(ROOTS[index]);
-    if (index === ROOTS.length) {
-      setStatus(attempt(writeTestFile));
-      return setListing(attempt(() => list(dir)));
-    }
-    const entry = entries[index - SHORTCUTS];
-    const path = join(dir, entry.name);
-    if (entry.isDirectory) return open(path);
-    setStatus(attempt(() => describe(path, entry)));
+  const write = () => {
+    setStatus(attempt(writeTestFile));
+    setListing(attempt(() => list(dir)));
   };
-  const [focus, setFocus] = useMenu(active, SHORTCUTS + entries.length, {
-    onConfirm: confirm,
-    onBack: () => (dir === '/' ? onBack() : open(parent(dir))),
-  });
+  const select = entry => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory) open(path);
+    else setStatus(attempt(() => describe(path, entry)));
+  };
+  // Circle climbs to the parent folder; at the root it falls through to the enclosing scope.
+  const up = () => {
+    if (dir === '/') return false;
+    open(parent(dir));
+    return true;
+  };
 
-  const row = focus - SHORTCUTS;
-  const start = Math.max(0, Math.min(row - 4, entries.length - ROWS));
   const usage = attempt(() => FileSystem.diskUsage(dir));
   const mounts = attempt(FileSystem.mounts);
 
   return (
-    <View className="flex-1 flex-row gap-6">
-      <Panel title={`${dir} · ${entries.length} entries`} grow>
-        <View className="flex-row flex-wrap gap-2">
-          {ROOTS.map((root, index) => <Button key={root} label={root} focused={active && focus === index} />)}
-          <Button label="Write test file" focused={active && focus === ROOTS.length} />
-        </View>
-        <Status status={listing.error ? listing : null} />
-        {entries.length === 0 && !listing.error && <Text style={body}>Empty, or not listable here.</Text>}
-        <View className="gap-1">
-          {entries.slice(start, start + ROWS).map((entry, index) => (
-            <Entry key={entry.name} entry={entry} focused={active && row === start + index} />
-          ))}
-        </View>
-      </Panel>
-      <View className="w-96 gap-5">
-        <Panel title="DISK USAGE">
-          {usage.error ? <Status status={usage} /> : (
-            <View className="gap-3">
-              <Field name="Free" value={bytes(usage.value.free)} />
-              <Field name="Total" value={bytes(usage.value.total)} />
-            </View>
-          )}
+    <FocusScope onBack={up}>
+      <View className="flex-1 flex-row gap-6">
+        <Panel title={`${dir} · ${entries.length} entries`} grow>
+          <View className="flex-row flex-wrap gap-2">
+            {ROOTS.map(root => <Button key={root} label={root} onPress={() => open(root)} />)}
+            <Button label="Write test file" onPress={write} />
+          </View>
+          <Status status={listing.error ? listing : null} />
+          {entries.length === 0 && !listing.error && <Text style={body}>Empty, or not listable here.</Text>}
+          <ScrollView className="flex-1 gap-1">
+            {entries.map(entry => (
+              <Entry key={join(dir, entry.name)} entry={entry} onPress={() => select(entry)} />
+            ))}
+          </ScrollView>
         </Panel>
-        <Panel title="MOUNTS">
-          {mounts.error ? <Status status={mounts} /> : mounts.value.slice(0, 6).map(mount => (
-            <Text key={mount.path} className="font-inter text-xs text-accent truncate">{mount.path} · {mount.type}</Text>
-          ))}
-        </Panel>
-        <Panel title="RESULT"><Status status={status} /></Panel>
+        <View className="w-96 gap-5">
+          <Panel title="DISK USAGE">
+            {usage.error ? <Status status={usage} /> : (
+              <View className="gap-3">
+                <Field name="Free" value={bytes(usage.value.free)} />
+                <Field name="Total" value={bytes(usage.value.total)} />
+              </View>
+            )}
+          </Panel>
+          <Panel title="MOUNTS">
+            {mounts.error ? <Status status={mounts} /> : mounts.value.slice(0, 6).map(mount => (
+              <Text key={mount.path} className="font-inter text-xs text-accent truncate">{mount.path} · {mount.type}</Text>
+            ))}
+          </Panel>
+          <Panel title="RESULT"><Status status={status} /></Panel>
+        </View>
       </View>
-    </View>
+    </FocusScope>
   );
 }

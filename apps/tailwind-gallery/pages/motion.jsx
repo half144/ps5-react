@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-import {View, Text} from '@ps5-react/core';
+import {View, Text, useIsFocused} from '@ps5-react/core';
 import {Card, Page, code} from '../ui.jsx';
 
 const block = 'size-14 rounded-lg bg-fuchsia-500 border-2 border-fuchsia-200';
@@ -9,8 +9,20 @@ const ghost = 'absolute size-14 rounded-lg border-2 border-dashed border-slate-5
 const layer = 'absolute w-24 h-16 rounded-lg border-2 border-ink justify-center items-center';
 const label = 'font-inter text-xs text-ink';
 
+// Reads the enclosing Card's focus: these blocks are not focusable themselves.
+function Spinners() {
+  const focused = useIsFocused();
+  return (
+    <View className="flex-1 flex-row justify-around items-center">
+      <View focused={focused}
+        className={`${block} bg-sky-500 border-sky-200 focused:scale-125 focused:rotate-45`} />
+      <View focused={focused}
+        className={`${block} origin-top-left focused:rotate-[30deg] focused:bg-amber-400`} />
+    </View>
+  );
+}
+
 export function TransformPage({at}) {
-  const spin = at(1);
   const stack = at(2);
   return (
     <Page intro="Transforms with origins, focus-driven variants, absolute insets, z-index, and conditional classes.">
@@ -32,13 +44,8 @@ export function TransformPage({at}) {
         </View>
         <Text style={code}>origin-left rotate-6</Text>
       </Card>
-      <Card {...spin} title="focused:scale-125 focused:rotate-45">
-        <View className="flex-1 flex-row justify-around items-center">
-          <View focused={spin.focused}
-            className={`${block} bg-sky-500 border-sky-200 focused:scale-125 focused:rotate-45`} />
-          <View focused={spin.focused}
-            className={`${block} origin-top-left focused:rotate-[30deg] focused:bg-amber-400`} />
-        </View>
+      <Card {...at(1)} title="focused:scale-125 focused:rotate-45">
+        <Spinners />
         <Text style={code}>focus this card; the second pivots on origin-top-left</Text>
       </Card>
       <Card {...stack} title="absolute · inset · z-* · conditional">

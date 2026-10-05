@@ -9,30 +9,30 @@ below, and anything else fails the build with a source location and a reason.
 ## Quick example
 
 ```jsx
-import {useState} from 'react';
-import {AppRegistry, View, Text, tw, useController} from '@ps5-react/core';
+import {AppRegistry, View, Text, FocusScope, tw, useIsFocused} from '@ps5-react/core';
 
 const title = tw`text-4xl font-bold text-white`;
 
+// Text cannot read focus itself; it asks the focusable View around it.
+function Label({children}) {
+  const focused = useIsFocused();
+  return <Text className="text-xl text-slate-200 focused:text-white" focused={focused}>{children}</Text>;
+}
+
 function Menu() {
-  const [focus, setFocus] = useState(0);
-  useController(action => {
-    if (action === 'next') setFocus(i => (i + 1) % 3);
-    if (action === 'previous') setFocus(i => (i + 2) % 3);
-  });
   return (
-    <View className="flex-1 items-center justify-center gap-4 bg-slate-950">
-      <Text style={title}>Library</Text>
-      {['Games', 'Media', 'Settings'].map((label, i) => (
-        <View key={label} focused={focus === i}
-          className="w-80 rounded-xl border-2 border-transparent bg-slate-800 px-6 py-4
-            focused:border-sky-400 focused:bg-sky-800 focused:scale-105">
-          <Text className="text-xl text-slate-200 focused:text-white" focused={focus === i}>
-            {label}
-          </Text>
-        </View>
-      ))}
-    </View>
+    <FocusScope autoFocus wrap>
+      <View className="flex-1 items-center justify-center gap-4 bg-slate-950">
+        <Text style={title}>Library</Text>
+        {['Games', 'Media', 'Settings'].map(label => (
+          <View key={label} focusable
+            className="w-80 rounded-xl border-2 border-transparent bg-slate-800 px-6 py-4
+              focused:border-sky-400 focused:bg-sky-800 focused:scale-105">
+            <Label>{label}</Label>
+          </View>
+        ))}
+      </View>
+    </FocusScope>
   );
 }
 
@@ -67,7 +67,8 @@ a `style` prop, possibly an array, and must forward it to a primitive.
   classes of the same expression.
 - Variant classes (`focused:...`) apply after base and conditional classes.
 - An explicit `style` prop always wins: `className` plus `style` compiles to
-  `style={[compiled, style]}`.
+  `style={[compiled, style]}`, or, on a focusable element, to a style function
+  that returns `[...compiled, style]` (see [Focus state](#focus-state)).
 - The `!` important modifier is rejected; precedence above covers its uses.
 
 ## Scaling
@@ -279,7 +280,8 @@ Controller focus plays the role of the pointer hover on the console, so
 
 A variant reads the JSX prop of the same name on the **same element**; the prop
 itself is left untouched and still reaches the component. The build fails if
-the prop is missing. A bare prop (`<View focused className="…">`) counts as
+the prop is missing, except for `focused:` and `pressed:` on a focusable
+element (below). A bare prop (`<View focused className="…">`) counts as
 `true`. Stacked variants such as `focused:selected:bg-sky-600` apply only when
 both props are truthy.
 
@@ -290,6 +292,155 @@ rejected; compute the value into a variable first.
 
 Text styles are not inherited, so a `Text` inside a focused `View` needs its own
 `focused` prop to use `focused:text-white`.
+
+### Focus state
+
+An element is focusable when it has a `focusable` prop (other than
+`focusable={false}`), an `onPress` prop, or is `Pressable` from
+`@ps5-react/core` ([NAVIGATION.md](NAVIGATION.md)). On such an element,
+`focused:` (and its aliases) and `pressed:` need no prop: when the element does
+not pass `focused`/`pressed` itself, the variant reads the element's own focus
+state through a style function:
+
+```jsx
+<View focusable onPress={open} className="p-4 bg-slate-800 focused:bg-sky-700" style={extra} />
+
+// compiles to
+<View focusable onPress={open} style={(_state) => [{padding: 16, backgroundColor: '#1e293b'},
+  _state.focused ? {backgroundColor: '#0369a1'} : null,
+  typeof extra === 'function' ? extra(_state) : extra]} />
+```
+
+- An explicit `focused={...}` or `pressed={...}` prop keeps that variant
+  reading the prop, exactly as on any other element; the two are decided
+  separately.
+- Other variants (`selected:`, `disabled:`, …) still read their props, and
+  conditional classes keep their tests.
+- The explicit `style` goes last inside the function. A function literal is
+  called with the state; an identifier or member expression is called when it
+  holds a function at runtime. Any other expression fails the build: compute it
+  into a variable first. Object and array literals are used as they are.
+- The parameter gets a fresh name, so it never shadows a variable that a
+  condition or the `style` expression uses.
+
+## Animation classes
+
+Animation classes compile to the motion props described in
+[ANIMATION.md](ANIMATION.md); they never reach `style`. An element that uses
+them must be a `View`, `Text`, or `Image` imported from `@ps5-react/core`
+(aliases such as `import {View as Box}` count). The build rewrites it to the
+matching motion component and adds the import once per file:
+
+```jsx
+import {View} from '@ps5-react/core';
+
+<View focused={isFocused}
+  className="animate-in fade-in slide-in-from-bottom-4 duration-300 transition focused:scale-105" />
+
+// compiles to
+<__ps5Motion.View focused={isFocused}
+  initial={{opacity: 0, y: 16}}
+  animate={isFocused ? {opacity: 1, y: 0, scale: 1.05} : {opacity: 1, y: 0, scale: 1}}
+  transition={{type: 'tween', duration: 0.3, ease: [0.4, 0, 0.2, 1]}} />
+```
+
+Wrap your own components with `motion.create` and pass motion props instead;
+animation classes on any other element fail the build.
+
+On a focusable element without its own `focused`/`pressed` prop
+([Focus state](#focus-state)), the opacity and transforms of `focused:` and
+`pressed:` become `whileFocus` and `whilePress` targets, which the motion
+component applies from its own focus state; their other keys stay in the style
+function:
+
+```jsx
+<View focusable className="transition bg-slate-800 focused:scale-105 focused:bg-sky-700" />
+
+// compiles to
+<__ps5Motion.View focusable
+  style={(_state) => [{backgroundColor: '#1e293b'}, _state.focused ? {backgroundColor: '#0369a1'} : null]}
+  initial={false} animate={{scale: 1}}
+  transition={{type: 'tween', duration: 0.15, ease: [0.4, 0, 0.2, 1]}}
+  whileFocus={{scale: 1.05}} />
+```
+
+The motion component's priority then applies: `whilePress` > `whileSelect` >
+`whileFocus` > `animate`, so `whileFocus` also wins over `checked:`, `active:`,
+and `disabled:` layers in `animate`. Stacked variants (`focused:selected:`) and
+focus variants inside conditional classes cannot animate from focus state;
+give the element an explicit `focused`/`pressed` prop for those.
+
+| Class | Motion prop |
+| --- | --- |
+| `animate-in` | Plays the enter classes below: `initial` holds their values, `animate` the element's own |
+| `fade-in`, `fade-in-{0…100}`, `fade-in-[<0–1>]` | Enter from `opacity` (bare = 0) |
+| `zoom-in`, `zoom-in-{0,50,75,90,95,100,105,110,125,150}`, `zoom-in-[<n>]` | Enter from `scale` (bare = 0) |
+| `spin-in`, `spin-in-{0,1,2,3,6,12,45,90,180}`, `spin-in-[<n>deg]`, `spin-in-[<n>rad]` | Enter from `rotate` (bare = 30°) |
+| `slide-in-from-{top,bottom,left,right}-<spacing>`, `…-[<px/rem>]` | Enter from `y` or `x` (top/left negative) |
+| `animate-out` with `fade-out*`, `zoom-out*`, `spin-out*`, `slide-out-to-*` | `exit`, with the same values; needs an `AnimatePresence` parent |
+| `duration-{0,75,100,150,200,300,500,700,1000}`, `duration-[<n>ms]`, `duration-[<n>s]` | `transition.duration` (default 150 ms) |
+| `delay-*` | `transition.delay`, same values |
+| `ease-linear`, `ease-in`, `ease-out`, `ease-in-out`, `ease-[cubic-bezier(a,b,c,d)]` | `transition.ease` (default `ease-in-out`, Tailwind's curves) |
+| `transition`, `transition-all` | Opacity and transforms of variants and conditional classes animate |
+| `transition-opacity`, `transition-transform` | Only opacity, or only transforms, animate; the other switches instantly |
+| `transition-none` | Nothing animates on state changes |
+| `animate-spin`, `animate-pulse`, `animate-bounce`, `animate-ping` | Repeating `animate` with a per-key `transition` |
+
+Transitions are tweens, as in CSS; `duration`, `delay`, and `ease` apply to
+enter, exit, and state changes alike. `fade-in-N` and `zoom-in-N` use the
+opacity and scale scales, and `duration`/`delay` read `theme.transitionDuration`
+and `theme.transitionDelay` (milliseconds), so `tailwind.config.js` can extend
+all of them.
+
+**Distances are logical pixels.** `slide-in-from-bottom-4` starts 16 px lower
+before render scaling, like `translate-y-4`; the motion runtime applies the
+render scale. Percentages are not supported, so the tailwindcss-animate
+default of 100% (`slide-in-from-top` without a value, or `-full`) fails the
+build and asks for a spacing or pixel value.
+
+**State changes.** On an animated element, opacity and transform classes
+(`opacity-*`, `scale-*`, `rotate-*`, `translate-*`) move from `style` into
+`animate`, including the static ones, so `translate-x-2 focused:scale-105`
+composes. Variants become layers over the static target:
+`animate={focused ? {...base, ...focusedValues} : base}`, or spreads when
+several apply, in the priority `focused` < `selected` < `checked` < `active` <
+`pressed` < `disabled`. A key that only a variant sets gets its resting value
+(opacity 1, scale 1, rotate 0, x/y 0) in the base, so it returns when the
+variant ends. Conditional classes (`${on ? 'scale-110' : 'scale-100'}`)
+become layers the same way. Colors, borders, and other style keys keep switching
+instantly through `style`.
+
+An element becomes animated when it has `animate-in`, `animate-out`, a loop, or
+a `transition*` class covering an opacity/transform key that changes. Otherwise
+`transition`, `duration-*`, `delay-*`, and `ease-*` compile to nothing, and the
+element keeps its plain style. Without a `transition*` class, keys changed by
+variants on an animated element snap (`duration: 0`), unless an enter or exit
+class also animates them.
+
+**Loops** follow Tailwind's keyframes where the transition model allows:
+
+| Class | Animation | Difference from CSS |
+| --- | --- | --- |
+| `animate-spin` | `rotate` 0 → 360, 1 s linear, repeating | None |
+| `animate-pulse` | `opacity` 1 → 0.5 and back, 1 s each way, `cubic-bezier(0.4, 0, 0.6, 1)` | None |
+| `animate-bounce` | `y` from −25% of the height to 0 and back, 0.5 s each way, `cubic-bezier(0.8, 0, 1, 1)` reversed | Uses the static `h-*`/`size-*` in px; without one it bounces 8 px. The rise reuses the reversed fall curve instead of CSS's separate `cubic-bezier(0, 0, 0.2, 1)` |
+| `animate-ping` | `scale` 1 → 2 and `opacity` 1 → 0, 1 s, `cubic-bezier(0, 0, 0.2, 1)`, restarting | Expands over the whole second instead of 750 ms followed by a 250 ms pause |
+
+Scale and rotate render only on elements that fit the engine's transform
+buffer; see the engine limits in [ANIMATION.md](ANIMATION.md).
+
+The build rejects, with the class location:
+
+- an enter or exit class without `animate-in`/`animate-out`, and
+  `animate-in`/`animate-out` without one;
+- a loop and another class changing the same key, such as `animate-pulse` with
+  `fade-in` or `focused:opacity-50`;
+- animation classes with a variant prefix (`focused:animate-spin`), inside the
+  conditional part of a `className`, or in a `tw` template;
+- `initial`, `animate`, `exit`, or `transition` props next to animation classes,
+  and `whileFocus`/`whilePress` next to classes that compile to them;
+- `transition-colors` and `transition-shadow`: colors are not animatable;
+  crossfade two layers instead.
 
 ## Dynamic classes
 
@@ -359,7 +510,8 @@ export default {
 - `theme.<key>` replaces the default scale; `theme.extend.<key>` merges into it.
 - Supported keys: `colors`, `spacing`, `fontSize`, `fontFamily`, `fontWeight`,
   `lineHeight`, `letterSpacing`, `borderRadius`, `borderWidth`, `opacity`,
-  `zIndex`, `scale`, `rotate`, `aspectRatio`, `maxWidth`, `lineClamp`. Any other
+  `zIndex`, `scale`, `rotate`, `aspectRatio`, `maxWidth`, `lineClamp`,
+  `transitionDuration`, `transitionDelay`. Any other
   key is a configuration error.
 - Lengths may be numbers (logical px) or `'Npx'` / `'Nrem'` strings.
 - `fontSize` entries may be a number, a string, or `[size, lineHeight]`; a line
@@ -383,7 +535,7 @@ These fail the build with the reason shown. Any other unknown class fails with
 | `fixed`, `sticky`, `static` | Only `relative` and `absolute` |
 | `uppercase`, `lowercase`, `capitalize`, `normal-case` | No text-transform; transform the string in JavaScript |
 | `ring-*`, `outline-*` | Use `border-*` |
-| `transition-*`, `duration-*`, `ease-*`, `delay-*`, `animate-*` | No CSS animation; use the Animated API |
+| `transition-colors`, `transition-shadow`, `animate-<other>`, other `transition-*`, `duration-*`, `ease-*`, `delay-*` values | Only the [animation classes](#animation-classes) are supported |
 | `bg-gradient-*`, `from-*`, `via-*`, `to-*`, `bg-none` | No View gradients |
 | `blur`, `brightness`, `contrast`, `grayscale`, `hue-rotate`, `invert`, `saturate`, `sepia`, `backdrop-*`, `filter`, `mix-blend-*`, `bg-blend-*` | No filters or blending |
 | `bg-opacity-*`, `text-opacity-*`, `border-opacity-*` | Use a color opacity modifier such as `bg-black/50` |
@@ -405,7 +557,7 @@ Rejected variants:
 
 | Variant | Reason |
 | --- | --- |
-| `focus-within:` | Use `focused:` with a `focused` prop |
+| `focus-within:` | Use `focused:` on the focusable element, or a `focused` prop |
 | `dark:` | No color-scheme query; choose colors from app state |
 | `first:`, `last:`, `odd:`, `even:` | Need selectors; choose the class from the index |
 | `sm:`, `md:`, `lg:`, `xl:`, `2xl:`, `max-*:`, `portrait:`, `landscape:`, `print:`, `motion-safe:`, `motion-reduce:` | The render size is fixed per app |
@@ -419,7 +571,8 @@ Rejected variants:
 - Styles do not cascade. As in React Native, text styles on a `View` do not
   reach its `Text` children.
 - Interaction states are explicit props (`focused`, `selected`, …), not
-  pseudo-classes; `hover:`/`focus:` read the `focused` prop. There are no
+  pseudo-classes; `hover:`/`focus:` read the `focused` prop, or the focus
+  state of a focusable element that has none. There are no
   dark-mode, responsive, or platform variants.
 - Lengths are scaled to the app's render width and rounded at build time.
 - Percentages work only for width, height, insets, and basis.
