@@ -8,7 +8,8 @@
       "patches/embeddedReact-identity-scale.patch",
       "patches/embeddedReact-view-gradient.patch",
       "patches/embeddedReact-scroll-offset.patch",
-      "patches/embeddedReact-scroll-to.patch"
+      "patches/embeddedReact-scroll-to.patch",
+      "patches/embeddedReact-scroll-copy.patch"
     ]
   },
   "platform": {

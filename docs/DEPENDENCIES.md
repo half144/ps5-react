@@ -30,11 +30,14 @@ each patch states what it changes, and the build rejects any other local change.
 `embeddedReact-flex-wrap-auto-height.patch` modifies Apache-2.0 engine files and
 has been proposed upstream; drop it once the pinned revision contains the fix.
 `embeddedReact-scroll-offset.patch` and `embeddedReact-scroll-to.patch`
-(Apache-2.0 engine and bridge files, applied to build-tree copies by
-`native/ps5/CMakeLists.txt`) expose ScrollView offsets to JavaScript as
+(Apache-2.0 engine and bridge files) expose ScrollView offsets to JavaScript as
 `NativeUI.scrollTo` for focus scrolling, and warn when the node pool is full.
 `embeddedReact-view-gradient.patch` (Apache-2.0 engine and bridge files) adds
 the `backgroundGradient` View style with dithered, damage-clipped rasterization.
+`embeddedReact-scroll-copy.patch` (Apache-2.0 engine, software backend and test
+files; not yet proposed upstream) scrolls a ScrollView by moving its painted
+pixels through a new backend `move_rect` and repainting the exposed strip.
+Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
 This file is not covered by the framework's additional attribution term.

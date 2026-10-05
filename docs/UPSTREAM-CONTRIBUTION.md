@@ -45,3 +45,17 @@ pull request [#281](https://github.com/TheMasterCoder007/embedded-react/pull/281
 fix rows with `flexWrap: 'wrap'` that reserved one line's height. Until it is
 merged and pinned, `patches/embeddedReact-flex-wrap-auto-height.patch` carries
 the same engine change; delete the patch when the pinned revision includes it.
+
+## Submitted: rendering, scrolling, and gradients
+
+Each carries a patch in `patches/` until the pinned revision includes it:
+
+| Patch | Issue | Pull request |
+| --- | --- | --- |
+| `embeddedReact-scaled-image-clip.patch` | [#284](https://github.com/TheMasterCoder007/embedded-react/issues/284) | [#285](https://github.com/TheMasterCoder007/embedded-react/pull/285) |
+| `embeddedReact-identity-scale.patch` | [#286](https://github.com/TheMasterCoder007/embedded-react/issues/286) | [#287](https://github.com/TheMasterCoder007/embedded-react/pull/287) |
+| `embeddedReact-scroll-offset.patch`, `embeddedReact-scroll-to.patch` | [#288](https://github.com/TheMasterCoder007/embedded-react/issues/288), [#290](https://github.com/TheMasterCoder007/embedded-react/issues/290) | [#289](https://github.com/TheMasterCoder007/embedded-react/pull/289), [#291](https://github.com/TheMasterCoder007/embedded-react/pull/291) |
+| `embeddedReact-view-gradient.patch` | [#282](https://github.com/TheMasterCoder007/embedded-react/issues/282) | [#283](https://github.com/TheMasterCoder007/embedded-react/pull/283) |
+
+The upstream scaled-image fix keeps the original float bilinear weights; our
+patch also switches to integer weights (up to 2 levels per channel apart).

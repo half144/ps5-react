@@ -13,28 +13,28 @@ import subprocess
 import sys
 import time
 
-from common import ROOT, app_config, bundle, dependency, run
+from common import ROOT, app_config, app_files, bundle, dependency, run
 
 
-def sandbox(name):
+def sandbox(app):
     """Desktop stand-in for the console mounts that fs paths resolve against."""
-    root = ROOT / ".build" / name / "sandbox"
+    root = ROOT / ".build" / app.name / "sandbox"
     for mount in ("download0", "temp0"):
         (root / mount).mkdir(parents=True, exist_ok=True)
-    app0, app = root / "app0", ROOT / "apps" / name
+    app0 = root / "app0"
     if app0.is_symlink() and app0.resolve() != app.resolve(): app0.unlink()
     if not app0.is_symlink(): app0.symlink_to(app)
     return root
 
 
-def preview_env(name):
-    return {**os.environ, "PS5_REACT_SANDBOX": str(sandbox(name))}
+def preview_env(app):
+    return {**os.environ, "PS5_REACT_SANDBOX": str(sandbox(app))}
 
 
-def desktop(name, test=False):
+def desktop(app, test=False):
     er = dependency("embeddedReact")
-    _, _, generated = bundle(name, er)
-    build = ROOT / ".build" / name / "desktop"
+    _, _, generated = bundle(app, er)
+    build = ROOT / ".build" / app.name / "desktop"
     quickjs = dependency("quickjsSource")
     run(["cmake", "-S", ROOT / "native/desktop", "-B", build,
          f"-DER_ROOT={er}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", "-DCMAKE_BUILD_TYPE=Release"],
@@ -46,7 +46,7 @@ def desktop(name, test=False):
                 *sorted((ROOT / "runtime/js/motion").glob("*.test.mjs")),
                 *sorted((ROOT / "runtime/js/focus").glob("*.test.mjs"))], env={**os.environ, "PS5_REACT_ER": str(er)},
             log=ROOT / ".build/tailwind-test.log")
-        if name != "starter":
+        if app != ROOT / "apps/starter":
             raise ValueError("The scripted UI test belongs to starter; use preview for other apps")
         command.append("--self-test")
     return command, build
@@ -71,16 +71,15 @@ def doctor():
     if missing: raise RuntimeError("Missing: " + ", ".join(missing))
 
 
-def source_stamp(name):
+def source_stamp(app):
     entries = []
-    for base in (ROOT / "apps" / name, ROOT / "runtime", ROOT / "native"):
-        for path in sorted(base.rglob("*")):
-            if path.name.startswith(".") or not path.is_file(): continue
-            try:
-                stat = path.stat()
-                entries.append((str(path), stat.st_mtime_ns, stat.st_size))
-            except FileNotFoundError:
-                pass  # Editors may atomically rename files during a save.
+    for path in (*app_files(app), *sorted((ROOT / "runtime").rglob("*")), *sorted((ROOT / "native").rglob("*"))):
+        if path.name.startswith(".") or not path.is_file(): continue
+        try:
+            stat = path.stat()
+            entries.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except FileNotFoundError:
+            pass  # Editors may atomically rename files during a save.
     return tuple(entries)
 
 
@@ -94,9 +93,9 @@ def stop_preview(process):
             process.wait()
 
 
-def watch(name, command, directory):
-    process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(name))
-    stamp = source_stamp(name)
+def watch(app, command, directory):
+    process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(app))
+    stamp = source_stamp(app)
     print("Watching JSX/assets/config. Save to rebuild; Esc closes; Ctrl+C stops.", flush=True)
     try:
         while True:
@@ -105,19 +104,19 @@ def watch(name, command, directory):
                 print("Preview exited with an error; edit and save to retry.", flush=True)
                 process = None
             time.sleep(0.25)
-            changed = source_stamp(name)
+            changed = source_stamp(app)
             if changed == stamp: continue
             # Debounce until the editor has finished its save/rename sequence.
             time.sleep(0.25)
-            stamp = source_stamp(name)
+            stamp = source_stamp(app)
             stop_preview(process)
             process = None
             print("Source changed — rebuilding…", flush=True)
             try:
                 with open(ROOT / ".build/build.lock", "w") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
-                    command, directory = desktop(name)
-                process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(name))
+                    command, directory = desktop(app)
+                process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(app))
                 print("Preview restarted.", flush=True)
             except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
                 print(f"{error}\nFix the source and save to retry.", flush=True)
@@ -125,15 +124,16 @@ def watch(name, command, directory):
         stop_preview(process)
 
 
-def create(name, title, display=None):
-    destination = ROOT / "apps" / name
+def create(name, title, display=None, parent=ROOT / "apps"):
+    destination = parent / name
     if destination.exists(): raise ValueError(f"App already exists: {destination}")
     display = display or name.replace("-", " ").title()
     # Validate identity before touching the new app directory.
     config = json.loads((ROOT / "apps/starter/app.json").read_text())
     suffix = (re.sub(r"[^A-Z0-9]", "", name.upper()) + "0" * 16)[:16]
     config.update(titleId=title, contentId=f"UP9000-{title}_00-{suffix}", name=display, timeoutSeconds=0)
-    app_config(name, config)
+    config["$schema"] = os.path.relpath(ROOT / "app.schema.json", destination)
+    app_config(destination, config)
     stage = ROOT / ".build" / ("create-" + name)
     if stage.exists(): raise ValueError(f"Staging directory exists: {stage}")
     # Starter assets and theme, but a clean entry point instead of the starter's test hooks.
@@ -141,18 +141,22 @@ def create(name, title, display=None):
     (stage / "app.json").write_text(json.dumps(config, indent=2) + "\n")
     template = (ROOT / "tools/templates/index.jsx").read_text()
     (stage / "index.jsx").write_text(template.replace("__TITLE__", display).replace("__NAME__", name))
-    destination.parent.mkdir(exist_ok=True)
-    stage.rename(destination)
-    print(f"Created {destination}\nNext: npm run dev -- --app {name}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(stage, destination)
+    option = f"--app {name}" if parent == ROOT / "apps" else f"--app-dir {destination}"
+    print(f"Created {destination}\nNext: npm run dev -- {option}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="React JSX → desktop preview or independent PS5 title")
     parser.add_argument("command", choices=("doctor", "preview", "build", "test", "create"))
-    parser.add_argument("--app", default="starter")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--app", default="starter", help="app folder name under apps/")
+    source.add_argument("--app-dir", type=Path, help="app directory outside this repository")
     parser.add_argument("--name", help="new app folder name")
     parser.add_argument("--title-id", help="unique PPSAxxxxx ID for a new app")
     parser.add_argument("--title", help="display name of a new app (default: from --name)")
+    parser.add_argument("--dir", type=Path, help="parent directory for a new app (default: apps/)")
     parser.add_argument("--sdk", type=Path, help="use an existing public PS5 payload SDK")
     parser.add_argument("--watch", action="store_true", help="rebuild/restart desktop preview when sources change")
     args = parser.parse_args()
@@ -162,7 +166,8 @@ def main():
         # Prevent traversals before creating directories.
         if not re.fullmatch(r"[a-z][a-z0-9-]*", args.name): raise ValueError("name must use lowercase letters/numbers/hyphens")
     else:
-        app_config(args.app)  # Fast actionable config errors before downloads/builds.
+        app = args.app_dir.expanduser().resolve() if args.app_dir else ROOT / "apps" / args.app
+        app_config(app)  # Fast actionable config errors before downloads/builds.
     (ROOT / ".build").mkdir(exist_ok=True)
     # The asset tooling and caches are shared; serialize build mutations.
     command = None
@@ -170,19 +175,20 @@ def main():
         print("Waiting for build lock…", flush=True)
         fcntl.flock(lock, fcntl.LOCK_EX)
         if args.command == "create":
-            return create(args.name, args.title_id, args.title)
+            parent = args.dir.expanduser().resolve() if args.dir else ROOT / "apps"
+            return create(args.name, args.title_id, args.title, parent)
         if args.command == "build":
-            cmd = ["python3", ROOT / "tools/build_ps5.py", "--app", args.app]
+            cmd = ["python3", ROOT / "tools/build_ps5.py", "--app-dir", app]
             sdk = args.sdk or os.environ.get("PS5_PAYLOAD_SDK")
             if sdk: cmd.extend(["--payload-sdk", sdk])
             run(cmd)
         else:
-            command, directory = desktop(args.app, args.command == "test")
+            command, directory = desktop(app, args.command == "test")
     if command:
         if args.watch and args.command == "preview":
-            watch(args.app, command, directory)
+            watch(app, command, directory)
         else:
-            run(command, cwd=directory, env=preview_env(args.app))
+            run(command, cwd=directory, env=preview_env(app))
 
 
 if __name__ == "__main__":

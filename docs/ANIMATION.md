@@ -343,11 +343,11 @@ with the same split for that frame and the bounding box of its repaint:
 clamps the animation step to 50 ms, so frames beyond that make animations run
 in slow motion.
 
-#### Reproducible profiling on the desktop
+#### Reproducible profiling
 
 The preview replays a scripted input sequence when `PS5_REACT_INPUT_SCRIPT` is
 set, through the same dispatch path as the keyboard and controller. Steps are
-comma-separated: an action (`up`, `down`, `left`, `right`, `confirm`, `back`)
+separated by commas or whitespace: an action (`up`, `down`, `left`, `right`, `confirm`, `back`)
 takes one frame, `action*N` repeats it at the held-key repeat interval
 (110 ms), `wait:MS` pauses for wall-clock milliseconds, and `quit` closes the
 preview. `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
@@ -361,6 +361,21 @@ PS5_REACT_INPUT_SCRIPT="wait:3000,right*3,wait:1500,confirm,wait:2000,back,wait:
 ```
 
 The variables have no effect on `--self-test`.
+
+On the PS5, the host reads the same syntax from `dev/input-script.txt` in the
+app folder (`/app0/dev/input-script.txt`) when that file exists; commas,
+spaces and newlines all separate steps, and the `script:` lines go to the kernel
+log. The file is never part of a build: add it to the built title folder
+(`dist/<titleId>/dev/`) for a test deploy only, and end the script with `quit`
+so the run closes itself.
+
+While such a test deploy runs, the PS5 host also takes live commands: about once
+a second it reads `dev/commands.txt` and runs, in the same syntax, every line of
+the form `<sequence> <steps>` whose sequence number it has not seen (lines
+present at launch are skipped). Writing the file with a new number, for example
+the current time in milliseconds, runs its steps once; each line is echoed as a
+`command:` line in the kernel log. The host polls only when the app folder has a
+`dev` directory, which a build never creates.
 
 ## Design guidelines
 

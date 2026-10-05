@@ -17,6 +17,11 @@
 // Call right after er_software_backend_init(), before any asset or runtime setup:
 // re-registering the backend resets the engine's font and image registries.
 bool damage_tracker_install(int width, int height);
-// Rects painted since the last clear; they may overlap.
+// A framebuffer move (backend move_rect): the src rect's pixels went to src + (dx, dy).
+struct DamageMove { ERRect src; int dx, dy; };
+
+// Rects painted since the last clear; they may overlap. When moves() is not empty, apply those first,
+// in order, to the previous frame's pixels: the rects then hold exactly what still differs.
 std::span<const ERRect> damage_tracker_rects();
+std::span<const DamageMove> damage_tracker_moves();
 void damage_tracker_clear();

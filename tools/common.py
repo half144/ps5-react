@@ -4,6 +4,7 @@
 """Shared configuration and pinned dependency handling. No console transport."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -68,7 +69,8 @@ def checkout(path, url, revision, patches=()):
     expected = set()
     for patch in (ROOT / p for p in patches):
         if git("apply", "--reverse", "--check", patch).returncode:
-            run(["git", "apply", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
+            # Intent-to-add, so files a patch creates count in the diff checked below.
+            run(["git", "apply", "--intent-to-add", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
         expected |= {line.split("\t")[-1] for line in git("apply", "--numstat", patch).stdout.splitlines()}
     changed = set(git("diff", "--name-only", "HEAD").stdout.split())
     if changed != expected:
@@ -82,10 +84,20 @@ def dependency(name, override=None):
     return path
 
 
-def app_config(name, config=None):
-    if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
-        raise ValueError("App name must use lowercase letters, numbers and hyphens")
-    app = ROOT / "apps" / name
+def app_files(app):
+    """App sources; an external app directory may also be its own repository."""
+    for directory, folders, files in os.walk(app):
+        folders[:] = sorted(f for f in folders if f not in (".git", "node_modules"))
+        yield from (Path(directory) / f for f in sorted(files))
+
+
+def app_config(app, config=None):
+    """`app` is the app directory: apps/<name> or an external folder named <name>."""
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", app.name):
+        raise ValueError("App directory name must use lowercase letters, numbers and hyphens")
+    local = ROOT / "apps" / app.name
+    if local.exists() and local.resolve() != app.resolve():
+        raise ValueError(f"App name {app.name} already belongs to apps/{app.name}; rename the directory")
     if config is None:
         config = json.loads((app / "app.json").read_text())
     title = config["titleId"]
@@ -107,7 +119,7 @@ def app_config(name, config=None):
     if config.get("filesystemAccess", "sandbox") not in ("sandbox", "console"):
         raise ValueError("filesystemAccess must be sandbox or console")
     for other in (ROOT / "apps").glob("*/app.json"):
-        if other.parent != app and json.loads(other.read_text())["titleId"] == title:
+        if other.parent.resolve() != app.resolve() and json.loads(other.read_text())["titleId"] == title:
             raise ValueError(f"titleId already belongs to {other.parent.name}")
     return app, config
 
@@ -122,12 +134,12 @@ def generated_config(config, directory):
         f"#define PS5_REACT_{key} {json.dumps(value)}\n" for key, value in definitions.items()))
 
 
-def bundle(name, er):
-    app, config = app_config(name)
-    output = ROOT / ".build" / name / "generated"
+def bundle(app, er):
+    app, config = app_config(app)
+    output = ROOT / ".build" / app.name / "generated"
     generated_config(config, output)
     package = er / "bridges/quickjs/js"
     if not (package / "node_modules").exists():
         run(["npm", "ci", "--omit=optional"], cwd=package, log=ROOT / ".build/npm-upstream.log")
-    run(["node", ROOT / "tools/bundle.mjs", er, app, output], log=ROOT / ".build" / name / "bundle.log")
+    run(["node", ROOT / "tools/bundle.mjs", er, app, output], log=output.parent / "bundle.log")
     return app, config, output
