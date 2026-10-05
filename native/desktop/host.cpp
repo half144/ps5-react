@@ -72,8 +72,8 @@ bool parse_script(const char* text, std::vector<ScriptStep>& steps) {
     long count = 1;
     if (const std::size_t star = token.find('*'); star != std::string::npos) {
       count = std::strtol(token.c_str() + star + 1, &rest, 10);
-      token.resize(star);
       if (*rest || count < 1) { std::fprintf(stderr, "PS5_REACT_INPUT_SCRIPT: bad repeat in '%s'\n", token.c_str()); return false; }
+      token.resize(star);
     }
     if (std::none_of(std::begin(actions), std::end(actions), [&](const char* a) { return token == a; })) {
       std::fprintf(stderr, "PS5_REACT_INPUT_SCRIPT: unknown action '%s' (use up, down, left, right, confirm, back, quit, wait:MS)\n",
@@ -521,7 +521,12 @@ int main(int argc, char** argv) {
   if (ok) ok = host.boot(argv[1]);
   if (ok && testing) ok = self_test(host);
   else if (ok) {
-    if (const char* ms = std::getenv("PS5_REACT_SLOW_FRAME_MS")) host.slow_frame_us = static_cast<Uint32>(std::atoi(ms)) * 1000;
+    if (const char* ms = std::getenv("PS5_REACT_SLOW_FRAME_MS")) {
+      char* rest = nullptr;
+      const long value = std::strtol(ms, &rest, 10);
+      if (*ms && !*rest && value > 0 && value <= 60000) host.slow_frame_us = static_cast<Uint32>(value) * 1000;
+      else std::fprintf(stderr, "PS5_REACT_SLOW_FRAME_MS: expected milliseconds (1-60000), got '%s'\n", ms);
+    }
     if (const char* text = std::getenv("PS5_REACT_INPUT_SCRIPT")) ok = parse_script(text, host.script);
     if (ok && argc > 2 && !std::strcmp(argv[2], "--fullscreen")) {
       ok = SDL_SetWindowFullscreen(host.window, SDL_WINDOW_FULLSCREEN_DESKTOP) == 0;
