@@ -19,6 +19,10 @@ has no knowledge of React state, fonts, or widgets. The engine and JavaScript
 run on the same render thread. The PS5 host keeps the heap, shims, CRT, SDK
 pair, and FSELF path used by the hardware-tested proof of concept.
 
+`className` and `tw` styling is compiled by `tools/tailwind` during bundling into
+literal style objects; class names and CSS never reach QuickJS or the engine.
+See [TAILWIND.md](TAILWIND.md).
+
 Only execution infrastructure and InputTracker are used from ps5-homebrew-ui.
 Its UI components, themes, and UI renderer are not used.
 
@@ -27,7 +31,7 @@ Its UI components, themes, and UI renderer are not used.
 | `apps/` | Independent JSX entry points, manifests, and assets |
 | `runtime/js/` | Public primitives and host input contract |
 | `native/` | Shared presenter and desktop/PS5 hosts |
-| `tools/` | Bootstrap, bundle, assets, builds, verification, CLI |
+| `tools/` | Bootstrap, bundle, `className` compiler, assets, builds, verification, CLI |
 | `docs/` | Decisions, evidence, limitations, provenance |
 
 Generated files live in `.deps/`, `.build/<app>/`, and `dist/<TITLE_ID>/`.

@@ -37,6 +37,7 @@ const {bakeAssets} = await import(pathToFileURL(resolve(here, 'assets/index.mjs'
 const {resolveFontJobs} = await import(pathToFileURL(resolve(here, 'assets/font-config.mjs')).href);
 const {analyzeFontSizes} = await import(pathToFileURL(resolve(here, 'assets/font-sizes.mjs')).href);
 const {registerSvgVectorLoader} = await import(pathToFileURL(resolve(here, 'assets/svg-loader.mjs')).href);
+const {tailwindEsbuildPlugin} = await import('./tailwind/esbuild-plugin.mjs');
 
 // Adapted for per-app outputs by PS5 React; asset baking remains upstream.
 const repoRoot = resolve(here, '../../..');
@@ -115,7 +116,14 @@ await build({
     scheduler: resolve(nodeModules, 'scheduler'),
   },
   nodePaths: [nodeModules],
-  plugins: [assetPlugin],
+  plugins: [
+    // Added by PS5 React: build-time className/tw compilation for the app's sources.
+    tailwindEsbuildPlugin({appDir: demoDir, babel: {
+      core: require('@babel/core'),
+      syntaxJsx: require('@babel/plugin-syntax-jsx').default,
+    }}),
+    assetPlugin,
+  ],
   // Production React: smaller and avoids dev-only warning machinery that needs more shims.
   define: {'process.env.NODE_ENV': '"production"'},
   legalComments: 'none',

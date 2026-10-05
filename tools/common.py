@@ -51,7 +51,7 @@ def fetch(url, path, expected):
     return path
 
 
-def checkout(path, url, revision):
+def checkout(path, url, revision, patches=()):
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "clone", url, path])
@@ -59,14 +59,22 @@ def checkout(path, url, revision):
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
     if actual != revision:
         raise RuntimeError(f"Dependency at {actual}, expected {revision}: {path}")
-    run(["git", "diff", "--exit-code", "HEAD", "--"], cwd=path,
-        log=ROOT / ".build/dependency-check.log")
+    # The tree must be the pinned revision plus exactly the repository's patches.
+    git = lambda *args: subprocess.run(["git", *map(str, args)], cwd=path, capture_output=True, text=True)
+    expected = set()
+    for patch in (ROOT / p for p in patches):
+        if git("apply", "--reverse", "--check", patch).returncode:
+            run(["git", "apply", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
+        expected |= {line.split("\t")[-1] for line in git("apply", "--numstat", patch).stdout.splitlines()}
+    changed = set(git("diff", "--name-only", "HEAD").stdout.split())
+    if changed != expected:
+        raise RuntimeError(f"Unexpected local changes in {path}: {', '.join(sorted(changed ^ expected))}")
 
 
 def dependency(name, override=None):
     item = LOCK[name]
     path = Path(override).resolve() if override else DEPS / name
-    checkout(path, item["url"], item["revision"])
+    checkout(path, item["url"], item["revision"], item.get("patches", ()))
     return path
 
 

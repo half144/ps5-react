@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Build-time `className` styling: a subset of Tailwind CSS v3 utilities compiles
+  to literal style objects on any JSX element, scaled to the render width.
+- State variants (`focused:`, `selected:`, `disabled:`, `active:`, `checked:`,
+  `pressed:`) driven by props of the same name; `hover:`, `focus:`, and
+  `focus-visible:` are aliases of `focused:`.
+- Pinned dependencies can carry reviewed patches from `patches/`. Embedded React
+  is patched so auto-height `flex-wrap` rows grow to hold every wrapped line.
+- `tw` tagged templates exported from `@ps5-react/core`.
+- Optional per-app `tailwind.config.js` for `baseWidth` and theme overrides,
+  including font files that are baked automatically.
+- Unsupported classes and runtime-computed class names fail the build with a
+  source location.
+- The starter uses `className`; its snapshots match the explicit-style version.
+
 ## 0.1.0 — 2026-10-05
 
 Initial experimental source release.

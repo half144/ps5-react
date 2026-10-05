@@ -120,13 +120,29 @@ AppRegistry.registerComponent('my-app', () => Counter);
 ```
 
 `@ps5-react/core` exports Embedded React's `AppRegistry`, `View`, `Text`, `Image`,
-and `ScrollView`, plus the `useController` hook. Controller actions are
-`previous`, `next`, `confirm`, and `back`. Subscriptions are removed on unmount.
+and `ScrollView`, plus the `useController` hook and the `tw` style template.
+Controller actions are `previous`, `next`, `confirm`, and `back`.
+Subscriptions are removed on unmount.
 Keep active subscriptions scoped to the screen that should receive input.
 
 Images and fonts are baked during the build. Declare dynamically selected
 physical font sizes and extra glyphs in `assets.config.js`; see the starter.
 The initial rendering profile is 2560×1440 downsampled to a 1920×1080 surface.
+
+## Styling with className
+
+```jsx
+<View focused={focus === i}
+  className="rounded-xl bg-slate-800 px-6 py-4 focused:bg-sky-800 focused:scale-105">
+  <Text className="text-xl text-white">{label}</Text>
+</View>
+```
+
+A subset of Tailwind CSS v3 utilities compiles to literal style objects at
+build time; nothing is parsed on the PS5. Sizes are scaled to the app's render
+width. `focused:`, `selected:`, and other state variants read the element's
+props, and explicit `style` always wins. Unsupported classes fail the build with
+a source location. See [Styling with className](docs/TAILWIND.md).
 
 ## Validation and limitations
 
@@ -148,6 +164,7 @@ Logs and test screenshots are under `.build/<app>/`.
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Styling with className](docs/TAILWIND.md)
 - [Hardware evidence](docs/HARDWARE.md)
 - [Dependencies and licenses](docs/DEPENDENCIES.md)
 - [Contribution guide](CONTRIBUTING.md)
@@ -161,6 +178,7 @@ Built on [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
 [ps5-opengl](https://github.com/blackbearreloaded/ps5-opengl),
 [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk),
 [QuickJS-ng](https://github.com/quickjs-ng/quickjs), and React.
+The utility palette and scales come from [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) (MIT).
 
 Framework-owned code is licensed under **GPL-3.0-or-later**, with the reasonable
 attribution-preservation term in [LICENSE-ATTRIBUTION](LICENSE-ATTRIBUTION)

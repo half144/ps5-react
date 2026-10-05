@@ -15,7 +15,7 @@ import tarfile
 import urllib.request
 import zipfile
 
-from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, checkout, bundle, dependency
+from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, bundle, dependency
 
 BUILD = ROOT / ".build/starter/ps5"
 TITLE = "PPSA99053"
@@ -40,12 +40,10 @@ def main():
     BUILD = ROOT / ".build" / args.app / "ps5"
     for directory in (BUILD, DEPS, BUILD / "obj", BUILD / "host"):
         directory.mkdir(parents=True, exist_ok=True)
-    hui = args.ui_reference.resolve()
-    er = args.embedded_react.resolve()
+    hui = dependency("platform", args.ui_reference)
+    er = dependency("embeddedReact", args.embedded_react)
     sdk = args.payload_sdk.resolve()
     llvm = args.llvm.resolve()
-    checkout(hui, "https://github.com/blackbearreloaded/ps5-homebrew-ui.git", HUI_REV)
-    checkout(er, "https://github.com/TheMasterCoder007/embedded-react.git", ER_REV)
     if not (sdk / "bin/prospero-lld").exists():
         package = fetch(LOCK["sdk"]["url"], DEPS / "sdk.zip", LOCK["sdk"]["sha256"])
         with zipfile.ZipFile(package) as archive:
@@ -195,7 +193,7 @@ def main():
                 "ui_reference": HUI_REV, "embedded_react": ER_REV,
                 "opengl_version": "1.0.0", "opengl_archive_sha256": GL_HASH,
                 "compiler_builtins_package_sha256": BUILTINS_HASH,
-                "sources": {str(p.relative_to(ROOT)): digest(p) for base in (ROOT / "native", ROOT / "runtime", ROOT / "tools", app_source)
+                "sources": {str(p.relative_to(ROOT)): digest(p) for base in (ROOT / "native", ROOT / "runtime", ROOT / "tools", ROOT / "patches", app_source)
                             for p in sorted(base.rglob("*")) if p.is_file() and "__pycache__" not in str(p)},
                 "files": {str(p.relative_to(app)): digest(p) for p in sorted(app.rglob("*")) if p.is_file()}}
     (ROOT / "dist" / (TITLE + ".receipt.json")).write_text(json.dumps(receipts, indent=2) + "\n")

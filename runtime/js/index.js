@@ -24,3 +24,12 @@ export function useController(handler) {
     return () => handlers.delete(listener);
   }, []);
 }
+
+/**
+ * Tailwind-style classes → a style object, compiled by the build (see docs/TAILWIND.md).
+ * @param {TemplateStringsArray} classes
+ * @returns {object}
+ */
+export function tw(classes) {
+  throw new Error(`tw\`${classes.join('')}\` was not compiled; use it in an app source file`);
+}

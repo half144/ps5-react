@@ -10,3 +10,7 @@ in LICENSE-ATTRIBUTION (GPLv3 section 7(b)).
 Built on Embedded React, ps5-homebrew-ui, ps5-opengl, PS5 Payload SDK,
 QuickJS-ng, React, and Inter. These dependencies retain their original authors,
 licenses, and notices. See docs/DEPENDENCIES.md and licenses/.
+
+tools/tailwind/colors.mjs and the default scales in tools/tailwind/theme.mjs are
+derived from Tailwind CSS v3.4.17, Copyright (c) Tailwind Labs, Inc., under the
+MIT License (licenses/tailwindcss-LICENSE).

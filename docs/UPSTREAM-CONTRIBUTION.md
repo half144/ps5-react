@@ -37,4 +37,11 @@ and `runtime/js/index.js`.
 
 Upstream rules reviewed at the pinned revision:
 [CONTRIBUTING.md](https://github.com/TheMasterCoder007/embedded-react/blob/cf5dfe4fae966fe21a265acc3dd3b054d245f981/CONTRIBUTING.md).
-No upstream issue or pull request has been submitted by this project.
+
+## Submitted: auto-height `flex-wrap` measurement
+
+Issue [#280](https://github.com/TheMasterCoder007/embedded-react/issues/280) and
+pull request [#281](https://github.com/TheMasterCoder007/embedded-react/pull/281)
+fix rows with `flexWrap: 'wrap'` that reserved one line's height. Until it is
+merged and pinned, `patches/embeddedReact-flex-wrap-auto-height.patch` carries
+the same engine change; delete the patch when the pinned revision includes it.

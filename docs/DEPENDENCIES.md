@@ -10,19 +10,28 @@ No proprietary Sony modules are redistributed.
 | ps5-homebrew-ui | EGL, controller, system, InputTracker, heap, CRT, shims, native tools. GPL-3.0-or-later; revision `4bd942579dd981b3df9c740438489ca6a614ddc0`. |
 | ps5-opengl | SDK 1.0.0; GPL and per-component/Mesa licenses. The release includes sources and notices. |
 | React / QuickJS-ng | React 18.3.1, reconciler 0.29.2, QuickJS-ng 0.15.0; MIT. npm lockfile and QuickJS commit are pinned. |
+| Tailwind CSS palette and scales | v3.4.17 default colors and theme values copied into `tools/tailwind/`; MIT. Build-time data only; the `tailwindcss` package is not installed or used. |
 | Inter / LLVM / payload SDK | Inter: SIL OFL. LLVM: Apache-2.0 with exceptions. The public SDK contains separately licensed components. |
 
 Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
 [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui),
 [ps5-opengl 1.0.0](https://github.com/blackbearreloaded/ps5-opengl/releases/tag/v1.0.0),
 [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk),
-[QuickJS-ng](https://github.com/quickjs-ng/quickjs).
+[QuickJS-ng](https://github.com/quickjs-ng/quickjs),
+[Tailwind CSS v3.4.17](https://github.com/tailwindlabs/tailwindcss/tree/v3.4.17).
 
 Exact revisions, archive hashes, and compiler-rt package identity are recorded
 in `dependencies.lock.json`; each local build also creates a receipt.
 
+`patches/` holds modifications applied to pinned dependencies after checkout;
+each patch states what it changes, and the build rejects any other local change.
+`embeddedReact-flex-wrap-auto-height.patch` modifies Apache-2.0 engine files and
+has been proposed upstream; drop it once the pinned revision contains the fix.
+
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
 This file is not covered by the framework's additional attribution term.
+`tools/tailwind/colors.mjs` reproduces the Tailwind CSS palette unchanged under
+its MIT notice in `licenses/tailwindcss-LICENSE`.
 The Inter font and bundled third-party license texts retain their own terms.
 
 `LICENSE`, `LICENSE-ATTRIBUTION`, `NOTICE`, `licenses/`, and generated
