@@ -40,5 +40,5 @@ private:
   std::uint64_t engine_sum_[ER_PERF_PHASE_COUNT] = {}, js_sub_sum_[ER_PERF_JS_COUNT] = {},
                 raster_sub_sum_[ER_PERF_RASTER_COUNT] = {}, dirty_px_sum_ = 0, blit_px_sum_ = 0;
   std::uint32_t perf_frames_ = 0, slow_lines_ = 0;
-  char line_[384] = {}, slow_line_[256] = {};
+  char line_[384] = {}, slow_line_[320] = {};
 };

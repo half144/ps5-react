@@ -209,6 +209,13 @@ bool run_proof() {
     load_input_script(script);
     LiveCommands commands;
     commands.start();
+    // A test deploy may lower the slow-frame threshold (milliseconds) with dev/slow-frame-ms.txt.
+    std::uint32_t slow_frame_us = 33000;
+    if (FILE* file = std::fopen("/app0/dev/slow-frame-ms.txt", "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) slow_frame_us = std::atoi(text) * 1000u;
+      std::fclose(file);
+    }
     er_perf_set_clock(perf_clock);
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
@@ -253,7 +260,7 @@ bool run_proof() {
       embedded_renderer_tick(static_cast<std::uint32_t>(std::clamp<std::int64_t>((now-previous)/1000, 0, 50)));
       previous = now;
       ++frames;
-      if (const char* line = stats.end_frame(33000)) hui::sys::log("[PS5-REACT] %s", line);
+      if (const char* line = stats.end_frame(slow_frame_us)) hui::sys::log("[PS5-REACT] %s", line);
       if (ps5_react_exit_requested()) break;
     }
     hui::sys::log("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));

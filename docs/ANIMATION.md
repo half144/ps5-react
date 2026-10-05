@@ -336,12 +336,13 @@ Frames longer than 33 ms also print one line each (at most eight per window),
 with the same split for that frame and the bounding box of its repaint:
 
 ```text
-[PS5-REACT] slow frame: 41.2ms | js=24.1 (dispatch=0.6 react=22.0 marshal=1.0) layout=0.2 raster=9.8 (prepass=0.1 render=6.4 blit=3.2) present=2.6 other=4.5 | dirty=2356x1250@142,190 1849kpx blit=7013kpx
+[PS5-REACT] slow frame: 41.2ms | js=24.1 (dispatch=0.6 react=22.0 marshal=1.0) layout=0.2 raster=9.8 (prepass=0.1 render=6.4 blit=3.2 sweep=0.0) present=2.6 other=4.5 | dirty=2356x1250@142,190 1849kpx blit=7013kpx
 ```
 
-`other` is host work outside those phases, including the vsync wait. The host
-clamps the animation step to 50 ms, so frames beyond that make animations run
-in slow motion.
+`other` is host work outside those phases, including the vsync wait. A PS5
+test deploy can lower the 33 ms threshold with `dev/slow-frame-ms.txt` in the
+app folder. The host clamps the animation step to 50 ms, so frames beyond that
+make animations run in slow motion.
 
 #### Reproducible profiling
 
