@@ -97,14 +97,15 @@ const char* FrameStats::end_frame(std::uint32_t slow_us) {
   // `other` is host work outside js/layout/raster/present: input polling, swap, the animation tick.
   std::snprintf(slow_line_, sizeof slow_line_,
                 "slow frame: %u.%ums | js=%u.%u (dispatch=%u.%u react=%u.%u marshal=%u.%u) layout=%u.%u"
-                " raster=%u.%u (prepass=%u.%u render=%u.%u blit=%u.%u) present=%u.%u other=%u.%u"
+                " raster=%u.%u (prepass=%u.%u render=%u.%u blit=%u.%u sweep=%u.%u) present=%u.%u other=%u.%u"
                 " | dirty=%dx%d@%d,%d %ukpx blit=%ukpx",
                 MS(tenths(f.frame_us, 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_JS], 1000)),
                 MS(tenths(f.js_us[ER_PERF_JS_DISPATCH], 1000)), MS(tenths(f.js_us[ER_PERF_JS_RECONCILE], 1000)),
                 MS(tenths(f.js_us[ER_PERF_JS_MARSHAL], 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_LAYOUT], 1000)),
                 MS(tenths(f.phase_us[ER_PERF_PHASE_RASTER], 1000)), MS(tenths(f.raster_us[ER_PERF_RASTER_PREPASS], 1000)),
                 MS(tenths(f.raster_us[ER_PERF_RASTER_RENDER], 1000)), MS(tenths(f.raster_us[ER_PERF_RASTER_BLIT], 1000)),
-                MS(tenths(f.phase_us[ER_PERF_PHASE_PRESENT], 1000)), MS(tenths(f.other_us, 1000)),
+                MS(tenths(f.raster_us[ER_PERF_RASTER_SWEEP], 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_PRESENT], 1000)),
+                MS(tenths(f.other_us, 1000)),
                 static_cast<int>(f.dirty_w), static_cast<int>(f.dirty_h), static_cast<int>(f.dirty_x),
                 static_cast<int>(f.dirty_y), static_cast<unsigned>(f.dirty_px / 1000),
                 static_cast<unsigned>(f.blit_px / 1000));
