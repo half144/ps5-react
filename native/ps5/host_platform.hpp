@@ -10,3 +10,5 @@ class Pad;
 // The pad that host::set_light_bar/reset_light_bar/vibrate drive. The host sets
 // it after Pad::open() and clears it (nullptr) before Pad::close().
 void host_platform_set_pad(hui::ps5::Pad* pad);
+// Resolve optional native API modules before a helper changes the process root.
+void host_platform_prepare_filesystem_access();

@@ -68,7 +68,8 @@ Any value the host cannot read is `null`.
 
 ## FileSystem
 
-The title runs sandboxed: paths are app paths, not host paths.
+By default, the title runs sandboxed. App paths are logical roots; explicit
+console paths become accessible only after opt-in filesystem access succeeds.
 
 | Constant | Path | Access |
 | --- | --- | --- |
@@ -90,13 +91,33 @@ inside it can be read by path. Paths containing `..` components are rejected.
 | `mkdir(path, {recursive})` | — | `recursive` defaults to `false` |
 | `remove(path)` | — | A file or an empty directory |
 | `rename(from, to)` | — | Both are app paths |
-| `mounts()` | `{device, path, type}[]` | Mounted filesystems, as host paths; see [Hardware status](#hardware-status) |
-| `diskUsage(path)` | `{total, free}` | Bytes for the filesystem holding `path` |
+| `mounts()` | `{device, path, type}[]` | Up to 64 mounted filesystems visible to this process, as host paths; see [Hardware status](#hardware-status) |
+| `diskUsage(path)` | `{total, free}` | Bytes for the filesystem holding `path`; `free` is available to the app, clamped to `0..total` |
 
 `FileStat` is `{name, isDirectory, isFile, size, modified}`, where `size` is in
 bytes and `modified` is milliseconds since the Unix epoch.
 
 Files are text only; there is no binary read or write.
+
+For console-wide filesystem access, add this to the app manifest:
+
+```json
+{ "filesystemAccess": "console" }
+```
+
+Then query storage from an event handler or effect:
+
+```js
+const entries = FileSystem.readDir('/data');
+const mounts = FileSystem.mounts();
+const {total, free} = FileSystem.diskUsage('/data');
+```
+
+Keep `filesystemAccess` set to `"sandbox"` (the default) for apps that only
+need their own files. The opt-in helper requires resident Lapy or a local ELF
+loader; see [access requirements](#hardware-status). On failure, filesystem
+calls retain their normal permission errors rather than returning fake values.
+
 
 ## Notifications
 
@@ -189,9 +210,49 @@ title can load these modules; when one cannot, only the dependent call degrades:
 
 | Call | Module | Without it |
 | --- | --- | --- |
-| `FileSystem.mounts()` | `libkernel_sys.sprx` | Throws `fs.mounts: Function not implemented` |
 | `DeviceInfo.get().model` | `libkernel_sys.sprx` | `null` |
 | `Notifications.show()` | `libSceNotification.sprx` | Returns `false` |
+
+PS5 `diskUsage()` uses the native-title `_fstatfs` export on a descriptor opened
+with `sceKernelOpen`. `mounts()` discovers kernel-provided records through
+accessible descriptors, deduplicates them, and returns up to 64 records. Discovery
+checks sandbox roots, common storage paths, and immediate children of `/` and
+`/mnt`, with at most 96 metadata queries. It is not the privileged global mount
+table returned by a payload's `getmntinfo`; inaccessible or deeper mounts can be
+absent. No mount records or capacities are invented.
+
+Hardware logs confirmed that our removed direct-syscall prototype terminated the
+title with `SYSTEM_ILLEGAL_FUNCTION_CALL`. The replacement uses libkernel's
+native wrapper, following a community title reference. The replacement
+filesystem integration was confirmed by the user on firmware 13.60 with kstuff
+and ShadowMount; exact application/helper hashes are recorded in
+[Hardware evidence](HARDWARE.md#system-explorer-filesystem-success--2026-10-05). Directory records from `sceKernelGetdents` are bounds-checked before
+names reach JavaScript. See [Storage investigation](STORAGE.md).
+
+Standalone titles can still receive `EPERM` even with kstuff running. For a
+console filesystem explorer, set `"filesystemAccess": "console"` in `app.json`
+(default: `"sandbox"`). The build packages a pinned upstream Lapy one-shot
+helper restricted to that title. Startup requests access before creating the
+React thread and accepts success only after a write/read/remove proof in `/data`.
+The console must provide resident Lapy or an ELF loader on localhost port 9021.
+Startup can take several seconds; no access requests run during React renders.
+
+After success, `/app0`, `/download0`, and `/temp0` remain logical app paths mapped
+to their accessible sandbox mounts. If writable mounts disappeared after the
+root change, data falls back to `/data/ps5-react/<TITLE_ID>` and temporary files
+to its `tmp` directory. That fallback persists until explicitly removed.
+Failure leaves console path mapping disabled and logs the upstream status.
+Optional native API modules are resolved before requesting the root change.
+Desktop behavior is unchanged. The opt-in integration was user-confirmed on
+firmware 13.60 with kstuff and ShadowMount. Other firmware/loader combinations
+require their own validation.
+
+`diskUsage` measures a filesystem, not recursive directory size or the console
+Settings storage categories. On desktop it reports the real Mac filesystem
+backing the per-app sandbox.
+
+System Explorer caches these queries when its Files page opens. Navigate to a
+directory or select **Refresh** to query again; focus changes do not query storage.
 
 ## Not yet available
 

@@ -43,16 +43,24 @@ export function FilesPage() {
   const [dir, setDir] = useState(FileSystem.dataDir);
   const [listing, setListing] = useState(() => attempt(() => list(FileSystem.dataDir)));
   const [status, setStatus] = useState(null);
+  const [usage, setUsage] = useState(() => attempt(() => FileSystem.diskUsage(FileSystem.dataDir)));
+  const [mounts, setMounts] = useState(() => attempt(FileSystem.mounts));
   const entries = listing.value ?? [];
+
+  const refresh = path => {
+    setListing(attempt(() => list(path)));
+    setUsage(attempt(() => FileSystem.diskUsage(path)));
+    setMounts(attempt(FileSystem.mounts));
+  };
 
   const open = path => {
     setDir(path);
-    setListing(attempt(() => list(path)));
+    refresh(path);
     setStatus(null);
   };
   const write = () => {
     setStatus(attempt(writeTestFile));
-    setListing(attempt(() => list(dir)));
+    refresh(dir);
   };
   const select = entry => {
     const path = join(dir, entry.name);
@@ -66,9 +74,6 @@ export function FilesPage() {
     return true;
   };
 
-  const usage = attempt(() => FileSystem.diskUsage(dir));
-  const mounts = attempt(FileSystem.mounts);
-
   return (
     <FocusScope onBack={up}>
       <View className="flex-1 flex-row gap-6">
@@ -76,6 +81,7 @@ export function FilesPage() {
           <View className="flex-row flex-wrap gap-2">
             {ROOTS.map(root => <Button key={root} label={root} onPress={() => open(root)} />)}
             <Button label="Write test file" onPress={write} />
+            <Button label="Refresh" onPress={() => refresh(dir)} />
           </View>
           <Status status={listing.error ? listing : null} />
           {entries.length === 0 && !listing.error && <Text style={body}>Empty, or not listable here.</Text>}

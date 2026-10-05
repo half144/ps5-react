@@ -6,6 +6,9 @@
 
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "storage_stats.hpp"
+#include "directory_records.hpp"
+#include "filesystem_access.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
 #include <dirent.h>
@@ -47,6 +50,9 @@ int sceSystemServiceLaunchWebBrowser(const char* uri, void* parameters);
 int sceKernelOpen(const char* path, int flags, int mode);
 int sceKernelGetdents(int fd, char* buffer, int size);
 int sceKernelClose(int fd);
+// Native-title export, also used by BlackBearReloaded/ProsperoStore.
+// fstatfs/statfs/getfsstat without the underscore belong to libkernel_sys.
+int ps5_fstatfs(int fd, struct statfs* buffer) __asm__("_fstatfs");
 }
 
 namespace {
@@ -80,9 +86,6 @@ private:
 
 OptionalSymbol<int (*)(int, bool, const char*)> notification_send{"libSceNotification.sprx", "sceNotificationSend"};
 OptionalSymbol<int (*)(char*)> hw_model_name{"libkernel_sys.sprx", "sceKernelGetHwModelName"};
-OptionalSymbol<int (*)(struct statfs*, long, int)> get_fs_stat{"libkernel_sys.sprx", "getfsstat"};
-// Not statvfs: a title crashed when System Explorer's Files tab first ran it (suspected cause).
-OptionalSymbol<int (*)(const char*, struct statfs*)> stat_fs{"libkernel_sys.sprx", "statfs"};
 
 // Writes text as the body of a JSON string. False if it does not fit.
 bool json_escape(const char* text, char* out, std::size_t size) {
@@ -130,51 +133,21 @@ bool user_name(int id, char* name, std::size_t size) {
 }
 
 void host_platform_set_pad(hui::ps5::Pad* pad) { active_pad = pad; }
+void host_platform_prepare_filesystem_access() {
+  notification_send.get();
+  hw_model_name.get();
+}
 
 namespace host {
 const char* platform_name() { return "ps5"; }
 
-// The title is sandboxed (/app0 read-only, /download0 writable, /temp0), so app
-// paths are already real paths; only parent traversal is refused.
+// Preserve sandbox aliases, including after opt-in console access. Parent
+// traversal remains refused before platform path mapping.
 bool resolve_path(const char* path, char* out, std::size_t size) {
   if (path[0] != '/') return false;
   for (const char* part = path; part; part = std::strchr(part + 1, '/'))
     if (part[1] == '.' && part[2] == '.' && (part[3] == '/' || part[3] == '\0')) return false;
-  const std::size_t length = std::strlen(path);
-  if (length >= size) return false;
-  std::memcpy(out, path, length + 1);
-  return true;
-}
-
-int list_mounts(MountEntry* mounts, int max) {
-  const auto getfsstat = get_fs_stat.get();
-  if (!getfsstat) {
-    errno = ENOSYS;
-    return -1;
-  }
-  static struct statfs found[64];
-  const int count = getfsstat(found, sizeof found, MNT_NOWAIT);
-  if (count < 0) return -1;
-  const int used = count < max ? count : max;
-  for (int i = 0; i < used; ++i) {
-    std::snprintf(mounts[i].device, sizeof mounts[i].device, "%s", found[i].f_mntfromname);
-    std::snprintf(mounts[i].path, sizeof mounts[i].path, "%s", found[i].f_mntonname);
-    std::snprintf(mounts[i].type, sizeof mounts[i].type, "%s", found[i].f_fstypename);
-  }
-  return used;
-}
-
-bool disk_usage(const char* real_path, double& total, double& free) {
-  const auto statfs_fn = stat_fs.get();
-  if (!statfs_fn) {
-    errno = ENOSYS;
-    return false;
-  }
-  struct statfs fs;
-  if (statfs_fn(real_path, &fs) != 0) return false;
-  total = static_cast<double>(fs.f_bsize) * static_cast<double>(fs.f_blocks);
-  free = static_cast<double>(fs.f_bsize) * static_cast<double>(fs.f_bavail);
-  return true;
+  return resolve_filesystem_path(path, out, size);
 }
 
 void trace(const char* call) { hui::sys::log("[PS5-REACT] native %s", call); }
@@ -186,20 +159,115 @@ bool sce_failed(int result) {
   return true;
 }
 
+static_assert(sizeof(struct statfs) == 472 && STATFS_VERSION == 0x20030518);
+static_assert(offsetof(struct statfs, f_bsize) == 16);
+static_assert(offsetof(struct statfs, f_bavail) == 48);
+static_assert(offsetof(struct statfs, f_fstypename) == 280);
+static_assert(offsetof(struct statfs, f_mntfromname) == 296);
+static_assert(offsetof(struct statfs, f_mntonname) == 384);
+static_assert(offsetof(struct dirent, d_fileno) == 0 && offsetof(struct dirent, d_reclen) == 4);
+static_assert(offsetof(struct dirent, d_namlen) == 7 && offsetof(struct dirent, d_name) == 8);
+
+// The instruction entering the kernel is inside Sony's native libkernel, never
+// in our title. Console-wide access is granted separately during startup.
+bool filesystem_info(const char* path, struct statfs& info) {
+  const int fd = sceKernelOpen(path, O_RDONLY | O_NONBLOCK, 0);
+  if (sce_failed(fd)) return false;
+  info = {};
+  errno = 0;
+  const int result = ps5_fstatfs(fd, &info);
+  int error = errno;
+  // _fstatfs is a POSIX wrapper. Preserve errno on -1; tolerate SCE-style
+  // errors on firmware wrappers without turning -1 into errno 65535.
+  if ((static_cast<unsigned>(result) & 0xffff0000u) == 0x80020000u)
+    error = static_cast<int>(static_cast<unsigned>(result) & 0xffffu);
+  if (result != 0 && error == 0) error = EIO;
+  sceKernelClose(fd);
+  if (result != 0) { errno = error; return false; }
+  if (info.f_version != STATFS_VERSION) { errno = EIO; return false; }
+  return true;
+}
+
+bool disk_usage(const char* real_path, double& total, double& free) {
+  struct statfs info{};
+  if (!filesystem_info(real_path, info)) return false;
+  if (!storage::disk_bytes(info.f_bsize, info.f_blocks, info.f_bavail, total, free)) {
+    errno = EIO;
+    return false;
+  }
+  return true;
+}
+
+namespace {
+struct MountDiscovery {
+  MountEntry* entries;
+  int capacity;
+  int count = 0;
+  int queries = 0;
+  int last_error = EACCES;
+  const char* parent = "/";
+
+  void probe(const char* path) {
+    if (count == capacity || queries++ >= 96) return;
+    struct statfs info{};
+    if (!filesystem_info(path, info)) { last_error = errno; return; }
+    MountEntry entry{};
+    std::snprintf(entry.device, sizeof entry.device, "%.*s",
+                  static_cast<int>(sizeof info.f_mntfromname), info.f_mntfromname);
+    std::snprintf(entry.path, sizeof entry.path, "%.*s",
+                  static_cast<int>(sizeof info.f_mntonname), info.f_mntonname);
+    std::snprintf(entry.type, sizeof entry.type, "%.*s",
+                  static_cast<int>(sizeof info.f_fstypename), info.f_fstypename);
+    // Return only kernel-provided mount records, never the candidate path as a
+    // guessed mount. Some sandboxes conceal names even when capacity is visible.
+    if (!*entry.path) { last_error = EACCES; return; }
+    storage::append_unique(entries, capacity, count, entry);
+  }
+};
+
+void probe_mount_child(const char* name, void* user) {
+  auto& discovery = *static_cast<MountDiscovery*>(user);
+  char path[512];
+  const int length = std::snprintf(path, sizeof path, "%s%s%s", discovery.parent,
+                                  std::strcmp(discovery.parent, "/") ? "/" : "", name);
+  if (length >= 0 && static_cast<std::size_t>(length) < sizeof path) discovery.probe(path);
+}
+} // namespace
+
+int list_mounts(MountEntry* mounts, int max) {
+  if (max <= 0) return 0;
+  MountDiscovery discovery{mounts, max < 64 ? max : 64};
+  // Unlike a privileged payload's getmntinfo, a title discovers records through
+  // accessible descriptors. Search one level only and bound the number of calls.
+  for (const char* path : {"/app0", "/download0", "/temp0", "/", "/data", "/user",
+                           "/system", "/system_ex", "/system_data", "/mnt",
+                           "/mnt/ext0", "/mnt/ext1"}) discovery.probe(path);
+  for (int slot = 0; slot < 8; ++slot) {
+    char path[32];
+    std::snprintf(path, sizeof path, "/mnt/usb%d", slot);
+    discovery.probe(path);
+  }
+  for (const char* parent : {"/", "/mnt"}) {
+    discovery.parent = parent;
+    read_dir(parent, probe_mount_child, &discovery);
+  }
+  if (!discovery.count) { errno = discovery.last_error; return -1; }
+  return discovery.count;
+}
+
 // sceKernelGetdents, as titles list directories; opendir from libSceLibcInternal
 // fails with EPERM inside a title sandbox.
 bool read_dir(const char* real_path, void (*visit)(const char* name, void* user), void* user) {
   const int fd = sceKernelOpen(real_path, O_RDONLY | O_DIRECTORY, 0);
   if (sce_failed(fd)) return false;
-  alignas(8) static char buffer[8192];
+  char buffer[8192];
   int read = 0;
   while (!sce_failed(read = sceKernelGetdents(fd, buffer, sizeof buffer)) && read > 0) {
-    for (int offset = 0; offset < read;) {
-      const auto* item = reinterpret_cast<const dirent*>(buffer + offset);
-      if (item->d_reclen == 0) break;
-      if (item->d_fileno != 0 && std::strcmp(item->d_name, ".") && std::strcmp(item->d_name, ".."))
-        visit(item->d_name, user);
-      offset += item->d_reclen;
+    if (read > static_cast<int>(sizeof buffer) ||
+        !visit_directory_records(buffer, static_cast<std::size_t>(read), visit, user)) {
+      errno = EIO;
+      read = -1;
+      break;
     }
   }
   const int saved = errno;

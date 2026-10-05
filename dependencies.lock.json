@@ -2,7 +2,9 @@
   "embeddedReact": {
     "url": "https://github.com/TheMasterCoder007/embedded-react.git",
     "revision": "cf5dfe4fae966fe21a265acc3dd3b054d245f981",
-    "patches": ["patches/embeddedReact-flex-wrap-auto-height.patch"]
+    "patches": [
+      "patches/embeddedReact-flex-wrap-auto-height.patch"
+    ]
   },
   "platform": {
     "url": "https://github.com/blackbearreloaded/ps5-homebrew-ui.git",
@@ -31,5 +33,20 @@
   "compilerRt": {
     "package": "libclang-rt-18-dev_18.1.8~++20240731024944+3b5b5c1ec4a3-1~exp1~20240731145000.144_amd64.deb",
     "sha256": "ce2669c51272b70bc0aafe9a4e6223e5c7720edaebb40201db191634aa503f5e"
+  },
+  "filesystemHelperClient": {
+    "url": "https://github.com/blackbearreloaded/ProsperoStore.git",
+    "revision": "22dca63607cf5f1f95006eda6ffb802607bed699"
+  },
+  "filesystemHelper": {
+    "url": "https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon.git",
+    "revision": "54a095c0f19161825e845daa760a03b446e654fa",
+    "patches": [
+      "patches/lapy-sdk-042-attributes.patch"
+    ]
+  },
+  "filesystemHelperLogging": {
+    "url": "https://raw.githubusercontent.com/mpereiraesaa/ps5-agc-gears/1ae1f9182abd2770c131b97419034fb85173c2dc/native/ps5log/ps5log.h",
+    "sha256": "394af67d0f8b60b3335deb53396e52855ea2daa50ca914a456ea7663f48900c6"
   }
 }

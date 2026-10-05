@@ -24,6 +24,13 @@ def main():
     assert re.fullmatch(r"[A-Z]{2}\d{4}-" + TITLE + r"_00-[A-Z0-9]{16}", param["contentId"])
     assert int(param["requiredSystemSoftwareVersion"], 16) == 0
     assert param["applicationDrmType"] == "free"
+    if receipt["config"].get("filesystemAccess") == "console":
+        helper = json.loads((app / "lapy-manifest.json").read_text())
+        assert helper["target_title"] == TITLE
+        assert helper["mode"] == "elf-helper" and helper["max_requests"] == 1
+        assert helper["service"] is False
+        assert helper["elf_sha256"] == digest(app / "lapy.elf")
+        assert int(param["downloadDataSize"]) > 0
     from PIL import Image
     with Image.open(app / "sce_sys/icon0.png") as image:
         assert image.size == (512, 512)

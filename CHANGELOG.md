@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Build the optional filesystem helper with the app payload SDK v0.42 instead
+  of the upstream builder's v0.40, which lacks firmware 13.60 initialization.
+  Preserve the full 32-byte credential attributes required by the new SDK API.
+  The previous helper SIGILL/EOF is documented; the user confirmed the replacement
+  filesystem integration on firmware 13.60 with kstuff and ShadowMount.
+
+- Initialize libSceNet and allocate a network pool before the optional Lapy
+  helper request. Added stage-specific native transport errors after hardware
+  logs showed the previous request failed with status 9 before elevation.
+- Optional `filesystemAccess: "console"` packages the pinned upstream Lapy
+  exact-title helper and requests filesystem access once before starting React.
+  System Explorer enables it. Root aliases are preserved after successful
+  elevation. A resident Lapy service or local ELF loader on port 9021 is required;
+  the exact tested application/helper hashes are recorded in hardware evidence.
+- PS5 storage queries use the native-title `_fstatfs` export, following the
+  ProsperoStore reference, with bounded discovery of accessible mount records.
+  Removed direct syscalls after hardware logs confirmed a fatal
+  `SYSTEM_ILLEGAL_FUNCTION_CALL`. The replacement was user-confirmed on firmware 13.60.
+- PS5 directory listing validates record lengths and filename boundaries before
+  invoking callbacks; malformed buffers return an I/O error.
+- System Explorer queries storage on directory navigation or explicit Refresh,
+  rather than on every React render. Desktop tests cover native storage bindings
+  and error propagation.
+
 - Build-time `className` styling: a subset of Tailwind CSS v3 utilities compiles
   to literal style objects on any JSX element, scaled to the render width.
 - State variants (`focused:`, `selected:`, `disabled:`, `active:`, `checked:`,

@@ -78,6 +78,15 @@
         }
       },
       "additionalProperties": false
+    },
+    "filesystemAccess": {
+      "type": "string",
+      "enum": [
+        "sandbox",
+        "console"
+      ],
+      "default": "sandbox",
+      "description": "console packages the pinned Lapy helper and requests filesystem access at startup; requires local elfldr on port 9021 or resident Lapy."
     }
   },
   "additionalProperties": false

@@ -72,9 +72,11 @@ export const FileSystem = {
   remove: path => host().fs.remove(path),
   /** @param {string} from @param {string} to */
   rename: (from, to) => host().fs.rename(from, to),
-  /** @returns {Mount[]} */
+  /** Mounted filesystems visible to the host process. Console access requires
+   * filesystemAccess: "console" in app.json. @returns {Mount[]} */
   mounts: () => host().fs.mounts(),
-  /** @param {string} path @returns {{total: number, free: number}} bytes */
+  /** Filesystem bytes; free is available to the app, clamped to 0..total.
+   * @param {string} path @returns {{total: number, free: number}} */
   diskUsage: path => host().fs.diskUsage(path),
 };
 

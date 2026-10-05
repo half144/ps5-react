@@ -89,6 +89,13 @@ npm run build -- --sdk /path/to/ps5-payload-sdk
 
 Changing the SDK changes build provenance and requires a new hardware check.
 
+Apps that need console filesystem access can set `"filesystemAccess": "console"`
+in `app.json`. This packages the pinned Lapy exact-title helper and requests
+access once at startup; a resident Lapy service or local ELF loader on port 9021
+is required. The default is `"sandbox"`. System Explorer opts in. See
+[native API access requirements](docs/NATIVE-API.md#hardware-status) and
+[storage investigation](docs/STORAGE.md) for limits and hardware status.
+
 ## Create an app
 
 ```sh
@@ -203,7 +210,9 @@ React Native-style modules reach platform services through the host:
 `Platform`, `DeviceInfo`, `FileSystem`, `Notifications`, `Users`, `Controller`
 with `useGamepad`, `Linking`, and `BackHandler`. Calls are synchronous and run on the
 render thread. The macOS preview implements the same API against a sandbox in
-`.build/<app>/sandbox/`. The PS5 implementation is not yet hardware-validated.
+`.build/<app>/sandbox/`. The filesystem integration was user-confirmed on
+firmware 13.60 with kstuff and ShadowMount; other native modules still require
+validation.
 See [Native modules](docs/NATIVE-API.md) and `apps/system-explorer`.
 
 ## Validation and limitations

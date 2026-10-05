@@ -18,8 +18,9 @@
 //   fs.mkdir(path, recursive)
 //   fs.remove(path)                file or empty directory
 //   fs.rename(from, to)
-//   fs.mounts()                    [{device, path, type}]
-//   fs.diskUsage(path)             {total, free} in bytes
+//   fs.mounts()                    [{device, path, type}], visible to the process
+//                                  console access is opt-in via app.json
+//   fs.diskUsage(path)             {total, free} in bytes; free available to the app
 //   device.info()                  {model, firmware, cpuTemperature, socTemperature,
 //                                   cpuFrequency, freeMemory, processTime}; unknown = null
 //   users.foreground()             {id, name} | null

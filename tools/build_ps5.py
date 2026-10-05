@@ -84,6 +84,13 @@ def main():
 
     app_source, config, generated = bundle(args.app, er)
     TITLE = config["titleId"]
+    access_client = dependency("filesystemHelperClient") if config.get("filesystemAccess") == "console" else None
+    helper = BUILD / "filesystem-helper"
+    if access_client:
+        run(["python3", ROOT / "tools/test_filesystem_access.py", access_client, BUILD / "access-tests"],
+            log=BUILD / "filesystem-access-tests.log")
+        run(["python3", ROOT / "tools/build_filesystem_helper.py", TITLE, helper, "--sdk", sdk],
+            env=env, log=BUILD / "filesystem-helper.log")
     native = hui / "tooling/native"
     host_tool = BUILD / "host/ps5-native-tool"
     run(["clang++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -115,6 +122,8 @@ def main():
                        (cross / "bridge/engine/CMakeFiles/embedded-react.dir/flags.make").read_text().splitlines()
                        if line.startswith("C_DEFINES ="))
     sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/time_compat.c",
+               ROOT / "native/ps5/filesystem_access.cpp",
+               ROOT / "native/ps5/elevation_transport.cpp",
                ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/gl_presenter.cpp",
                ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/damage_tracker.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system")],
@@ -122,6 +131,9 @@ def main():
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]
     includes = [hui / "src", ROOT / "native/shared", ROOT / "native/ps5", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
                 er / "backends/software", quickjs]
+    if access_client:
+        sources.append(access_client / "examples/sandbox-elevation/src/elevation.cpp")
+        includes.append(access_client / "examples/sandbox-elevation")
     objects = []
     for i, source in enumerate(sources):
         obj = BUILD / "obj" / f"{i}-{source.name}.o"
@@ -137,6 +149,8 @@ def main():
     pie = BUILD / "llvm-pie.elf"
     wraps = ["malloc", "calloc", "realloc", "free", "posix_memalign", "malloc_usable_size",
              "sceSystemServiceHideSplashScreen"]
+    if access_client:
+        wraps += ["sceNetSocket", "sceNetSetsockopt", "sceNetConnect", "sceNetSend", "sceNetRecv"]
     run([sdk / "bin/prospero-lld", "-L", libs, "-T", native / "ps5-pie.ld", "--eh-frame-hdr",
          "--version-script", native / "app-symbols.map", "-e", "_start", "-o", pie,
          *[f"--wrap={symbol}" for symbol in wraps], "--undefined=ps5_agc_gate2_run", *objects,
@@ -168,6 +182,14 @@ def main():
     image.save(app / "sce_sys/icon0.png")
     notices = app / "notices"
     notices.mkdir(exist_ok=True)
+    if access_client:
+        for name in ("lapy.elf", "lapy-manifest.json"):
+            shutil.copy2(helper / name, app / name)
+        shutil.copy2(helper / "Lapy-MIT.txt", notices / "Lapy-MIT.txt")
+        shutil.copy2(access_client / "LICENSE", notices / "filesystem-helper-client-LICENSE")
+    else:
+        for name in ("lapy.elf", "lapy-manifest.json"):
+            (app / name).unlink(missing_ok=True)
     for name, source in {
         "ps5-react-LICENSE": ROOT / "LICENSE",
         "ps5-react-LICENSE-ATTRIBUTION": ROOT / "LICENSE-ATTRIBUTION",

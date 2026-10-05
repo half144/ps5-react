@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "storage_stats.hpp"
 
 #include <dirent.h>
 #include <mach/mach.h>
@@ -13,6 +14,7 @@
 #include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <sys/wait.h>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,8 +64,10 @@ int list_mounts(MountEntry* mounts, int max) {
 bool disk_usage(const char* real_path, double& total, double& free) {
   struct statvfs fs;
   if (statvfs(real_path, &fs) != 0) return false;
-  total = static_cast<double>(fs.f_frsize) * static_cast<double>(fs.f_blocks);
-  free = static_cast<double>(fs.f_frsize) * static_cast<double>(fs.f_bavail);
+  if (!storage::disk_bytes(fs.f_frsize, fs.f_blocks, static_cast<std::int64_t>(fs.f_bavail), total, free)) {
+    errno = EIO;
+    return false;
+  }
   return true;
 }
 

@@ -13,6 +13,7 @@
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "filesystem_access.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
@@ -188,6 +189,7 @@ void* render_thread(void*) {
 
 int main() {
   hui::sys::log("[PS5-REACT] %s (%s)", PS5_REACT_NAME, PS5_REACT_TITLE);
+  initialize_filesystem_access();
   pthread_attr_t attributes;
   int result = pthread_attr_init(&attributes);
   if (!result) {

@@ -23,12 +23,15 @@ void er_register_assets(void);
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "storage_stats.hpp"
+#include "directory_records.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <string>
 #include <vector>
 
 namespace {
@@ -315,7 +318,97 @@ bool press(Host& host, SDL_Keycode key, int focus, int count, int detail) {
   return expect(focus, count, detail);
 }
 
+bool storage_test() {
+  double total = 0, free = 0;
+  if (!storage::disk_bytes(4096, 100, 25, total, free) || total != 409600 || free != 102400 ||
+      !storage::disk_bytes(4096, 100, -2, total, free) || total != 409600 || free != 0 ||
+      !storage::disk_bytes(4096, 100, 120, total, free) || free != total ||
+      storage::disk_bytes(0, 100, 50, total, free) ||
+      !storage::disk_bytes(4096, UINT64_MAX, 1, total, free) ||
+      total <= static_cast<double>(UINT64_MAX) || free != 4096) return false;
+  host::MountEntry mounts[2]{};
+  int count = 0;
+  host::MountEntry mount{};
+  std::strcpy(mount.path, "/app0");
+  std::strcpy(mount.device, "/dev/test");
+  std::strcpy(mount.type, "nullfs");
+  storage::append_unique(mounts, 2, count, mount);
+  storage::append_unique(mounts, 2, count, mount);
+  if (count != 1) return false;
+  std::strcpy(mount.path, "/download0");
+  storage::append_unique(mounts, 2, count, mount);
+  std::strcpy(mount.path, "/temp0");
+  storage::append_unique(mounts, 2, count, mount);
+  if (count != 2 || std::strcmp(mounts[1].path, "/download0")) return false;
+
+  // Packed PS5 records can be unaligned and must never read past their bounds.
+  char bytes[25]{};
+  const auto record = [&](int offset, const char* name) {
+    const std::uint32_t inode = 1;
+    const std::uint16_t length = 12;
+    std::memcpy(bytes + offset, &inode, sizeof inode);
+    std::memcpy(bytes + offset + 4, &length, sizeof length);
+    bytes[offset + 7] = static_cast<char>(std::strlen(name));
+    std::strcpy(bytes + offset + 8, name);
+  };
+  record(1, "."); record(13, "abc");
+  std::vector<std::string> names;
+  const auto collect = [](const char* name, void* user) {
+    static_cast<std::vector<std::string>*>(user)->emplace_back(name);
+  };
+  if (!host::visit_directory_records(bytes + 1, 24, collect, &names) ||
+      names.size() != 1 || names[0] != "abc") return false;
+  names.clear();
+  if (host::visit_directory_records(bytes + 13, 7, collect, &names) ||
+      host::visit_directory_records(bytes + 13, 11, collect, &names)) return false;
+  bytes[24] = 'x'; // Missing NUL.
+  if (host::visit_directory_records(bytes + 13, 12, collect, &names)) return false;
+  bytes[24] = '\0'; bytes[17] = 0; bytes[18] = 0; // Zero record length.
+  if (host::visit_directory_records(bytes + 13, 12, collect, &names) || !names.empty()) return false;
+  // Exercise actual host bindings, sandbox path resolution, and error propagation.
+  constexpr char script[] = R"JS((() => {
+    const fs = globalThis.__ps5ReactNative.fs;
+    const testName = `listing-test-${Date.now()}.txt`;
+    const testPath = `/download0/${testName}`;
+    fs.writeFile(testPath, 'listing test', false);
+    try {
+      const listing = fs.readDir('/download0');
+      const item = listing.find(entry => entry.name === testName);
+      if (!item || !item.isFile || item.isDirectory || item.size !== 12 ||
+          !Number.isFinite(item.modified)) return false;
+      try { fs.readDir(testPath); return false; }
+      catch (error) { if (!error.message.includes('fs.readDir')) return false; }
+    } finally { fs.remove(testPath); }
+    const usage = fs.diskUsage('/download0');
+    if (!Number.isFinite(usage.total) || usage.total <= 0 ||
+        usage.free < 0 || usage.free > usage.total) return false;
+    const mounts = fs.mounts();
+    if (!Array.isArray(mounts) || !mounts.length || mounts.length > 64 ||
+        !mounts.every(m => typeof m.path === 'string' && typeof m.device === 'string' &&
+                           typeof m.type === 'string')) return false;
+    try { fs.diskUsage('/missing-storage-test-path'); return false; }
+    catch (error) {
+      return error.message.includes('fs.diskUsage') &&
+             error.message.includes('/missing-storage-test-path');
+    }
+  })())JS";
+  JSContext* ctx = er_runtime_context();
+  JSValue result = JS_Eval(ctx, script, sizeof script - 1, "storage-test.js", JS_EVAL_TYPE_GLOBAL);
+  const bool ok = !JS_IsException(result) && JS_ToBool(ctx, result) == 1;
+  if (JS_IsException(result)) {
+    JSValue error = JS_GetException(ctx);
+    const char* message = JS_ToCString(ctx, error);
+    std::fprintf(stderr, "Storage test: %s\n", message ? message : "unknown exception");
+    JS_FreeCString(ctx, message);
+    JS_FreeValue(ctx, error);
+  }
+  JS_FreeValue(ctx, result);
+  if (ok) std::puts("PASS: bounded PS5 directory records, mount deduplication, storage bytes and desktop native bindings.");
+  return ok;
+}
+
 bool self_test(Host& host) {
+  if (!storage_test()) return false;
   for (int i = 0; i < 4; ++i) if (!host.frame()) return false;
   if (!expect(0, 0, 0) || !host.snapshot("texture-initial.ppm")) return false;
   if (!press(host, SDLK_RETURN, 0, 1, 1) || !host.snapshot("texture-increment.ppm") ||

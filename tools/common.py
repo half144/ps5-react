@@ -55,6 +55,10 @@ def checkout(path, url, revision, patches=()):
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "clone", url, path])
+        # Pinned commits may no longer belong to an advertised branch.
+        if subprocess.run(["git", "cat-file", "-e", revision + "^{commit}"],
+                          cwd=path, capture_output=True).returncode:
+            run(["git", "fetch", "origin", revision], cwd=path)
         run(["git", "checkout", "--detach", revision], cwd=path)
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
     if actual != revision:
@@ -100,6 +104,8 @@ def app_config(name, config=None):
         raise ValueError("timeoutSeconds must be 0 (disabled) or 1..3600")
     if not config["name"].strip() or len(config["name"]) > 80:
         raise ValueError("name must contain 1..80 characters")
+    if config.get("filesystemAccess", "sandbox") not in ("sandbox", "console"):
+        raise ValueError("filesystemAccess must be sandbox or console")
     for other in (ROOT / "apps").glob("*/app.json"):
         if other.parent != app and json.loads(other.read_text())["titleId"] == title:
             raise ValueError(f"titleId already belongs to {other.parent.name}")
@@ -110,7 +116,8 @@ def generated_config(config, directory):
     directory.mkdir(parents=True, exist_ok=True)
     definitions = {"WIDTH": config["render"]["width"], "HEIGHT": config["render"]["height"],
                    "SURFACE_WIDTH": config["surface"]["width"], "SURFACE_HEIGHT": config["surface"]["height"],
-                   "TIMEOUT": config["timeoutSeconds"], "NAME": config["name"], "TITLE": config["titleId"]}
+                   "TIMEOUT": config["timeoutSeconds"], "NAME": config["name"], "TITLE": config["titleId"],
+                   "CONSOLE_FILESYSTEM": int(config.get("filesystemAccess", "sandbox") == "console")}
     (directory / "app_config.hpp").write_text("#pragma once\n" + "".join(
         f"#define PS5_REACT_{key} {json.dumps(value)}\n" for key, value in definitions.items()))
 
