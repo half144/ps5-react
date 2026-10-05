@@ -128,3 +128,19 @@ export function revealOffset(offset, start, size, viewport, max, margin) {
   if (start - margin < next) next = start - margin;
   return Math.min(Math.max(next, 0), max);
 }
+
+/**
+ * One step of a scroll toward `target`: an exponential approach (time constant `tauMs`), so a new target
+ * mid-scroll continues from the current position without restarting, capped at `maxPerMs` px per ms so a
+ * held key never exposes more than a small strip per frame. Lands exactly on the target.
+ * @param {number} current @param {number} target @param {number} dtMs @param {number} tauMs
+ * @param {number} maxPerMs
+ */
+export function approach(current, target, dtMs, tauMs, maxPerMs) {
+  const remaining = target - current;
+  const cap = maxPerMs * dtMs;
+  const step = remaining * (1 - Math.exp(-dtMs / tauMs));
+  const bounded = Math.max(-cap, Math.min(cap, step));
+  // The last pixel of an exponential tail would take many frames: finish it at once.
+  return Math.abs(remaining - bounded) < 1 ? target : current + bounded;
+}

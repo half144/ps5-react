@@ -158,7 +158,9 @@ returns whether something took focus, so it can be returned from `onBack`.
 ## ScrollView
 
 A `ScrollView` scrolls its focused descendant into view (minimal movement with a
-margin), with a short ease-out (about 250 ms) driven through the native scroll offset.
+margin), easing toward the target through the native scroll offset (about 200 ms for
+one move) at no more than 40 logical px per frame, so a held key scrolls at a steady
+speed instead of restarting the ease on every repeat.
 
 ```jsx
 <ScrollView className="flex-1 gap-1">

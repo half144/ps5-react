@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {findClosest, findNearest, findWrap, revealOffset} from './geometry.js';
+import {approach, findClosest, findNearest, findWrap, revealOffset} from './geometry.js';
 
 const rect = (x, y, width = 100, height = 100) => ({x, y, width, height});
 const grid = () => {
@@ -80,4 +80,14 @@ test('reveal scrolls the least, keeps a margin, and clamps', () => {
   assert.equal(revealOffset(0, 5, 50, 300, 1000, 10), 0);
   assert.equal(revealOffset(0, 1400, 50, 300, 1000, 10), 1000);
   assert.equal(revealOffset(0, 400, 500, 300, 1000, 10), 390);
+});
+
+test('a scroll step approaches its target, capped per frame, and lands exactly', () => {
+  assert.equal(approach(0, 100, 16, 70, 10), 100 * (1 - Math.exp(-16 / 70)));
+  assert.equal(approach(0, 2000, 16, 70, 4), 64);
+  assert.equal(approach(1000, 0, 16, 70, 4), 936);
+  assert.equal(approach(99.6, 100, 16, 70, 4), 100);
+  let y = 0;
+  for (let frame = 0; frame < 120 && y !== 600; frame++) y = approach(y, 600, 16, 70, 4);
+  assert.equal(y, 600);
 });
