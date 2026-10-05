@@ -112,6 +112,42 @@ No C++ edits are needed. Choose a title ID unused on your console; the CLI also 
 already used by another local app. The manifest configures title, version,
 render resolution, display surface, and timeout.
 
+### Apps outside this repository
+
+An app can live in its own project. Pass its directory instead of `--app`:
+
+```sh
+npm run create -- --name my-store --title-id PPSA99054 --dir ../my-projects
+npm run dev -- --app-dir ../my-projects/my-store
+npm run build -- --app-dir ../my-projects/my-store
+```
+
+The directory name is the app name and must not match a folder in `apps/`.
+`app.json`, assets, and `tailwind.config.js` are read from that directory;
+outputs still go to this repository's `.build/<name>/` and `dist/<TITLE_ID>/`.
+`.git/` and `node_modules/` inside it are ignored by the watcher and the build
+receipt, which records app files as `app/<path>`.
+
+`@ps5-react/core` and React resolve through this repository's bundler, so the
+external project needs no `node_modules`. For editor IntelliSense, add a
+`jsconfig.json` whose paths point back to this checkout (adjust `../ps5-react`):
+
+```json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@ps5-react/core": ["../ps5-react/runtime/js/index.js"],
+      "embedded-react": ["../ps5-react/.deps/embeddedReact/bridges/quickjs/js/src/embedded-react/index.d.ts"],
+      "react": ["../ps5-react/node_modules/@types/react"],
+      "react/*": ["../ps5-react/node_modules/@types/react/*"]
+    }
+  },
+  "include": ["**/*.jsx", "**/*.js", "../ps5-react/runtime/js/**/*.d.ts"]
+}
+```
+
 ## Minimal API
 
 ```jsx

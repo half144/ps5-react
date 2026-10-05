@@ -15,7 +15,7 @@ import tarfile
 import urllib.request
 import zipfile
 
-from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, bundle, dependency
+from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency
 
 BUILD = ROOT / ".build/starter/ps5"
 TITLE = "PPSA99053"
@@ -30,14 +30,17 @@ BUILTINS_HASH = LOCK["compilerRt"]["sha256"]
 def main():
     global BUILD, TITLE
     parser = argparse.ArgumentParser()
-    parser.add_argument("--app", default="starter")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--app", default="starter")
+    source.add_argument("--app-dir", type=Path)
     parser.add_argument("--ui-reference", type=Path, default=DEPS / "platform")
     parser.add_argument("--embedded-react", type=Path, default=DEPS / "embeddedReact")
     parser.add_argument("--payload-sdk", type=Path, default=DEPS / "sdk/ps5-payload-sdk")
     parser.add_argument("--llvm", type=Path, default=Path("/opt/homebrew/opt/llvm@18/bin"))
     parser.add_argument("--opengl-archive", type=Path)
     args = parser.parse_args()
-    BUILD = ROOT / ".build" / args.app / "ps5"
+    app_dir = args.app_dir.resolve() if args.app_dir else ROOT / "apps" / args.app
+    BUILD = ROOT / ".build" / app_dir.name / "ps5"
     for directory in (BUILD, DEPS, BUILD / "obj", BUILD / "host"):
         directory.mkdir(parents=True, exist_ok=True)
     hui = dependency("platform", args.ui_reference)
@@ -82,7 +85,7 @@ def main():
             member = next(m for m in package.getmembers() if m.name.endswith("/libclang_rt.builtins-x86_64.a"))
             builtins.write_bytes(package.extractfile(member).read())
 
-    app_source, config, generated = bundle(args.app, er)
+    _, config, generated = bundle(app_dir, er)
     TITLE = config["titleId"]
     access_client = dependency("filesystemHelperClient") if config.get("filesystemAccess") == "console" else None
     helper = BUILD / "filesystem-helper"
@@ -208,7 +211,7 @@ def main():
     shutil.copy2(ROOT / "docs/DEPENDENCIES.md", notices / "SOURCES.md")
     run([host_tool, "self", "--inspect", "--file", app / "eboot.bin"])
     run([host_tool, "self", "--inspect", "--file", app / "sce_module/libc.prx"])
-    receipts = {"title": TITLE, "app": args.app, "framework_version": "0.1.0",
+    receipts = {"title": TITLE, "app": app_dir.name, "framework_version": "0.1.0",
                 "hardware_tested": False, "dependencies": LOCK,
                 "config": config, "bundle_sha256": digest(generated / "app.bundle.js"),
                 "llvm_version": subprocess.check_output([llvm / "clang", "--version"], text=True).splitlines()[0],
@@ -217,8 +220,9 @@ def main():
                 "ui_reference": HUI_REV, "embedded_react": ER_REV,
                 "opengl_version": "1.0.0", "opengl_archive_sha256": GL_HASH,
                 "compiler_builtins_package_sha256": BUILTINS_HASH,
-                "sources": {str(p.relative_to(ROOT)): digest(p) for base in (ROOT / "native", ROOT / "runtime", ROOT / "tools", ROOT / "patches", app_source)
-                            for p in sorted(base.rglob("*")) if p.is_file() and "__pycache__" not in str(p)},
+                "sources": {**{str(p.relative_to(ROOT)): digest(p) for base in (ROOT / "native", ROOT / "runtime", ROOT / "tools", ROOT / "patches")
+                               for p in sorted(base.rglob("*")) if p.is_file() and "__pycache__" not in str(p)},
+                            **{"app/" + str(p.relative_to(app_dir)): digest(p) for p in app_files(app_dir)}},
                 "files": {str(p.relative_to(app)): digest(p) for p in sorted(app.rglob("*")) if p.is_file()}}
     (ROOT / "dist" / (TITLE + ".receipt.json")).write_text(json.dumps(receipts, indent=2) + "\n")
     with zipfile.ZipFile(ROOT / "dist" / (TITLE + ".zip"), "w", zipfile.ZIP_DEFLATED) as package:

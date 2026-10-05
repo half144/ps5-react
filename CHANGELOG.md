@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `--app-dir <path>` previews, watches, and builds an app outside `apps/`;
+  `create --dir <parent>` scaffolds one. Build receipts record app sources as
+  `app/<path>` instead of `apps/<name>/<path>`.
+
 - Build the optional filesystem helper with the app payload SDK v0.42 instead
   of the upstream builder's v0.40, which lacks firmware 13.60 initialization.
   Preserve the full 32-byte credential attributes required by the new SDK API.
