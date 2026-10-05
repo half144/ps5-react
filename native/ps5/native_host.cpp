@@ -13,11 +13,17 @@
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "input_script.hpp"
 #include "filesystem_access.hpp"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <iterator>
+#include <string>
 #include <pthread.h>
+#include <sys/stat.h>
 
 extern "C" {
 #include "er_runtime.h"
@@ -34,6 +40,68 @@ constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
 constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT) * 1000000;
 
 void react_log(const char* line) { hui::sys::log("[REACT] %s", line); }
+
+// An app folder may carry dev/input-script.txt (InputScript syntax) for unattended profiling; it is
+// never part of a build, only added to a test deploy.
+void load_input_script(InputScript& script) {
+  FILE* file = std::fopen("/app0/dev/input-script.txt", "rb");
+  if (!file) return;
+  char text[4096] = {};
+  text[std::fread(text, 1, sizeof text - 1, file)] = '\0';
+  std::fclose(file);
+  char error[160];
+  if (script.parse(text, error, sizeof error)) hui::sys::log("[PS5-REACT] input script loaded");
+  else hui::sys::log("[PS5-REACT] input script ignored: %s", error);
+}
+
+// Live commands for a running title: a test machine overwrites dev/commands.txt with lines
+// "<sequence> <steps>" (InputScript syntax); about once a second the host runs the steps of every line
+// whose sequence number is new. Active only when the app folder has a dev directory, which a build never
+// creates. Lines present at launch are skipped.
+class LiveCommands {
+public:
+  void start() {
+    struct stat info;
+    enabled_ = stat("/app0/dev", &info) == 0 && S_ISDIR(info.st_mode);
+    if (enabled_) read(false);
+  }
+
+  // Appends new commands to `script` once it has finished its previous steps.
+  void poll(std::int64_t now_us, InputScript& script) {
+    if (!enabled_ || now_us < next_poll_us_) return;
+    next_poll_us_ = now_us + 1000000;
+    read(true);
+    if (pending_.empty() || !script.done()) return;
+    char error[160];
+    if (!script.parse(pending_.c_str(), error, sizeof error)) hui::sys::log("[PS5-REACT] command ignored: %s", error);
+    pending_.clear();
+  }
+
+private:
+  void read(bool queue) {
+    FILE* file = std::fopen("/app0/dev/commands.txt", "rb");
+    if (!file) return;
+    char text[4096] = {};
+    text[std::fread(text, 1, sizeof text - 1, file)] = '\0';
+    std::fclose(file);
+    for (char* line = std::strtok(text, "\n"); line; line = std::strtok(nullptr, "\n")) {
+      char* steps = nullptr;
+      const unsigned long long sequence = std::strtoull(line, &steps, 10);
+      if (steps == line || sequence <= last_sequence_) continue;
+      steps += std::strspn(steps, " \t");
+      last_sequence_ = sequence;
+      if (!queue) continue;
+      hui::sys::log("[PS5-REACT] command: %s", steps);
+      pending_ += steps;
+      pending_ += ' ';
+    }
+  }
+
+  bool enabled_ = false;
+  unsigned long long last_sequence_ = 0;
+  std::int64_t next_poll_us_ = 0;
+  std::string pending_;
+};
 
 std::uint32_t perf_clock() { return static_cast<std::uint32_t>(hui::sys::monotonic_us()); }
 
@@ -137,6 +205,10 @@ bool run_proof() {
     hui::sys::log("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
     std::uint64_t frames = 0;
+    InputScript script;
+    load_input_script(script);
+    LiveCommands commands;
+    commands.start();
     er_perf_set_clock(perf_clock);
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
@@ -150,6 +222,12 @@ bool run_proof() {
       if (const char* direction = nav_action(input.nav)) ok = dispatch(direction);
       if (ok && input.is_pressed(hui::Action::confirm)) ok = dispatch("confirm");
       if (ok && input.is_pressed(hui::Action::back)) ok = dispatch("back");
+      commands.poll(now, script);
+      if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
+        hui::sys::log("[PS5-REACT] script: %s", action);
+        if (!std::strcmp(action, "quit")) break;
+        ok = dispatch(action);
+      }
       if (!ok) break;
       stats.lap(FrameStats::input, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_JS);
@@ -159,7 +237,8 @@ bool run_proof() {
       if (*er_runtime_last_error()) { ok = false; break; }
       stats.lap(FrameStats::update, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
-      ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), display.width(), display.height());
+      ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
+                          display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());

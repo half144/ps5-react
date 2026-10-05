@@ -103,7 +103,9 @@
 - The desktop preview replays `PS5_REACT_INPUT_SCRIPT` (for example
   `wait:3000,right*3,confirm,wait:2000,back,quit`) through the normal input
   path for reproducible profiling; `PS5_REACT_SLOW_FRAME_MS` sets the
-  slow-frame threshold. See `docs/ANIMATION.md`.
+  slow-frame threshold. See `docs/ANIMATION.md`. The PS5 host reads the same
+  script from `/app0/dev/input-script.txt` when a test deploy adds that file,
+  and live commands from `/app0/dev/commands.txt` while it runs.
 - Embedded React is patched so a repaint over an image converts and scales only
   the repainted part instead of the whole image, bilinear scaling uses integer
   weights, and a scale animation resting at 1 no longer renders its subtree
@@ -111,6 +113,12 @@
 - Controller actions reach JavaScript inside React's batch, from the frame's
   microtask drain: a handler that sets several pieces of state renders and
   commits once, and its render counts as `react` in the frame log.
+- Scrolling moves the pixels already painted: Embedded React is patched so a
+  ScrollView whose offset changes moves its viewport through a new backend
+  `move_rect` and repaints only the exposed strip, falling back to a full
+  viewport repaint when anything but a solid background shares those pixels.
+  Both hosts replay the move on the GPU texture instead of uploading the
+  viewport again.
 
 ## 0.1.0 — 2026-10-05
 

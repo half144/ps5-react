@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 
 extern "C" {
 #include "native_renderer.h"
@@ -17,6 +18,8 @@ EmbeddedRenderBackend inner, wrapper;
 int fb_width = 0, fb_height = 0;
 ERRect rects[ER_DAMAGE_RECTS_MAX];
 int count = 0, last = 0;
+DamageMove moves[4];
+int move_count = 0;
 
 ERRect unite(const ERRect& a, const ERRect& b) {
   const int x = std::min(a.x, b.x), y = std::min(a.y, b.y);
@@ -63,6 +66,25 @@ void blend(const void* src, int stride, std::uint8_t alpha, int x, int y, int w,
   inner.blend_rect(src, stride, alpha, x, y, w, h, ctx);
   note(x, y, w, h);
 }
+
+void move(int src_x, int src_y, int w, int h, int dst_x, int dst_y, void* ctx) {
+  inner.move_rect(src_x, src_y, w, h, dst_x, dst_y, ctx);
+  if (move_count == static_cast<int>(std::size(moves))) {
+    note(dst_x, dst_y, w, h); // Out of slots: upload the moved pixels instead.
+    return;
+  }
+  // Pixels painted earlier in this frame travel with the move, so the moved copy is damage too.
+  ERRect painted[ER_DAMAGE_RECTS_MAX];
+  const int painted_count = count;
+  std::copy(rects, rects + count, painted);
+  for (int i = 0; i < painted_count; ++i) {
+    const ERRect& r = painted[i];
+    const int x0 = std::max(r.x, src_x), y0 = std::max(r.y, src_y);
+    const int x1 = std::min(r.x + r.w, src_x + w), y1 = std::min(r.y + r.h, src_y + h);
+    if (x1 > x0 && y1 > y0) note(x0 + dst_x - src_x, y0 + dst_y - src_y, x1 - x0, y1 - y0);
+  }
+  moves[move_count++] = {{src_x, src_y, w, h}, dst_x - src_x, dst_y - src_y};
+}
 } // namespace
 
 bool damage_tracker_install(int width, int height) {
@@ -74,12 +96,15 @@ bool damage_tracker_install(int width, int height) {
   wrapper.fill_rect = fill;
   wrapper.copy_rect = copy;
   wrapper.blend_rect = blend;
+  if (inner.move_rect) wrapper.move_rect = move;
   fb_width = width; fb_height = height;
-  count = last = 0;
+  count = last = move_count = 0;
   embedded_renderer_set_backend(&wrapper);
   return true;
 }
 
 std::span<const ERRect> damage_tracker_rects() { return {rects, static_cast<std::size_t>(count)}; }
 
-void damage_tracker_clear() { count = last = 0; }
+std::span<const DamageMove> damage_tracker_moves() { return {moves, static_cast<std::size_t>(move_count)}; }
+
+void damage_tracker_clear() { count = last = move_count = 0; }

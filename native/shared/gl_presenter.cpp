@@ -94,7 +94,8 @@ bool GlPresenter::draw(const std::uint32_t* argb, int sw, int sh) {
   return present(sw, sh);
 }
 
-bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage, int sw, int sh) {
+bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage, std::span<const DamageMove> moves,
+                       int sw, int sh) {
   if (!program_ || !argb || sw <= 0 || sh <= 0) return false;
   glBindTexture(GL_TEXTURE_2D, texture_);
   // A new surface size also covers fullscreen changes and lost drawables.
@@ -103,6 +104,12 @@ bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage
     synced_ = true;
     surface_width_ = sw; surface_height_ = sh;
   } else {
+    for (const DamageMove& m : moves)
+      if (!move(m)) {
+        upload(argb, {0, 0, width_, height_});
+        return present(sw, sh);
+      }
+    glBindTexture(GL_TEXTURE_2D, texture_);
     for (const ERRect& rect : damage) upload(argb, rect);
   }
   return present(sw, sh);
@@ -113,6 +120,30 @@ void GlPresenter::upload(const std::uint32_t* argb, const ERRect& rect) {
   glPixelStorei(GL_UNPACK_ROW_LENGTH, width_);
   glTexSubImage2D(GL_TEXTURE_2D, 0, rect.x, rect.y, rect.w, rect.h, GL_RGBA, GL_UNSIGNED_BYTE,
                   argb + static_cast<std::size_t>(rect.y) * width_ + rect.x);
+}
+
+// Texture rows are framebuffer rows, so framebuffer coordinates address both blits directly.
+bool GlPresenter::move(const DamageMove& m) {
+  if (!scratch_) {
+    glGenTextures(1, &scratch_);
+    glBindTexture(GL_TEXTURE_2D, scratch_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenFramebuffers(1, &read_fbo_);
+    glGenFramebuffers(1, &draw_fbo_);
+  }
+  const ERRect& r = m.src;
+  const auto blit = [&](unsigned int from, unsigned int to, int dx, int dy) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo_);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, from, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo_);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, to, 0);
+    glBlitFramebuffer(r.x, r.y, r.x + r.w, r.y + r.h, r.x + dx, r.y + dy, r.x + dx + r.w, r.y + dy + r.h,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  };
+  blit(texture_, scratch_, 0, 0);
+  blit(scratch_, texture_, m.dx, m.dy);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  return glGetError() == GL_NO_ERROR;
 }
 
 bool GlPresenter::present(int sw, int sh) {
@@ -135,8 +166,11 @@ bool GlPresenter::present(int sw, int sh) {
 
 void GlPresenter::release() {
   if (texture_) glDeleteTextures(1, &texture_);
+  if (scratch_) glDeleteTextures(1, &scratch_);
+  if (read_fbo_) glDeleteFramebuffers(1, &read_fbo_);
+  if (draw_fbo_) glDeleteFramebuffers(1, &draw_fbo_);
   if (vao_) glDeleteVertexArrays(1, &vao_);
   if (program_) glDeleteProgram(program_);
-  texture_ = vao_ = program_ = 0;
+  texture_ = vao_ = program_ = scratch_ = read_fbo_ = draw_fbo_ = 0;
   synced_ = false;
 }

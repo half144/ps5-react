@@ -69,7 +69,8 @@ def checkout(path, url, revision, patches=()):
     expected = set()
     for patch in (ROOT / p for p in patches):
         if git("apply", "--reverse", "--check", patch).returncode:
-            run(["git", "apply", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
+            # Intent-to-add, so files a patch creates count in the diff checked below.
+            run(["git", "apply", "--intent-to-add", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
         expected |= {line.split("\t")[-1] for line in git("apply", "--numstat", patch).stdout.splitlines()}
     changed = set(git("diff", "--name-only", "HEAD").stdout.split())
     if changed != expected:

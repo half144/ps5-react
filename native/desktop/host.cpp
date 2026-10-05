@@ -23,6 +23,7 @@ void er_register_assets(void);
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "input_script.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
 #include <algorithm>
@@ -45,48 +46,6 @@ std::int64_t now_us() {
 }
 
 std::uint32_t perf_clock() { return static_cast<std::uint32_t>(now_us()); }
-
-// PS5_REACT_INPUT_SCRIPT="right*3,wait:1500,confirm,wait:2000,back,quit" replays actions for
-// reproducible profiling. Each action takes one frame; `*N` repeats it at the held-key repeat
-// interval; `wait:MS` pauses for wall-clock milliseconds; `quit` closes the preview.
-struct ScriptStep { std::string action; Uint32 wait_ms = 0; };
-
-bool parse_script(const char* text, std::vector<ScriptStep>& steps) {
-  static constexpr const char* actions[] = {"up", "down", "left", "right", "confirm", "back", "quit"};
-  std::string script(text);
-  for (std::size_t start = 0; start <= script.size();) {
-    std::size_t end = script.find(',', start);
-    if (end == std::string::npos) end = script.size();
-    std::string token = script.substr(start, end - start);
-    start = end + 1;
-    token.erase(0, token.find_first_not_of(' '));
-    token.erase(token.find_last_not_of(' ') + 1);
-    if (token.empty()) continue;
-    char* rest = nullptr;
-    if (token.rfind("wait:", 0) == 0) {
-      const long ms = std::strtol(token.c_str() + 5, &rest, 10);
-      if (*rest || ms < 0) { std::fprintf(stderr, "PS5_REACT_INPUT_SCRIPT: bad wait '%s'\n", token.c_str()); return false; }
-      steps.push_back({"", static_cast<Uint32>(ms)});
-      continue;
-    }
-    long count = 1;
-    if (const std::size_t star = token.find('*'); star != std::string::npos) {
-      count = std::strtol(token.c_str() + star + 1, &rest, 10);
-      if (*rest || count < 1) { std::fprintf(stderr, "PS5_REACT_INPUT_SCRIPT: bad repeat in '%s'\n", token.c_str()); return false; }
-      token.resize(star);
-    }
-    if (std::none_of(std::begin(actions), std::end(actions), [&](const char* a) { return token == a; })) {
-      std::fprintf(stderr, "PS5_REACT_INPUT_SCRIPT: unknown action '%s' (use up, down, left, right, confirm, back, quit, wait:MS)\n",
-                   token.c_str());
-      return false;
-    }
-    for (long i = 0; i < count; ++i) {
-      if (i) steps.push_back({"", 110});
-      steps.push_back({token});
-    }
-  }
-  return true;
-}
 
 float stick(SDL_GameController* controller, SDL_GameControllerAxis axis) {
   constexpr float deadzone = 0.16f;
@@ -137,9 +96,8 @@ struct Host {
   bool log_frames = true, running = true, runtime_started = false, backend_started = false;
   Uint32 previous_tick = 0, next_repeat = 0;
   const char* held_action = nullptr;
-  std::vector<ScriptStep> script;
-  std::size_t script_step = 0;
-  Uint32 script_resume = 0, slow_frame_us = 33000;
+  InputScript script;
+  Uint32 slow_frame_us = 33000;
   SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
 
@@ -229,20 +187,13 @@ struct Host {
     return ok;
   }
 
-  // Runs the script steps that are due; actions go through the same dispatch as keys.
+  // Runs the scripted action that is due; it goes through the same dispatch as keys.
   bool play_script() {
-    const Uint32 ticks = SDL_GetTicks();
-    while (script_step < script.size() && SDL_TICKS_PASSED(ticks, script_resume)) {
-      const ScriptStep& step = script[script_step++];
-      if (step.action.empty()) {
-        script_resume = ticks + step.wait_ms;
-        continue;
-      }
-      if (log_frames) std::printf("[PS5-REACT] script: %s\n", step.action.c_str());
-      if (step.action == "quit") running = false;
-      else if (!dispatch(step.action.c_str())) return false;
-      script_resume = ticks + 1; // One action per frame.
-    }
+    const char* action = script.next(SDL_GetTicks64());
+    if (!action) return true;
+    if (log_frames) std::printf("[PS5-REACT] script: %s\n", action);
+    if (!std::strcmp(action, "quit")) running = false;
+    else return dispatch(action);
     return true;
   }
 
@@ -309,7 +260,7 @@ struct Host {
     SDL_GL_GetDrawableSize(window, &sw, &sh);
     if (sw > 0 && sh > 0) {
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
-      if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), sw, sh)) return false;
+      if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), sw, sh)) return false;
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       damage_tracker_clear();
     }
@@ -527,7 +478,11 @@ int main(int argc, char** argv) {
       if (*ms && !*rest && value > 0 && value <= 60000) host.slow_frame_us = static_cast<Uint32>(value) * 1000;
       else std::fprintf(stderr, "PS5_REACT_SLOW_FRAME_MS: expected milliseconds (1-60000), got '%s'\n", ms);
     }
-    if (const char* text = std::getenv("PS5_REACT_INPUT_SCRIPT")) ok = parse_script(text, host.script);
+    if (const char* text = std::getenv("PS5_REACT_INPUT_SCRIPT")) {
+      char error[160];
+      ok = host.script.parse(text, error, sizeof error);
+      if (!ok) std::fprintf(stderr, "PS5_REACT_INPUT_SCRIPT: %s\n", error);
+    }
     if (ok && argc > 2 && !std::strcmp(argv[2], "--fullscreen")) {
       ok = SDL_SetWindowFullscreen(host.window, SDL_WINDOW_FULLSCREEN_DESKTOP) == 0;
       SDL_ShowCursor(SDL_DISABLE);
