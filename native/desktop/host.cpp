@@ -19,15 +19,59 @@ extern "C" {
 void er_register_assets(void);
 }
 #include "gl_presenter.hpp"
+#include "host_api.hpp"
+#include "host_platform.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 namespace {
 // Render at twice the logical resolution so rounded edges remain smooth on Retina.
 constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
+
+float stick(SDL_GameController* controller, SDL_GameControllerAxis axis) {
+  constexpr float deadzone = 0.16f;
+  const float value = std::clamp(SDL_GameControllerGetAxis(controller, axis) / 32767.0f, -1.0f, 1.0f);
+  if (std::abs(value) < deadzone) return 0;
+  return std::copysign((std::abs(value) - deadzone) / (1 - deadzone), value);
+}
+
+GamepadState read_gamepad(SDL_GameController* controller) {
+  GamepadState state;
+  // Indexes follow kButtonNames; l2/r2 come from the triggers below.
+  constexpr int buttons[] = {
+    SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN, SDL_CONTROLLER_BUTTON_DPAD_LEFT,
+    SDL_CONTROLLER_BUTTON_DPAD_RIGHT, SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_Y,
+    SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, -1, -1,
+    SDL_CONTROLLER_BUTTON_LEFTSTICK, SDL_CONTROLLER_BUTTON_RIGHTSTICK, SDL_CONTROLLER_BUTTON_START,
+    SDL_CONTROLLER_BUTTON_TOUCHPAD,
+  };
+  if (controller && SDL_GameControllerGetAttached(controller)) {
+    state.connected = true;
+    state.left_x = stick(controller, SDL_CONTROLLER_AXIS_LEFTX);
+    state.left_y = stick(controller, SDL_CONTROLLER_AXIS_LEFTY);
+    state.right_x = stick(controller, SDL_CONTROLLER_AXIS_RIGHTX);
+    state.right_y = stick(controller, SDL_CONTROLLER_AXIS_RIGHTY);
+    state.l2 = std::max(0.0f, SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0f);
+    state.r2 = std::max(0.0f, SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0f);
+    for (std::uint32_t i = 0; i < std::size(buttons); ++i)
+      if (buttons[i] >= 0 && SDL_GameControllerGetButton(controller, static_cast<SDL_GameControllerButton>(buttons[i])))
+        state.buttons |= 1u << i;
+    if (state.l2 > 0.5f) state.buttons |= 1u << 10;
+    if (state.r2 > 0.5f) state.buttons |= 1u << 11;
+  }
+  const Uint8* keys = SDL_GetKeyboardState(nullptr);
+  constexpr SDL_Scancode keyboard[] = {
+    SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE,
+  };
+  for (std::uint32_t i = 0; i < std::size(keyboard); ++i)
+    if (keys[keyboard[i]]) state.buttons |= 1u << i;
+  return state;
+}
 
 struct Host {
   SDL_Window* window = nullptr;
@@ -41,6 +85,7 @@ struct Host {
     if (runtime_started) er_runtime_shutdown();
     if (backend_started) er_software_backend_destroy();
     presenter.release(); // GL objects must be deleted before their context.
+    desktop_set_controller(nullptr);
     if (controller) SDL_GameControllerClose(controller);
     if (context) SDL_GL_DeleteContext(context);
     if (window) SDL_DestroyWindow(window);
@@ -64,6 +109,7 @@ struct Host {
     for (int i = 0; i < SDL_NumJoysticks(); ++i)
       if (SDL_IsGameController(i) && (controller = SDL_GameControllerOpen(i))) break;
     std::printf("Physical controller: %s\n", controller ? SDL_GameControllerName(controller) : "not connected");
+    desktop_set_controller(controller);
     previous_tick = SDL_GetTicks();
     return presenter.init(width, height);
   }
@@ -75,6 +121,7 @@ struct Host {
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;
     cfg.max_stack_size = 1024 * 1024;
+    cfg.install_host_globals = ps5_react_install_host_api;
     runtime_started = er_runtime_init(&cfg);
     if (!runtime_started) return false;
     er_register_assets();
@@ -136,7 +183,12 @@ struct Host {
       if (action && !dispatch(action)) return false;
     }
     if (!running) return true;
+    ps5_react_set_gamepad(read_gamepad(controller));
     er_runtime_pump(); er_commit();
+    if (ps5_react_exit_requested()) {
+      running = false;
+      return true;
+    }
     int sw = 0, sh = 0;
     SDL_GL_GetDrawableSize(window, &sw, &sh);
     if (sw > 0 && sh > 0 && !presenter.draw(er_software_framebuffer(), sw, sh)) return false;

@@ -278,6 +278,14 @@ const FUNCTIONAL = [
 
 /** Resolves one utility (no variant) to a style fragment, or throws UtilityError. */
 export function resolveUtility(utility, ctx) {
+  const style = resolve(utility, ctx);
+  if (style) return style;
+  const guess = suggest(utility, ctx);
+  unsupported(guess ? `unknown utility; did you mean ${guess}?` : 'unknown utility');
+}
+
+/** The style for a utility, null when it is unknown, or a UtilityError when it is unsupported. */
+function resolve(utility, ctx) {
   if (utility in STATIC) return STATIC[utility];
   const negative = utility.startsWith('-');
   const name = negative ? utility.slice(1) : utility;
@@ -290,5 +298,47 @@ export function resolveUtility(utility, ctx) {
   for (const [prefix, reason] of REJECTED) {
     if (name === prefix || name.startsWith(prefix + '-')) unsupported(reason);
   }
-  unsupported('unknown utility');
+  return null;
+}
+
+/** Every theme key as a utility value: `sky-500`, `primary` (a DEFAULT), `2xl`, `4`. */
+function themeValues(theme) {
+  const values = new Set();
+  const walk = (scale, prefix) => {
+    for (const [key, value] of Object.entries(scale)) {
+      const name = key === 'DEFAULT' ? prefix.slice(0, -1) : prefix + key;
+      if (value && typeof value === 'object' && !Array.isArray(value)) walk(value, `${name}-`);
+      else if (name) values.add(name);
+    }
+  };
+  Object.values(theme).forEach(scale => walk(scale, ''));
+  return values;
+}
+
+function distance(a, b) {
+  let previous = Array.from({length: b.length + 1}, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++)
+      row[j] = Math.min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    previous = row;
+  }
+  return previous[b.length];
+}
+
+/** The closest valid utility within two edits, for an unknown one. Runs only on the error path. */
+function suggest(utility, ctx) {
+  const values = themeValues(ctx.theme);
+  const candidates = [...Object.keys(STATIC),
+    ...FUNCTIONAL.flatMap(([prefix]) => [prefix, ...[...values].map(value => `${prefix}-${value}`)])]
+    .map(name => [distance(utility, name), name])
+    .filter(([d]) => d <= 2)
+    .sort((a, b) => a[0] - b[0]);
+  return candidates.find(([, name]) => {
+    try {
+      return resolve(name, {...ctx, font: () => ({})}) !== null;
+    } catch {
+      return false;
+    }
+  })?.[1];
 }

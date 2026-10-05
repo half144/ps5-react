@@ -15,6 +15,12 @@
 - Unsupported classes and runtime-computed class names fail the build with a
   source location.
 - The starter uses `className`; its snapshots match the explicit-style version.
+- React Native-style native modules in `@ps5-react/core`: `Platform`,
+  `DeviceInfo`, `FileSystem`, `Notifications`, `Users`, `Controller` with the
+  `useGamepad` hook, `Linking`, and `BackHandler`, implemented by both hosts through the
+  `__ps5ReactNative` contract. The desktop preview uses a per-app sandbox. The
+  PS5 implementation is not yet hardware-validated. See `docs/NATIVE-API.md`.
+- `apps/system-explorer` (`PPSA99056`) demonstrates every native module.
 
 ## 0.1.0 — 2026-10-05
 

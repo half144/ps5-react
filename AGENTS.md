@@ -66,6 +66,15 @@ Do not claim measured FPS or universal firmware compatibility without evidence.
 Build and preview tools do not access the console. Console upload, launch, or
 other live-device operations require explicit task authorization.
 
+## Native API contract
+
+`native/shared/host_api.hpp` defines `globalThis.__ps5ReactNative` (ABI v1);
+`runtime/js/native.js` is its only consumer and `docs/NATIVE-API.md` its public
+reference. Change all three together, implement every function on both hosts,
+keep calls synchronous, cheap, and on the render thread, and throw errors that
+name the call and path. Apps use the `@ps5-react/core` modules, never the global.
+Do not claim a call works on PS5 without evidence in `docs/HARDWARE.md`.
+
 ## Dependencies and licensing
 
 Pin dependency revisions and download hashes in `dependencies.lock.json`.

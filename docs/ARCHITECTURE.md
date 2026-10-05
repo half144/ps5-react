@@ -5,16 +5,23 @@
 ```text
 apps/<app>/index.jsx                 application, state, components
             ↓
-runtime/js (@ps5-react/core)         controller API and Embedded React primitives
+runtime/js (@ps5-react/core)         controller API, native modules, Embedded React primitives
             ↓ React reconciler / NativeUI / QuickJS
 Embedded React C                    tree, layout, text, rasterization
             ↓ opaque ARGB8888 framebuffer
 native/shared/GlPresenter           RGBA conversion, persistent texture, presentation
             ↓
-native/desktop | native/ps5          window/EGL, input, clock, lifecycle
+native/desktop | native/ps5          window/EGL, input, clock, lifecycle,
+                                     native modules via native/shared/host_api
 ```
 
-Applications do not access scePad, EGL, libkernel, or the SDK. The presenter
+Applications do not access scePad, EGL, libkernel, or the SDK directly. They
+reach platform services only through the `@ps5-react/core` native modules
+(`runtime/js/native.js`), which wrap `globalThis.__ps5ReactNative`. Its shape is
+fixed by `native/shared/host_api.hpp`: `native/shared/host_api.cpp` installs it
+and implements the filesystem with POSIX, while `native/ps5/` and
+`native/desktop/` implement the platform functions. Calls are synchronous on the
+render thread. See [NATIVE-API.md](NATIVE-API.md). The presenter
 has no knowledge of React state, fonts, or widgets. The engine and JavaScript
 run on the same render thread. The PS5 host keeps the heap, shims, CRT, SDK
 pair, and FSELF path used by the hardware-tested proof of concept.
@@ -29,7 +36,7 @@ Its UI components, themes, and UI renderer are not used.
 | Directory | Responsibility |
 | --- | --- |
 | `apps/` | Independent JSX entry points, manifests, and assets |
-| `runtime/js/` | Public primitives and host input contract |
+| `runtime/js/` | Public primitives, native modules, and host input contract |
 | `native/` | Shared presenter and desktop/PS5 hosts |
 | `tools/` | Bootstrap, bundle, `className` compiler, assets, builds, verification, CLI |
 | `docs/` | Decisions, evidence, limitations, provenance |
@@ -67,7 +74,7 @@ build stage retains its full log.
 - Scoped controls and focus navigation, including modal, reconnect, and repeat tests.
 - Restart only the JS runtime while preserving the desktop graphics context.
 - Measure PS5 frame time and memory, then consider damaged-region uploads.
-- Add catalog, caching, networking, and virtualization behind explicit APIs.
+- Add networking, audio, text input, save data, caching, and virtualization behind explicit APIs.
 - Ship an installable CLI and a pinned CI matrix.
 
 The software renderer still owns the pixels. A future GPU backend can preserve

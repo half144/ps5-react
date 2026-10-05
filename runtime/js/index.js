@@ -3,6 +3,8 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useLayoutEffect, useRef} from 'react';
 export {AppRegistry, View, Text, Image, ScrollView} from 'embedded-react';
+export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useGamepad, Linking, BackHandler}
+  from './native.js';
 
 const handlers = new Set();
 
@@ -21,7 +23,7 @@ export function useController(handler) {
   useLayoutEffect(() => {
     const listener = action => current.current(action);
     handlers.add(listener);
-    return () => handlers.delete(listener);
+    return () => { handlers.delete(listener); };
   }, []);
 }
 

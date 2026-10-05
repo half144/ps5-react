@@ -68,3 +68,8 @@ test('dynamic or partial classes are rejected with a location', () => {
   assert.throws(() => compile('<View\n  className="p-4 shadow-lg" />;'),
     error => assert.deepEqual(error.loc, {line: 2, column: 17}) ?? true);
 });
+
+test('unknown classes suggest the closest valid utility', () => {
+  fails('<View className="text-whit" />;', /did you mean text-white\?/);
+  fails('<View className="qqqq-zzzz" />;', /unknown utility$/);
+});

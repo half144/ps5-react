@@ -97,8 +97,11 @@ npm run dev -- --app my-store
 npm run build -- --app my-store
 ```
 
-Each app contains JSX, `app.json`, assets, and font configuration. No C++ edits
-are needed. Choose a title ID unused on your console; the CLI also rejects IDs
+The new app starts from a small focusable menu written with `className`, the
+starter's theme and font, and no automatic exit (`timeoutSeconds: 0`). Pass
+`--title "My Store"` to set the name shown on the console (default: from
+`--name`). Each app contains JSX, `app.json`, assets, and font configuration.
+No C++ edits are needed. Choose a title ID unused on your console; the CLI also rejects IDs
 already used by another local app. The manifest configures title, version,
 render resolution, display surface, and timeout.
 
@@ -120,13 +123,15 @@ AppRegistry.registerComponent('my-app', () => Counter);
 ```
 
 `@ps5-react/core` exports Embedded React's `AppRegistry`, `View`, `Text`, `Image`,
-and `ScrollView`, plus the `useController` hook and the `tw` style template.
+and `ScrollView`, plus the `useController` hook, the `tw` style template, and
+the [native modules](#native-modules).
 Controller actions are `previous`, `next`, `confirm`, and `back`.
 Subscriptions are removed on unmount.
 Keep active subscriptions scoped to the screen that should receive input.
 
-Images and fonts are baked during the build. Declare dynamically selected
-physical font sizes and extra glyphs in `assets.config.js`; see the starter.
+Images and fonts are baked during the build. Font sizes written in `className`
+or as literal styles are found automatically; declare only sizes chosen at
+runtime and extra glyphs in `assets.config.js`; see the starter.
 The initial rendering profile is 2560×1440 downsampled to a 1920×1080 surface.
 
 ## Styling with className
@@ -144,6 +149,24 @@ width. `focused:`, `selected:`, and other state variants read the element's
 props, and explicit `style` always wins. Unsupported classes fail the build with
 a source location. See [Styling with className](docs/TAILWIND.md).
 
+## Native modules
+
+```jsx
+import {DeviceInfo, FileSystem, Controller, useGamepad} from '@ps5-react/core';
+
+const {firmware} = DeviceInfo.get();
+FileSystem.writeFile(`${FileSystem.dataDir}/notes.txt`, 'hello');
+Controller.setLightBar('#38bdf8');
+const pad = useGamepad(); // sticks, triggers, held buttons
+```
+
+React Native-style modules reach platform services through the host:
+`Platform`, `DeviceInfo`, `FileSystem`, `Notifications`, `Users`, `Controller`
+with `useGamepad`, `Linking`, and `BackHandler`. Calls are synchronous and run on the
+render thread. The macOS preview implements the same API against a sandbox in
+`.build/<app>/sandbox/`. The PS5 implementation is not yet hardware-validated.
+See [Native modules](docs/NATIVE-API.md) and `apps/system-explorer`.
+
 ## Validation and limitations
 
 ```sh
@@ -157,7 +180,7 @@ Logs and test screenshots are under `.build/<app>/`.
 
 - The PS5 framework starter has not yet been independently hardware-tested.
 - Rasterization runs on the CPU; there is no direct GPU UI backend or measured FPS claim.
-- DOM, browser APIs, Node.js APIs, and host networking are not implemented.
+- DOM, browser APIs, Node.js APIs, networking, audio, and text input are not implemented.
 - Focus navigation is app-owned; spatial focus and reusable controls are future work.
 - Dependencies are pinned, but cross-machine bit-identical builds are not guaranteed.
 
@@ -165,6 +188,7 @@ Logs and test screenshots are under `.build/<app>/`.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Styling with className](docs/TAILWIND.md)
+- [Native modules](docs/NATIVE-API.md)
 - [Hardware evidence](docs/HARDWARE.md)
 - [Dependencies and licenses](docs/DEPENDENCIES.md)
 - [Contribution guide](CONTRIBUTING.md)

@@ -9,8 +9,11 @@
 #include "platform/ps5/system.hpp"
 #include "core/input.hpp"
 #include "gl_presenter.hpp"
+#include "host_api.hpp"
+#include "host_platform.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <pthread.h>
 
 extern "C" {
@@ -28,6 +31,26 @@ constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
 constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT) * 1000000;
 
 void react_log(const char* line) { hui::sys::log("[REACT] %s", line); }
+
+// Indexed like kButtonNames.
+constexpr hui::Action kButtonActions[] = {
+  hui::Action::up, hui::Action::down, hui::Action::left, hui::Action::right,
+  hui::Action::confirm, hui::Action::back, hui::Action::north, hui::Action::west,
+  hui::Action::page_prev, hui::Action::page_next, hui::Action::jump_prev, hui::Action::jump_next,
+  hui::Action::l3, hui::Action::r3, hui::Action::menu, hui::Action::touch,
+};
+static_assert(std::size(kButtonActions) == std::size(kButtonNames));
+
+GamepadState gamepad_state(const hui::InputFrame& input) {
+  GamepadState state;
+  state.connected = input.connected;
+  state.left_x = input.stick_x; state.left_y = input.stick_y;
+  state.right_x = input.stick2_x; state.right_y = input.stick2_y;
+  state.l2 = input.trigger_l; state.r2 = input.trigger_r;
+  for (std::size_t i = 0; i < std::size(kButtonActions); ++i)
+    if (input.is_held(kButtonActions[i])) state.buttons |= 1u << i;
+  return state;
+}
 
 bool dispatch(const char* action) {
   JSContext* ctx = er_runtime_context();
@@ -68,6 +91,12 @@ bool run_proof() {
     ok = software;
     hui::sys::log("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
   }
+  // The pad opens before the bundle runs: it also initializes the user service
+  // that the users, notification and browser calls need.
+  if (ok) {
+    hui::sys::log("[PS5-REACT] pad=%d", pad.open());
+    host_platform_set_pad(&pad);
+  }
   if (ok) {
     ErRuntimeConfig config = {};
     config.screen_width = width; config.screen_height = height;
@@ -75,6 +104,7 @@ bool run_proof() {
     config.log = react_log;
     config.max_stack_size = 1024 * 1024;
     config.memory_limit = 32 * 1024 * 1024;
+    config.install_host_globals = ps5_react_install_host_api;
     runtime = er_runtime_init(&config);
     ok = runtime;
     hui::sys::log("[PS5-REACT] runtime=%d", ok);
@@ -86,7 +116,7 @@ bool run_proof() {
   }
   if (ok) {
     // Input failure is logged; timeout still allows the display-only proof to end.
-    hui::sys::log("[PS5-REACT] pad=%d; Options closes; timeout=%ds after first frame", pad.open(), PS5_REACT_TIMEOUT);
+    hui::sys::log("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
     std::uint64_t frames = 0;
     while (ok) {
@@ -95,6 +125,8 @@ bool run_proof() {
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
       if (input.is_pressed(hui::Action::menu)) break;
+      pad.tick(static_cast<float>(now - previous) / 1000000.0f);
+      ps5_react_set_gamepad(gamepad_state(input));
       if (input.nav == hui::Direction::left || input.nav == hui::Direction::up)
         ok = dispatch("previous");
       else if (input.nav == hui::Direction::right || input.nav == hui::Direction::down)
@@ -114,12 +146,14 @@ bool run_proof() {
       embedded_renderer_tick(static_cast<std::uint32_t>(std::clamp<std::int64_t>((now-previous)/1000, 0, 50)));
       previous = now;
       ++frames;
+      if (ps5_react_exit_requested()) break;
     }
     hui::sys::log("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
   }
   if (!ok && runtime) hui::sys::log("[PS5-REACT] error=%s", er_runtime_last_error());
   if (runtime) er_runtime_shutdown();
   if (software) er_software_backend_destroy();
+  host_platform_set_pad(nullptr);
   pad.close();
   presenter.release();
   display.close();

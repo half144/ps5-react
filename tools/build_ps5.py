@@ -114,11 +114,12 @@ def main():
     definitions = next(line.split("=", 1)[1] for line in
                        (cross / "bridge/engine/CMakeFiles/embedded-react.dir/flags.make").read_text().splitlines()
                        if line.startswith("C_DEFINES ="))
-    sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/time_compat.c", ROOT / "native/shared/gl_presenter.cpp", generated / "assets.generated.c",
+    sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/time_compat.c",
+               ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/gl_presenter.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system")],
                hui / "src/core/input.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]
-    includes = [hui / "src", ROOT / "native/shared", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
+    includes = [hui / "src", ROOT / "native/shared", ROOT / "native/ps5", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
                 er / "backends/software", quickjs]
     objects = []
     for i, source in enumerate(sources):

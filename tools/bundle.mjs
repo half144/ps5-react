@@ -128,7 +128,8 @@ await build({
   define: {'process.env.NODE_ENV': '"production"'},
   legalComments: 'none',
   logLevel: 'info',
-});
+  // esbuild has already printed each error with its source location; skip Node's stack trace.
+}).catch(() => process.exit(1));
 
 console.log(`Bundled demo "${demo}" -> dist/app.bundle.js`);
 

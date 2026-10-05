@@ -6,6 +6,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,6 +14,21 @@ import sys
 import time
 
 from common import ROOT, app_config, bundle, dependency, run
+
+
+def sandbox(name):
+    """Desktop stand-in for the console mounts that fs paths resolve against."""
+    root = ROOT / ".build" / name / "sandbox"
+    for mount in ("download0", "temp0"):
+        (root / mount).mkdir(parents=True, exist_ok=True)
+    app0, app = root / "app0", ROOT / "apps" / name
+    if app0.is_symlink() and app0.resolve() != app.resolve(): app0.unlink()
+    if not app0.is_symlink(): app0.symlink_to(app)
+    return root
+
+
+def preview_env(name):
+    return {**os.environ, "PS5_REACT_SANDBOX": str(sandbox(name))}
 
 
 def desktop(name, test=False):
@@ -77,7 +93,7 @@ def stop_preview(process):
 
 
 def watch(name, command, directory):
-    process = subprocess.Popen([str(x) for x in command], cwd=directory)
+    process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(name))
     stamp = source_stamp(name)
     print("Watching JSX/assets/config. Save to rebuild; Esc closes; Ctrl+C stops.", flush=True)
     try:
@@ -99,7 +115,7 @@ def watch(name, command, directory):
                 with open(ROOT / ".build/build.lock", "w") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
                     command, directory = desktop(name)
-                process = subprocess.Popen([str(x) for x in command], cwd=directory)
+                process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(name))
                 print("Preview restarted.", flush=True)
             except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
                 print(f"{error}\nFix the source and save to retry.", flush=True)
@@ -107,20 +123,25 @@ def watch(name, command, directory):
         stop_preview(process)
 
 
-def create(name, title):
+def create(name, title, display=None):
     destination = ROOT / "apps" / name
     if destination.exists(): raise ValueError(f"App already exists: {destination}")
+    display = display or name.replace("-", " ").title()
     # Validate identity before touching the new app directory.
     config = json.loads((ROOT / "apps/starter/app.json").read_text())
-    config.update(titleId=title, contentId=f"UP9000-{title}_00-PS5REACTSTARTER1", name=name)
+    suffix = (re.sub(r"[^A-Z0-9]", "", name.upper()) + "0" * 16)[:16]
+    config.update(titleId=title, contentId=f"UP9000-{title}_00-{suffix}", name=display, timeoutSeconds=0)
     app_config(name, config)
     stage = ROOT / ".build" / ("create-" + name)
     if stage.exists(): raise ValueError(f"Staging directory exists: {stage}")
-    shutil.copytree(ROOT / "apps/starter", stage)
+    # Starter assets and theme, but a clean entry point instead of the starter's test hooks.
+    shutil.copytree(ROOT / "apps/starter", stage, ignore=shutil.ignore_patterns(".*", "index.jsx"))
     (stage / "app.json").write_text(json.dumps(config, indent=2) + "\n")
+    template = (ROOT / "tools/templates/index.jsx").read_text()
+    (stage / "index.jsx").write_text(template.replace("__TITLE__", display).replace("__NAME__", name))
     destination.parent.mkdir(exist_ok=True)
     stage.rename(destination)
-    print(f"Created {destination}\nNext: npm run preview -- --app {name}")
+    print(f"Created {destination}\nNext: npm run dev -- --app {name}")
 
 
 def main():
@@ -129,6 +150,7 @@ def main():
     parser.add_argument("--app", default="starter")
     parser.add_argument("--name", help="new app folder name")
     parser.add_argument("--title-id", help="unique PPSAxxxxx ID for a new app")
+    parser.add_argument("--title", help="display name of a new app (default: from --name)")
     parser.add_argument("--sdk", type=Path, help="use an existing public PS5 payload SDK")
     parser.add_argument("--watch", action="store_true", help="rebuild/restart desktop preview when sources change")
     args = parser.parse_args()
@@ -136,7 +158,6 @@ def main():
     if args.command == "create":
         if not args.name or not args.title_id: raise ValueError("Use npm run create -- --name my-app --title-id PPSA99054")
         # Prevent traversals before creating directories.
-        import re
         if not re.fullmatch(r"[a-z][a-z0-9-]*", args.name): raise ValueError("name must use lowercase letters/numbers/hyphens")
     else:
         app_config(args.app)  # Fast actionable config errors before downloads/builds.
@@ -147,7 +168,7 @@ def main():
         print("Waiting for build lock…", flush=True)
         fcntl.flock(lock, fcntl.LOCK_EX)
         if args.command == "create":
-            return create(args.name, args.title_id)
+            return create(args.name, args.title_id, args.title)
         if args.command == "build":
             cmd = ["python3", ROOT / "tools/build_ps5.py", "--app", args.app]
             sdk = args.sdk or os.environ.get("PS5_PAYLOAD_SDK")
@@ -159,7 +180,7 @@ def main():
         if args.watch and args.command == "preview":
             watch(args.app, command, directory)
         else:
-            run(command, cwd=directory)
+            run(command, cwd=directory, env=preview_env(args.app))
 
 
 if __name__ == "__main__":
