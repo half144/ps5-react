@@ -115,3 +115,11 @@ test('a list longer than its span re-centres the represented rows near an edge o
   assert.equal(rebase(40, [80, 89], 123, 50, 2), 59);
   assert.equal(rebase(73, [118, 123], 123, 50, 2), 73);
 });
+
+test('rows the scroll passes on its way to the target stay required', () => {
+  const base = {rows: 50, stride: 100, top: 0, viewport: 300, focusedRow: -1, direction: 1, ahead: 2, behind: 1};
+  assert.deepEqual(windowRows({...base, scroll: 1000}).required, [10, 13]);
+  // Held Down: the target ran ahead of a scroll still at 400.
+  assert.deepEqual(windowRows({...base, scroll: 1000, from: 400}).required, [4, 13]);
+  assert.deepEqual(windowRows({...base, scroll: 400, from: 1000}).required, [4, 13]);
+});
