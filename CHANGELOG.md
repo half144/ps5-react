@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix a translated element leaving its children behind: a `y` or `x`
+  translate without scale or rotation moved only the element's own paint, so a
+  header slid past the top edge stayed frozen on screen as its items, and a
+  partial lift left a ghost strip. An engine patch moves the subtree and
+  repaints the area it leaves. Sliding a bar off screen no longer needs a fade.
+
 - Entering a `ScrollView` from outside it with the D-pad reaches only elements
   it shows at least in part: Right from the last header item no longer jumps
   to a card scrolled out of a rail. Moves inside a scroll view are unchanged.
