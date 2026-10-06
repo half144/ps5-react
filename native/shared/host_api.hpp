@@ -129,5 +129,7 @@ void vibrate(float strength, float seconds);
 JSValue ps5_react_network_api(JSContext* ctx);
 // ABI v3: remote images fetched and decoded off-thread, registered with the engine on poll.
 JSValue ps5_react_image_api(JSContext* ctx);
+// Starts the image workers (after network::start) with the disk cache in the app's data directory.
+bool ps5_react_start_images();
 // Unregisters every remote image from the engine, then stops the image workers and frees them.
 void ps5_react_stop_images();

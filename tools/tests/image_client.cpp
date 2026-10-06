@@ -42,7 +42,7 @@ std::uint32_t load(const std::string& url, int w, int h, int fit, images::Result
 } // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 3 || !network::start() || !images::start()) return 3;
+  if (argc < 3 || !network::start() || !images::start(std::getenv("IMAGE_CACHE") ? std::getenv("IMAGE_CACHE") : "")) return 3;
   const std::string mode = argv[1], url = argv[2];
   images::Result now;
   if (mode == "load" && argc >= 7) {

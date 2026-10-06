@@ -354,8 +354,9 @@ The preview replays a scripted input sequence when `PS5_REACT_INPUT_SCRIPT` is
 set, through the same dispatch path as the keyboard and controller. Steps are
 separated by commas or whitespace: an action (`up`, `down`, `left`, `right`, `confirm`, `back`)
 takes one frame, `action*N` repeats it at the held-key repeat interval
-(110 ms), `wait:MS` pauses for wall-clock milliseconds, and `quit` closes the
-preview. `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
+(110 ms), `wait:MS` pauses for wall-clock milliseconds, `quit` closes the
+preview, and `shot:NAME` saves the frame on screen (letters, digits, `_`
+and `-`; see [Screenshots](#screenshots)). `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
 action is echoed as a `script:` line, so the log reads as a timeline. Run the
 preview binary directly to set them:
 
@@ -381,6 +382,30 @@ present at launch are skipped). Writing the file with a new number, for example
 the current time in milliseconds, runs its steps once; each line is echoed as a
 `command:` line in the kernel log. The host polls only when the app folder has a
 `dev` directory, which a build never creates.
+
+#### Screenshots
+
+`shot:NAME` in a script or a live command saves the frame currently on screen,
+at half resolution (960 × 540 for a 1080p render), as a 24-bit `NAME.bmp`. It
+reads the software framebuffer between frames, so it shows exactly what was
+presented; writing the file takes that frame about 100 ms on the PS5, so leave
+a `wait` around shots inside a measured sequence. On the PS5 the file goes to
+the title's `dev/` folder (`/data/homebrew/<titleId>/dev/NAME.bmp`); the preview
+writes it to `.build/<app>/sandbox/temp0/`. Each shot logs a `shot <path>: saved`
+line. Without a `dev` folder no script or command runs, so a build pays nothing.
+
+With the PS5Upload desktop app running, fetch shots and convert them to PNG:
+
+```sh
+PS5_ADDR=<console IP> python3 tools/ps5_shots.py PPSA99058 shots/ start game-page
+```
+
+Without names it fetches every `.bmp` in `dev/`. The script only reads; it
+calls PS5Upload's local `/api/transfer/download` (`kind: "file"`), the same as
+downloading `dev/NAME.bmp` by hand.
+
+Elevated titles (`filesystemAccess: "console"`) see `/app0` only as a logical
+path; the host resolves `dev/` files through the same mapping as the native API.
 
 ## Design guidelines
 

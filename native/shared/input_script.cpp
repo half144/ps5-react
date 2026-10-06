@@ -30,7 +30,17 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
         std::snprintf(error, size, "bad wait '%s'", token.c_str());
         return false;
       }
-      steps_.push_back({nullptr, static_cast<std::uint32_t>(ms)});
+      steps_.push_back({"", static_cast<std::uint32_t>(ms)});
+      continue;
+    }
+    if (token.rfind("shot:", 0) == 0) {
+      const std::string name = token.substr(5);
+      if (name.empty() || name.size() > 32 || name.find_first_not_of(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos) {
+        std::snprintf(error, size, "bad shot '%s' (shot:NAME, 1-32 letters, digits, _ or -)", token.c_str());
+        return false;
+      }
+      steps_.push_back({token, 0});
       continue;
     }
     long count = 1;
@@ -46,12 +56,12 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
     for (const char* known : kActions)
       if (token == known) action = known;
     if (!action) {
-      std::snprintf(error, size, "unknown action '%s' (use up, down, left, right, confirm, back, quit, wait:MS)",
+      std::snprintf(error, size, "unknown action '%s' (use up, down, left, right, confirm, back, quit, wait:MS, shot:NAME)",
                     token.c_str());
       return false;
     }
     for (long i = 0; i < count; ++i) {
-      if (i) steps_.push_back({nullptr, kRepeatMs});
+      if (i) steps_.push_back({"", kRepeatMs});
       steps_.push_back({action, 0});
     }
   }
@@ -61,12 +71,12 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
 const char* InputScript::next(std::uint64_t now_ms) {
   while (index_ < steps_.size() && now_ms >= resume_) {
     const Step& step = steps_[index_++];
-    if (!step.action) {
+    if (step.action.empty()) {
       resume_ = now_ms + step.wait_ms;
       continue;
     }
     resume_ = now_ms + 1; // One action per frame.
-    return step.action;
+    return step.action.c_str();
   }
   return nullptr;
 }

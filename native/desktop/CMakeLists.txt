@@ -16,7 +16,7 @@ foreach(SDL_INCLUDE IN LISTS SDL_INCLUDES)
 endforeach()
 # Same engine options on desktop and PS5, rather than the upstream demo's profile.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ps5" runtime)
-add_executable(ps5-react-preview host.cpp host_platform.cpp network_platform.cpp ../shared/network.cpp ../shared/network_api.cpp ../shared/image_loader.cpp ../shared/image_api.cpp ../shared/host_api.cpp ../shared/gl_presenter.cpp ../shared/frame_stats.cpp ../shared/damage_tracker.cpp ../shared/input_script.cpp "${APP_GENERATED}/assets.generated.c")
+add_executable(ps5-react-preview host.cpp host_platform.cpp network_platform.cpp ../shared/network.cpp ../shared/network_api.cpp ../shared/image_loader.cpp ../shared/image_api.cpp ../shared/host_api.cpp ../shared/gl_presenter.cpp ../shared/frame_stats.cpp ../shared/damage_tracker.cpp ../shared/input_script.cpp ../shared/screenshot.cpp "${APP_GENERATED}/assets.generated.c")
 target_compile_features(ps5-react-preview PRIVATE cxx_std_20)
 target_compile_options(ps5-react-preview PRIVATE -Wall -Wextra -Werror)
 target_include_directories(ps5-react-preview PRIVATE ../shared "${APP_GENERATED}" "${STB_IMAGE_DIR}")

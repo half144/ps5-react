@@ -15,7 +15,15 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <cerrno>
+#include <cstring>
+#include <ctime>
+#include <sys/time.h>
 #include <deque>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <memory>
 #include <mutex>
 #include <pthread.h>
@@ -188,6 +196,113 @@ void decode(Entry& entry) {
   stbi_image_free(source);
 }
 
+// Encoded responses kept on disk between launches, keyed by a hash of the URL. Each file holds a
+// header (magic, fetch time, URL) and the body; the fetch thread alone touches the directory.
+class DiskCache {
+public:
+  void open(const std::string& directory) {
+    directory_ = directory;
+    if (directory_.empty() || !make_directories(directory_)) { directory_.clear(); return; }
+    files_.clear(); total_ = 0;
+    if (DIR* dir = opendir(directory_.c_str())) {
+      while (dirent* item = readdir(dir)) {
+        struct stat info;
+        if (item->d_name[0] == '.' || stat(path(item->d_name).c_str(), &info) != 0 || !S_ISREG(info.st_mode)) continue;
+        files_.push_back({item->d_name, static_cast<std::size_t>(info.st_size), static_cast<std::int64_t>(info.st_mtime)});
+        total_ += static_cast<std::size_t>(info.st_size);
+      }
+      closedir(dir);
+    }
+    trim();
+  }
+
+  std::shared_ptr<const std::string> read(const std::string& url) {
+    if (directory_.empty()) return nullptr;
+    const std::string name = key(url);
+    File* file = find(name);
+    if (!file) return nullptr;
+    const int fd = ::open(path(name).c_str(), O_RDONLY);
+    std::string bytes(file->size, '\0');
+    const bool whole = fd >= 0 && ::read(fd, bytes.data(), bytes.size()) == static_cast<ssize_t>(bytes.size());
+    if (fd >= 0) close(fd);
+    Header header{};
+    if (!whole || bytes.size() < sizeof header) return nullptr;
+    std::memcpy(&header, bytes.data(), sizeof header);
+    const std::size_t start = sizeof header + header.url_size;
+    if (std::memcmp(header.magic, kMagic, sizeof header.magic) || start > bytes.size() ||
+        bytes.compare(sizeof header, header.url_size, url) || std::time(nullptr) - header.fetched > kMaxAgeSeconds) {
+      remove(name);
+      return nullptr;
+    }
+    file->used = std::time(nullptr);
+    utimes(path(name).c_str(), nullptr);
+    return std::make_shared<const std::string>(bytes.substr(start));
+  }
+
+  void write(const std::string& url, const std::string& body) {
+    if (directory_.empty() || body.size() > kDiskCacheBytes / 4) return;
+    const std::string name = key(url), temporary = path(name + ".tmp");
+    Header header{};
+    std::memcpy(header.magic, kMagic, sizeof header.magic);
+    header.fetched = std::time(nullptr);
+    header.url_size = static_cast<std::uint32_t>(url.size());
+    const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    const bool ok = ::write(fd, &header, sizeof header) == static_cast<ssize_t>(sizeof header) &&
+      ::write(fd, url.data(), url.size()) == static_cast<ssize_t>(url.size()) &&
+      ::write(fd, body.data(), body.size()) == static_cast<ssize_t>(body.size());
+    if (close(fd) != 0 || !ok || rename(temporary.c_str(), path(name).c_str()) != 0) { unlink(temporary.c_str()); return; }
+    const std::size_t size = sizeof header + url.size() + body.size();
+    if (File* old = find(name)) { total_ -= old->size; old->size = size; old->used = header.fetched; }
+    else files_.push_back({name, size, header.fetched});
+    total_ += size;
+    trim();
+  }
+
+private:
+  static constexpr char kMagic[8] = {'P', '5', 'R', 'I', 'M', 'G', '0', '1'};
+  static constexpr std::int64_t kMaxAgeSeconds = 7 * 24 * 3600;
+  struct Header { char magic[8]; std::int64_t fetched; std::uint32_t url_size, reserved; };
+  struct File { std::string name; std::size_t size; std::int64_t used; };
+
+  static std::string key(const std::string& url) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char c : url) hash = (hash ^ c) * 1099511628211ULL;
+    char text[17];
+    std::snprintf(text, sizeof text, "%016llx", static_cast<unsigned long long>(hash));
+    return text;
+  }
+  static bool make_directories(const std::string& directory) {
+    for (std::size_t at = 1; at != std::string::npos;) {
+      at = directory.find('/', at + 1);
+      const std::string part = directory.substr(0, at);
+      if (mkdir(part.c_str(), 0700) != 0 && errno != EEXIST) return false;
+    }
+    return true;
+  }
+  std::string path(const std::string& name) const { return directory_ + "/" + name; }
+  File* find(const std::string& name) {
+    for (File& file : files_) if (file.name == name) return &file;
+    return nullptr;
+  }
+  void remove(const std::string& name) {
+    unlink(path(name).c_str());
+    for (auto it = files_.begin(); it != files_.end(); ++it)
+      if (it->name == name) { total_ -= it->size; files_.erase(it); return; }
+  }
+  // Least recently used files go first once the directory is over its cap.
+  void trim() {
+    while (total_ > kDiskCacheBytes && !files_.empty()) {
+      auto oldest = std::min_element(files_.begin(), files_.end(), [](const File& a, const File& b) { return a.used < b.used; });
+      remove(std::string(oldest->name));
+    }
+  }
+
+  std::string directory_;
+  std::vector<File> files_;
+  std::size_t total_ = 0;
+};
+
 bool spawn(pthread_t& thread, void* (*body)(void*), void* data) {
   pthread_attr_t attributes;
   if (pthread_attr_init(&attributes) != 0) return false;
@@ -199,8 +314,9 @@ bool spawn(pthread_t& thread, void* (*body)(void*), void* data) {
 
 class Service {
 public:
-  bool start() {
+  bool start(const std::string& cache_directory) {
     if (running_) return true;
+    cache_directory_ = cache_directory;
     stopping_ = false;
     multi_ = curl_multi_init();
     if (!multi_) return false;
@@ -370,6 +486,11 @@ private:
   // Fetch thread: serves the entry from cached bytes, joins a transfer of its URL, or starts one.
   void start_fetch(EntryPtr entry, unsigned& active) {
     if (auto body = cached(entry->url)) { decode_later({std::move(entry)}, body); return; }
+    if (auto body = disk_.read(entry->url)) {
+      remember(entry->url, body);
+      decode_later({std::move(entry)}, body);
+      return;
+    }
     for (Transfer& t : transfers_) if (!t.entries.empty() && t.url == entry->url) { t.entries.push_back(std::move(entry)); return; }
     Transfer* t = nullptr;
     for (Transfer& candidate : transfers_) if (candidate.entries.empty()) { t = &candidate; break; }
@@ -404,6 +525,7 @@ private:
     if (reason.empty()) {
       auto body = std::make_shared<const std::string>(std::move(t.body));
       remember(t.url, body);
+      disk_.write(t.url, *body);
       decode_later(std::move(entries), body);
     } else {
       std::lock_guard lock(mutex_);
@@ -421,6 +543,7 @@ private:
   }
 
   void fetch_loop() {
+    disk_.open(cache_directory_);
     unsigned active = 0;
     while (true) {
       std::vector<EntryPtr> starting;
@@ -475,10 +598,12 @@ private:
   std::vector<EntryPtr> finished_;
   std::array<Transfer, kConnections> transfers_{};
   // Fetch thread only.
+  DiskCache disk_;
   std::vector<Encoded> encoded_;
   std::uint64_t fetch_clock_ = 0;
   CURLM* multi_ = nullptr;
   pthread_t fetch_thread_{}, decode_thread_{};
+  std::string cache_directory_;
   bool stopping_ = false, running_ = false, fetch_started_ = false, decode_started_ = false, over_budget_ = false;
   // Render thread only.
   std::unordered_map<std::string, EntryPtr> by_key_;
@@ -489,7 +614,7 @@ private:
 Service service;
 } // namespace
 
-bool start() { return service.start(); }
+bool start(const std::string& cache_directory) { return service.start(cache_directory); }
 void stop(void (*evict)(std::uint32_t)) { service.stop(evict); }
 void discard(std::uint32_t id, const std::string& reason) { service.discard(id, reason); }
 std::uint32_t load(const std::string& url, int width, int height, Fit fit, Result& result, std::string& error) {
@@ -500,7 +625,7 @@ std::vector<Result> poll(void (*evict)(std::uint32_t)) { return service.poll(evi
 } // namespace images
 #else
 namespace images {
-bool start() { return false; }
+bool start(const std::string&) { return false; }
 void stop(void (*)(std::uint32_t)) {}
 void discard(std::uint32_t, const std::string&) {}
 std::uint32_t load(const std::string& url, int, int, Fit, Result&, std::string& error) {

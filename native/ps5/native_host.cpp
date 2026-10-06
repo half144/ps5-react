@@ -3,7 +3,6 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // Independent React proof: PS5 lifecycle/display/input, software UI and GL texture.
 
-#include "image_loader.hpp"
 #include "network.hpp"
 #include "app_config.hpp"
 #include "async_log.hpp"
@@ -17,8 +16,10 @@
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "input_script.hpp"
+#include "screenshot.hpp"
 #include "filesystem_access.hpp"
 #include <algorithm>
+#include <cerrno>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
@@ -200,7 +201,7 @@ bool run_proof() {
     host_platform_set_pad(&pad);
   }
   if (ok) {
-    if (network::start()) images::start();
+    if (network::start()) ps5_react_start_images();
     ErRuntimeConfig config = {};
     config.screen_width = width; config.screen_height = height;
     config.screen_scale = 2;
@@ -251,7 +252,12 @@ bool run_proof() {
       if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
         async_log::write("[PS5-REACT] script: %s", action);
         if (!std::strcmp(action, "quit")) break;
-        ok = dispatch(action);
+        if (!std::strncmp(action, "shot:", 5)) {
+          const std::string path = dev_path((std::string(action + 5) + ".bmp").c_str());
+          async_log::write("[PS5-REACT] shot %s: %s", path.c_str(), save_screenshot(path.c_str()) ? "saved" : std::strerror(errno));
+        } else {
+          ok = dispatch(action);
+        }
       }
       if (!ok) break;
       stats.lap(FrameStats::input, hui::sys::monotonic_us());

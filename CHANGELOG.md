@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add the `shot:NAME` script step: test deploys save the frame on screen as
+  `dev/NAME.bmp` (preview: the sandbox's `temp0/`), and `tools/ps5_shots.py`
+  fetches them through PS5Upload as PNG. See docs/ANIMATION.md.
+
 - Load `<Image source={{uri}}>` from http(s) URLs: native fetch and stb_image
   decode on two workers, resampled to the drawn size (cover/contain/stretch,
   never enlarged) as premultiplied ARGB, a 32 MiB LRU decoded cache, an 8 MiB
