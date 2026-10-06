@@ -210,6 +210,7 @@ bool run_proof() {
   }
   if (ok) {
     if (network::start()) ps5_react_start_images();
+    async_log::write("[PS5-REACT] sound=%d", ps5_react_start_sound());
     ErRuntimeConfig config = {};
     config.screen_width = width; config.screen_height = height;
     config.screen_scale = 2;
@@ -312,6 +313,7 @@ bool run_proof() {
   ps5_react_stop_images();
   network::stop();
   if (runtime) er_runtime_shutdown();
+  ps5_react_stop_sound();
   if (software) er_software_backend_destroy();
   host_platform_set_pad(nullptr);
   pad.close();

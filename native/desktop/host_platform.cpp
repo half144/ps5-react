@@ -4,6 +4,7 @@
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "storage_stats.hpp"
+#include "audio/mixer.hpp"
 
 #include <dirent.h>
 #include <mach/mach.h>
@@ -154,5 +155,39 @@ void vibrate(float strength, float seconds) {
   const auto level = static_cast<Uint16>(strength * 0xffff);
   if (!controller || SDL_GameControllerRumble(controller, level, level, static_cast<Uint32>(seconds * 1000)) != 0)
     std::printf("[pad] vibrate %.2f for %.2fs (no controller rumble)\n", strength, seconds);
+}
+} // namespace host
+
+namespace {
+SDL_AudioDeviceID audio_device = 0;
+
+void render_audio(void* mixer, Uint8* stream, int bytes) {
+  static_cast<hui::audio::Mixer*>(mixer)->render(reinterpret_cast<std::int16_t*>(stream), bytes / 4);
+}
+}
+
+namespace host {
+// SDL_AUDIODRIVER=dummy keeps the preview silent (the self-test sets it).
+bool start_audio(hui::audio::Mixer& mixer) {
+  SDL_AudioSpec want = {};
+  want.freq = hui::audio::kSampleRate;
+  want.format = AUDIO_S16SYS;
+  want.channels = 2;
+  want.samples = 256;
+  want.callback = render_audio;
+  want.userdata = &mixer;
+  if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0 ||
+      !(audio_device = SDL_OpenAudioDevice(nullptr, 0, &want, nullptr, 0))) {
+    std::printf("[sound] no audio output: %s\n", SDL_GetError());
+    return false;
+  }
+  SDL_PauseAudioDevice(audio_device, 0);
+  return true;
+}
+
+void stop_audio() {
+  SDL_CloseAudioDevice(audio_device);
+  audio_device = 0;
+  SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 } // namespace host

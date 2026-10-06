@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add `Sound` (native ABI v4): import a 16-bit PCM WAV and the build bakes it
+  into the app; `Sound.play(name, {volume, pan})` posts it to the
+  ps5-homebrew-ui mixer, which renders on an audio thread (PS5: sceAudioOut;
+  desktop: SDL), one voice per sound so a held D-pad does not stack ticks.
+  `Sound.setVolume` sets the master volume. Add `useNavigationEvents`, which
+  reports each focus move, blocked direction, press, back and button action
+  with whether something handled it; `FocusManager.move` and `press` now
+  return those outcomes. The starter and `npm run create` apps play a
+  synthesized PS5-style set (`tools/ui_sounds.mjs`, no third-party audio)
+  through `sounds.js`. Not yet validated on hardware. See docs/NATIVE-API.md.
+
 - Add `scrollAnchor` on `View` and `Pressable`: a vertical `ScrollView` aligns
   the top of the focused element's nearest anchor (a section with its title,
   the hero) past the margin instead of revealing only the element, falling back

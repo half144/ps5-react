@@ -36,8 +36,9 @@ def desktop(app, test=False):
     _, _, generated = bundle(app, er)
     build = ROOT / ".build" / app.name / "desktop"
     quickjs = dependency("quickjsSource")
+    hui = dependency("platform")
     run(["cmake", "-S", ROOT / "native/desktop", "-B", build,
-         f"-DER_ROOT={er}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", "-DCMAKE_BUILD_TYPE=Release"],
+         f"-DER_ROOT={er}", f"-DHUI_ROOT={hui}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", "-DCMAKE_BUILD_TYPE=Release"],
         log=build / "configure.log")
     run(["cmake", "--build", build, "--target", "ps5-react-preview", "-j", "6"], log=build / "build.log")
     command = [build / "ps5-react-preview", generated / "app.bundle.js"]

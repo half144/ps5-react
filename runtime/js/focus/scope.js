@@ -1,8 +1,8 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-import {createElement, useCallback, useContext, useLayoutEffect, useState} from 'react';
-import {manager, ScopeContext} from './runtime.js';
+import {createElement, useCallback, useContext, useLayoutEffect, useRef, useState} from 'react';
+import {manager, navigationListeners, ScopeContext} from './runtime.js';
 
 /**
  * Groups focusable elements: navigation searches the innermost scope first, then its parents.
@@ -36,4 +36,20 @@ export function useFocus() {
   const focus = useCallback(target => manager.focus(target), []);
   const blur = useCallback(() => manager.blur(), []);
   return {focusedKey: key, focus, blur};
+}
+
+/**
+ * Calls `listener` after the focus manager handles each input: a move or a blocked direction, Cross,
+ * Circle and the other buttons, with whether something handled them. For feedback such as sounds;
+ * it does not re-render the caller.
+ * @param {(event: import('./runtime.js').NavigationEvent) => void} listener
+ */
+export function useNavigationEvents(listener) {
+  const current = useRef(listener);
+  useLayoutEffect(() => { current.current = listener; });
+  useLayoutEffect(() => {
+    const forward = event => current.current(event);
+    navigationListeners.add(forward);
+    return () => { navigationListeners.delete(forward); };
+  }, []);
 }

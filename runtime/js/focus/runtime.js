@@ -18,13 +18,29 @@ export const NodeContext = createContext(null);
 /** @type {import('react').Context<import('./manager.js').Anchor | null>} the nearest `scrollAnchor` ancestor */
 export const AnchorContext = createContext(null);
 
+/**
+ * @typedef {{type: 'move' | 'blocked', direction: import('./geometry.js').Direction}
+ *   | {type: 'press' | 'back', handled: boolean}
+ *   | {type: 'action', action: import('./manager.js').Action, handled: boolean}} NavigationEvent
+ *   `blocked`: nothing to move to. `press`: handled when an enabled element with onPress took Cross.
+ */
+/** @type {Set<(event: NavigationEvent) => void>} */
+export const navigationListeners = new Set();
+
+/** @param {NavigationEvent} event */
+function emit(event) {
+  for (const listener of navigationListeners) listener(event);
+}
+
 subscribeInput(action => {
-  if (action === 'confirm') manager.press();
-  else if (action === 'back') {
-    if (!manager.back()) dispatchBackPress();
+  if (action === 'confirm') {
+    const handled = manager.press();
+    if (handled !== null) emit({type: 'press', handled});
+  } else if (action === 'back') {
+    emit({type: 'back', handled: manager.back() || dispatchBackPress()});
   } else if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
-    manager.move(action);
+    emit({type: manager.move(action) ? 'move' : 'blocked', direction: action});
   } else {
-    manager.action(action);
+    emit({type: 'action', action, handled: manager.action(action)});
   }
 });

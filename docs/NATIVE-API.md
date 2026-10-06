@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v3) is
+each host installs before the bundle runs. Its exact shape (ABI v4) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -203,6 +203,46 @@ receives the raw `up`, `down`, `left`, `right`, `confirm`, and `back` actions
 (plus `previous`/`next` for compatibility); `useGamepad` is for raw analog and
 button state. Options is still reserved for the host's exit action.
 
+## Sound
+
+Short interface sounds: focus ticks, confirm, back, errors, notifications.
+Import a WAV like an image; the build bakes it into the app and the import is
+the sound's name:
+
+```jsx
+import {Sound, useNavigationEvents} from '@ps5-react/core';
+import tick from './assets/sounds/focus.wav';
+
+useNavigationEvents(event => { if (event.type === 'move') Sound.play(tick); });
+```
+
+| Function | Notes |
+| --- | --- |
+| `Sound.play(name, {volume = 1, pan = 0})` | Returns `true` when the sound started; `volume` 0–1, `pan` -1 (left) to 1 (right) |
+| `Sound.setVolume(volume)` | Master volume 0–1 for every sound (0 mutes) |
+
+- **Format.** 16-bit PCM WAV, mono or stereo, 8–96 kHz, at most 10 seconds;
+  other files fail the build with the file name. Keep sounds short: they stay
+  decoded in memory (8 bytes per frame). An app that imports no WAV opens no
+  audio output.
+- **One voice per sound.** While a sound still plays, playing it again is
+  skipped and returns `false`, so a held D-pad keeps ticking without stacking.
+  Different sounds overlap.
+- **Cheap and non-blocking.** `play` posts a command to a lock-free queue and
+  returns; mixing runs on an audio thread (the ps5-homebrew-ui mixer: 32 voices,
+  48 kHz stereo, a soft limiter). It returns `false` when there is no audio
+  output. An unknown name throws `sound.play <name>: no imported .wav has this
+  name`.
+- **Feedback for navigation.** `useNavigationEvents` ([NAVIGATION.md](NAVIGATION.md#navigation-events))
+  reports each move, blocked direction, press, back and button action, so one
+  hook at the root gives every screen its sounds.
+
+`apps/starter/sounds.js` wires the framework's sound set (`focus`, `confirm`,
+`back`, `error`, `page`, `notify`) this way, and `npm run create` copies it.
+`node tools/ui_sounds.mjs <directory>` regenerates that set: every sound is
+synthesized from sine partials and seeded noise, so it carries no third-party
+audio.
+
 ## Linking
 
 `Linking.openURL(url)` opens an `http://` or `https://` URL in the system
@@ -228,6 +268,8 @@ exactly like pressing Options (React Native's name for the same call).
 - With an SDL game controller connected, the light bar and rumble use it;
   otherwise the calls print a `[pad]` line. Without a controller, `getState()`
   reports `connected: false` and neutral values.
+- Sounds play through SDL's default output. `SDL_AUDIODRIVER=dummy` keeps the
+  preview silent; the self-test sets it.
 
 ## Hardware status
 
@@ -289,6 +331,6 @@ directory or select **Refresh** to query again; focus changes do not query stora
 ## Not yet available
 
 - Global `fetch`, raw sockets and WebSocket.
-- Audio playback.
+- Music, streamed or long audio, and decoding compressed formats at run time.
 - The system on-screen keyboard (IME) for text input.
 - System save data; use `FileSystem.dataDir` for now.

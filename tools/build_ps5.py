@@ -132,10 +132,11 @@ def main():
                ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/network.cpp",
                ROOT / "native/shared/network_api.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
+               ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
                ROOT / "native/shared/gl_presenter.cpp",
                ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", generated / "assets.generated.c",
-               bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system")],
-               hui / "src/core/input.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
+               bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system", "audio_out")],
+               hui / "src/core/input.cpp", hui / "src/audio/mixer.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]
     includes = [hui / "src", ROOT / "native/shared", ROOT / "native/ps5", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
                 er / "backends/software", quickjs, stb_image()]

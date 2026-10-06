@@ -110,6 +110,7 @@ struct Host {
     ps5_react_stop_images();
     network::stop();
     if (runtime_started) er_runtime_shutdown();
+    ps5_react_stop_sound();
     if (backend_started) er_software_backend_destroy();
     presenter.release(); // GL objects must be deleted before their context.
     desktop_set_controller(nullptr);
@@ -146,6 +147,7 @@ struct Host {
     backend_started = er_software_backend_init(width, height);
     if (!backend_started || !damage_tracker_install(width, height)) return false;
     if (network::start()) ps5_react_start_images();
+    ps5_react_start_sound();
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;
@@ -446,6 +448,11 @@ bool storage_test() {
       try { invalid(); return false; }
       catch (error) { if (!error.message.includes("network.")) return false; }
     }
+    // The starter imports these WAVs; a second play while the first still sounds is skipped.
+    const sound = globalThis.__ps5ReactNative.sound;
+    if (sound.play('focus', 0, 0) !== true || sound.play('focus', 0, 0) !== false) return false;
+    try { sound.play('missing', 1, 0); return false; }
+    catch (error) { if (!error.message.includes('sound.play missing')) return false; }
     const fs = globalThis.__ps5ReactNative.fs;
     const testName = `listing-test-${Date.now()}.txt`;
     const testPath = `/download0/${testName}`;
@@ -486,7 +493,7 @@ bool storage_test() {
     JS_FreeValue(ctx, error);
   }
   JS_FreeValue(ctx, result);
-  if (ok) std::puts("PASS: bounded PS5 directory records, mount deduplication, storage bytes and desktop native bindings.");
+  if (ok) std::puts("PASS: bounded PS5 directory records, mount deduplication, storage bytes, sounds and desktop native bindings.");
   return ok;
 }
 
@@ -520,6 +527,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   const bool testing = argc > 2 && !std::strcmp(argv[2], "--self-test");
+  if (testing) SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
   Host host;
   host.log_frames = !testing;
   bool ok = host.start();

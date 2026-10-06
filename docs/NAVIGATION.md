@@ -165,10 +165,30 @@ elements keep their last rectangles and would otherwise remain reachable.
   innermost first, until one returns `true`; then listeners (last added first).
   Unconsumed Circle does nothing. `BackHandler.exitApp()` is unchanged.
 - `useController(handler)` keeps receiving every action (raw input for games).
+- `useNavigationEvents(listener)` reports what the focus manager did with each
+  input; see [Navigation events](#navigation-events).
 
 `useFocus()` re-renders its component whenever the focused key changes; call it
 in the component that needs `focusedKey`, not in every list item. `focus(key)`
 returns whether something took focus, so it can be returned from `onBack`.
+
+## Navigation events
+
+`useNavigationEvents(listener)` calls `listener` after the focus manager has
+handled each input, for feedback such as sounds ([NATIVE-API.md](NATIVE-API.md#sound)).
+It never re-renders its component, so call it once near the root.
+
+| Event | When |
+| --- | --- |
+| `{type: 'move', direction}` | Focus moved (spatially, through `nextFocus*`, or onto the first element when nothing had focus) |
+| `{type: 'blocked', direction}` | Nothing to move to: an edge, a trap, or no focusable element |
+| `{type: 'press', handled}` | Cross on the focused element; `handled` when it is enabled and has `onPress` (no event without focus) |
+| `{type: 'back', handled}` | Circle; `handled` when an `onBack` or `BackHandler` listener consumed it |
+| `{type: 'action', action, handled}` | L1, R1, L2, R2, Triangle or Square; `handled` when an `onAction` returned `true` |
+
+Held directions repeat, so `move` arrives on every repeat. `FocusManager.move`
+and `press` report the same outcomes (`true`/`false`, `null` for a press
+without focus) to code that drives the manager directly.
 
 ## ScrollView
 

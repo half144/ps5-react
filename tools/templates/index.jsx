@@ -1,11 +1,13 @@
 import {useState} from 'react';
 import {AppRegistry, View, Text, FocusScope} from '@ps5-react/core';
+import {useInterfaceSounds} from './sounds.js';
 
 const items = ['Play', 'Settings', 'About'];
 const label = 'font-inter text-body text-white';
 
 function App() {
   const [selected, setSelected] = useState(null);
+  useInterfaceSounds();
   const clear = () => {
     setSelected(null);
     return true;

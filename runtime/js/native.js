@@ -139,6 +139,22 @@ export function useGamepad(intervalMs = 16) {
   return state;
 }
 
+/**
+ * Short interface sounds. Import a 16-bit PCM WAV (`import tick from './tick.wav'`) and the build
+ * bakes it into the app; the import is the sound's name. Mixing runs on an audio thread.
+ */
+export const Sound = {
+  /**
+   * Starts a sound and returns at once. A sound plays one voice at a time: while it still sounds,
+   * playing it again is skipped (so a held D-pad keeps ticking without stacking).
+   * @param {string} name @param {{volume?: number, pan?: number}} [options] volume 0..1, pan -1..1
+   * @returns {boolean} whether it started; false without an audio output
+   */
+  play: (name, {volume = 1, pan = 0} = {}) => host().sound.play(name, volume, pan),
+  /** Master volume for every sound, 0..1 (0 mutes). @param {number} volume */
+  setVolume: volume => host().sound.setVolume(volume),
+};
+
 export const Linking = {
   /** Opens an http(s) URL in the system browser. @param {string} url @returns {boolean} */
   openURL(url) {

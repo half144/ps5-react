@@ -92,7 +92,7 @@ build stage retains its full log.
 - Hardware validation of focus navigation, including modal, reconnect, and repeat tests.
 - Restart only the JS runtime while preserving the desktop graphics context.
 - Measure PS5 frame time and memory, then consider damaged-region uploads.
-- Extend native networking as measured on hardware; add audio, text input, save data,
+- Extend native networking as measured on hardware; add music, text input, save data,
   caching, and virtualization behind explicit APIs.
 - Ship an installable CLI and a pinned CI matrix.
 
