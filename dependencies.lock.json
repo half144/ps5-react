@@ -19,7 +19,8 @@
       "patches/embeddedReact-occluded-translate.patch",
       "patches/embeddedReact-text-wrap-height.patch",
       "patches/embeddedReact-image-radius.patch",
-      "patches/embeddedReact-bold-wrap.patch"
+      "patches/embeddedReact-bold-wrap.patch",
+      "patches/embeddedReact-paint-free-move.patch"
     ]
   },
   "platform": {

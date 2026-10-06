@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Stop a growing list from repainting the whole screen while it scrolls: a
+  container that paints nothing and only moved or resized (a `VirtualList`
+  filling rows below the screen) damaged its whole box, the full viewport, on
+  every frame, so the scroll copy saved nothing. Engine patch.
+
 - Let focus scrolling catch up with a held key: once the target is more than a
   third of the viewport ahead, the speed cap rises with the distance, so tall
   rows no longer leave the screen a page behind focus (and a `VirtualList`
