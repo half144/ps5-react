@@ -184,6 +184,10 @@ Render the whole list and let the `ScrollView` follow focus instead of slicing
 a window of rows around a focus index. Give it a bounded height (`flex-1` in a
 sized parent, or an explicit `h-*`).
 
+For lists of more than a few dozen items, or any list that loads more as it
+scrolls, put a [`VirtualList`](LISTS.md) in the `ScrollView`: it mounts only
+the rows near the viewport and near focus, and calls `onEndReached` near the end.
+
 ## Tailwind and motion integration
 
 - On an element that is focusable (`focusable`, `onPress`, or `Pressable`) and
@@ -405,7 +409,7 @@ pass `focused` down instead.
 | `if (action === 'back') …` | `FocusScope onBack`, or `BackHandler.addEventListener` |
 | `% length` wrapping | `FocusScope wrap` |
 | A "zone" flag for tabs versus content | Two scopes and `focus('tabs')` / `focus('content')` |
-| Slicing visible rows around the focus index | `ScrollView`, which follows focus |
+| Slicing visible rows around the focus index | `ScrollView`, which follows focus; `VirtualList` for long lists |
 | `focused` passed down to child `Text` | `useIsFocused()` in the child |
 | A focus index needed for display | Mirror it with `onFocus`/`onBlur`, read-only |
 

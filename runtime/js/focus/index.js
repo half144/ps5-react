@@ -7,6 +7,7 @@ import {createFocusable} from './focusable.js';
 export {useFocusable, useIsFocused} from './focusable.js';
 export {FocusScope, useFocus} from './scope.js';
 export {ScrollView} from './scroll.js';
+export {VirtualList} from './virtual-list.js';
 export {Image} from './image.js';
 
 export const View = createFocusable('View');

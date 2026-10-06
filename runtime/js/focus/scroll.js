@@ -30,7 +30,7 @@ function assignRef(ref, value) {
 function createFrame(parent) {
   const frame = {
     parent, x: 0, y: 0, props: {}, forwardedRef: null, handle: null, viewport: null, timer: null, target: null,
-    speed: [0, 0],
+    speed: [0, 0], position: [0, 0], listeners: new Set(),
     /** @param {import('./geometry.js').Rect} rect pre-scroll, like `viewport` */
     reveal(rect) {
       const {viewport, handle} = frame;
@@ -43,6 +43,7 @@ function createFrame(parent) {
       frame.x = x;
       frame.y = y;
       frame.animate(fromX, fromY, x, y);
+      frame.notify();
     },
     // A new target while scrolling only moves the target; the steps carry on at the current speed.
     animate(fromX, fromY, toX, toY) {
@@ -51,9 +52,10 @@ function createFrame(parent) {
       const scale = screen.width / 1280;
       const [maxSpeed, accel, brake] = [MAX_LOGICAL_PX_PER_FRAME, ACCEL_LOGICAL_PX, BRAKE_LOGICAL_PX]
         .map(logical => Math.max(1, Math.round(logical * scale)));
-      let x = Math.round(fromX), y = Math.round(fromY);
+      frame.position = [Math.round(fromX), Math.round(fromY)];
       frame.speed = [0, 0];
       frame.timer = onFrame(elapsedMs => {
+        let [x, y] = frame.position;
         // A late frame advances the vblanks it covered, at most two, so a hitch is not followed by a jump.
         for (let n = Math.min(2, Math.max(1, Math.round(elapsedMs / FRAME_MS))); n > 0; n--) {
           let speedX, speedY;
@@ -66,11 +68,29 @@ function createFrame(parent) {
         // changed since the target was chosen: settle where it stopped.
         if (Math.abs(atX - x) > 0.5) frame.target[0] = x = Math.round(atX);
         if (Math.abs(atY - y) > 0.5) frame.target[1] = y = Math.round(atY);
+        frame.position = [x, y];
         if (x !== frame.target[0] || y !== frame.target[1]) return;
         frame.stop();
         frame.x = x;
         frame.y = y;
+        frame.notify();
       });
+    },
+    /**
+     * The content moved up by `dy` (a VirtualList dropping rows above the viewport, or down for a
+     * negative `dy`): scrolls by the same amount so nothing moves on screen, mid-animation included.
+     */
+    shift(dy) {
+      const [, atY] = NativeUI.scrollTo(frame.handle, NaN, NaN);
+      NativeUI.scrollTo(frame.handle, NaN, atY - dy);
+      frame.y -= dy;
+      if (frame.timer === null) return;
+      frame.position[1] -= dy;
+      frame.target[1] -= dy;
+    },
+    // Viewport or offset changed; while animating, y is the target, so listeners see where it is going.
+    notify() {
+      for (const listener of frame.listeners) listener();
     },
     stop() {
       frame.timer?.();
@@ -78,6 +98,7 @@ function createFrame(parent) {
     },
     onLayout(event) {
       frame.viewport = event.layout;
+      frame.notify();
       frame.props.onLayout?.(event);
     },
     // While focus scrolling animates, x/y already hold its target; touch scrolling updates them live.
@@ -85,6 +106,7 @@ function createFrame(parent) {
       if (frame.timer === null) {
         frame.x = event.scrollX;
         frame.y = event.scrollY;
+        frame.notify();
       }
       frame.props.onScroll?.(event);
     },
