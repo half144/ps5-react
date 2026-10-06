@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 
 namespace {
@@ -63,6 +64,19 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
                     static_cast<unsigned long long>(dirty_px_sum_ / ms),
                     static_cast<unsigned long long>(blit_px_sum_ / ms));
     }
+    // Frame-time histogram in whole milliseconds (the last bucket holds everything longer), and the frames
+    // over one 60 Hz period and over 20 ms, so runs can be merged into exact counts and percentiles.
+    int used = static_cast<int>(std::strlen(line_));
+    std::uint32_t buckets[64] = {}, over_period = 0, over_20 = 0;
+    for (int i = 0; i < count; ++i) {
+      ++buckets[std::min<std::uint32_t>(totals_[i] / 1000, 63)];
+      over_period += totals_[i] > 16700;
+      over_20 += totals_[i] > 20000;
+    }
+    used += std::snprintf(line_ + used, sizeof line_ - used, " | >16.7=%u >20=%u hist=", static_cast<unsigned>(over_period),
+                          static_cast<unsigned>(over_20));
+    for (int ms = 0; ms < 64 && used < static_cast<int>(sizeof line_) - 8; ++ms)
+      if (buckets[ms]) used += std::snprintf(line_ + used, sizeof line_ - used, "%d:%u,", ms, static_cast<unsigned>(buckets[ms]));
     summary = line_;
     std::fill(std::begin(phase_sum_), std::end(phase_sum_), 0);
     total_sum_ = 0; total_max_ = 0; frames_ = 0;

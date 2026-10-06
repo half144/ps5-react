@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <iterator>
 
 namespace {
 const char* vertex_source = R"(#version 410 core
@@ -121,49 +120,20 @@ bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage
       if (moved && !move(m)) moved = false;
     glBindTexture(GL_TEXTURE_2D, texture_);
     if (!moved) upload(argb, width_, 0, 0, width_, height_);
-    else upload_rows(argb, damage);
+    else
+      for (const ERRect& r : damage)
+        upload(argb + static_cast<std::size_t>(r.y) * width_ + r.x, width_, r.x, r.y, r.w, r.h);
   }
   return present(sw, sh, layer);
 }
 
-// Copies h rows of w pixels (row stride `stride`, starting at `pixels`) to (x, y) of the bound texture,
-// through a pixel buffer: on the PS5, glTexSubImage2D from client memory costs about 17 us per thousand
-// pixels, while rows go into a buffer in well under one and the copy into the texture stays on the GPU.
-// The buffer is orphaned first so the upload never waits for a frame still reading it. The rows start at
-// the buffer's start: from an offset into it they came out black on macOS.
+// Copies h rows of w pixels (row stride `stride`, starting at `pixels`) to (x, y) of the bound texture.
+// Straight from client memory: on the PS5 a pixel buffer made the copy wait for the GPU still reading the
+// texture, which cost more than the about 17 us per thousand pixels this one does.
 void GlPresenter::upload(const std::uint32_t* pixels, int stride, int x, int y, int w, int h) {
-  if (!unpack_) glGenBuffers(1, &unpack_);
-  const auto bytes = static_cast<GLsizeiptr>(h) * stride * 4;
-  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_);
-  glBufferData(GL_PIXEL_UNPACK_BUFFER, bytes, nullptr, GL_STREAM_DRAW);
-  glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, bytes, pixels);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, stride);
-  glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-}
-
-// Uploads the whole framebuffer rows the rects cover, each once.
-void GlPresenter::upload_rows(const std::uint32_t* argb, std::span<const ERRect> rects) {
-  const int rows = height_;
-  int bands[2 * ER_DAMAGE_RECTS_MAX];
-  int count = 0;
-  for (const ERRect& r : rects) {
-    const int y0 = std::max(r.y, 0), y1 = std::min(r.y + r.h, rows);
-    if (y1 > y0 && count < static_cast<int>(std::size(bands))) { bands[count++] = y0; bands[count++] = y1; }
-  }
-  // Sort the [y0, y1) pairs by y0, then merge overlapping or touching ones.
-  for (int i = 2; i < count; i += 2)
-    for (int j = i; j > 0 && bands[j - 2] > bands[j]; j -= 2) {
-      std::swap(bands[j - 2], bands[j]);
-      std::swap(bands[j - 1], bands[j + 1]);
-    }
-  for (int i = 0; i < count;) {
-    const int y0 = bands[i];
-    int y1 = bands[i + 1];
-    for (i += 2; i < count && bands[i] <= y1; i += 2) y1 = std::max(y1, bands[i + 1]);
-    upload(argb + static_cast<std::size_t>(y0) * width_, width_, 0, y0, width_, y1 - y0);
-  }
+  glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 }
 
 // A new width, or a taller page than the texture holds, reallocates it (rows grow in steps so that is
@@ -242,13 +212,12 @@ bool GlPresenter::present(int sw, int sh, const ERScrollLayer* layer) {
 void GlPresenter::release() {
   if (texture_) glDeleteTextures(1, &texture_);
   if (layer_texture_) glDeleteTextures(1, &layer_texture_);
-  if (unpack_) glDeleteBuffers(1, &unpack_);
   if (scratch_) glDeleteTextures(1, &scratch_);
   if (read_fbo_) glDeleteFramebuffers(1, &read_fbo_);
   if (draw_fbo_) glDeleteFramebuffers(1, &draw_fbo_);
   if (vao_) glDeleteVertexArrays(1, &vao_);
   if (program_) glDeleteProgram(program_);
-  texture_ = vao_ = program_ = scratch_ = read_fbo_ = draw_fbo_ = layer_texture_ = unpack_ = 0;
+  texture_ = vao_ = program_ = scratch_ = read_fbo_ = draw_fbo_ = layer_texture_ = 0;
   layer_width_ = layer_capacity_ = 0;
   synced_ = false;
 }
