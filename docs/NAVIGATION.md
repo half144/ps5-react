@@ -69,7 +69,8 @@ version ([NATIVE-API.md](NATIVE-API.md#contract)).
 `back`, and, since input protocol v3, `l1`, `r1`, `l2`, `r2`, `triangle`, and `square`
 (one action per press, no repeat). For input protocol v1 compatibility the runtime also
 delivers `previous` (after `up`/`left`) and `next` (after `down`/`right`) to
-`useController` handlers only. Options/Escape still exit.
+`useController` handlers only. Options/Escape still exit. Both hosts and input
+scripts take the names from `native/shared/actions.hpp`.
 
 The focus manager does not move on the input protocol v3 buttons: they go to the enclosing
 `FocusScope.onAction` handlers (tabs on L1/R1, a filter on Triangle) and to

@@ -11,6 +11,11 @@
 
 const HORIZONTAL = {left: -1, right: 1};
 
+/** Whether two rectangles share any area. @param {Rect} a @param {Rect} b */
+export function overlaps(a, b) {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
 /** Edges along the pressed axis and across it, so every direction reads like `right`. */
 function axes(rect, direction) {
   const horizontal = direction in HORIZONTAL;

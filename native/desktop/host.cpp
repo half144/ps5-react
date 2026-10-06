@@ -25,6 +25,7 @@ void er_register_assets(void);
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "actions.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
 #include "screenshot.hpp"
@@ -39,6 +40,7 @@ void er_register_assets(void);
 #include <cstring>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -52,6 +54,21 @@ std::int64_t now_us() {
 }
 
 std::uint32_t perf_clock() { return static_cast<std::uint32_t>(now_us()); }
+
+// Keyboard and controller bindings; triggers are axes, read separately. See docs/NAVIGATION.md.
+constexpr std::pair<SDL_Keycode, HostAction> kKeyActions[] = {
+  {SDLK_UP, HostAction::up}, {SDLK_DOWN, HostAction::down}, {SDLK_LEFT, HostAction::left},
+  {SDLK_RIGHT, HostAction::right}, {SDLK_RETURN, HostAction::confirm}, {SDLK_SPACE, HostAction::confirm},
+  {SDLK_BACKSPACE, HostAction::back}, {SDLK_q, HostAction::l1}, {SDLK_e, HostAction::r1}, {SDLK_z, HostAction::l2},
+  {SDLK_c, HostAction::r2}, {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square},
+};
+constexpr std::pair<SDL_GameControllerButton, HostAction> kButtonActions[] = {
+  {SDL_CONTROLLER_BUTTON_DPAD_UP, HostAction::up}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, HostAction::down},
+  {SDL_CONTROLLER_BUTTON_DPAD_LEFT, HostAction::left}, {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, HostAction::right},
+  {SDL_CONTROLLER_BUTTON_A, HostAction::confirm}, {SDL_CONTROLLER_BUTTON_B, HostAction::back},
+  {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, HostAction::l1}, {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, HostAction::r1},
+  {SDL_CONTROLLER_BUTTON_Y, HostAction::triangle}, {SDL_CONTROLLER_BUTTON_X, HostAction::square},
+};
 
 float stick(SDL_GameController* controller, SDL_GameControllerAxis axis) {
   constexpr float deadzone = 0.16f;
@@ -230,35 +247,15 @@ struct Host {
       // The host repeats held directions itself, so OS key repeats are ignored.
       if (event.type == SDL_KEYDOWN && !event.key.repeat) {
         const SDL_Scancode key = event.key.keysym.scancode;
-        switch (event.key.keysym.sym) {
-          case SDLK_UP: action = hold("up", key); break;
-          case SDLK_DOWN: action = hold("down", key); break;
-          case SDLK_LEFT: action = hold("left", key); break;
-          case SDLK_RIGHT: action = hold("right", key); break;
-          case SDLK_RETURN: case SDLK_SPACE: action = "confirm"; break;
-          case SDLK_BACKSPACE: action = "back"; break;
-          case SDLK_q: action = "l1"; break;
-          case SDLK_e: action = "r1"; break;
-          case SDLK_z: action = "l2"; break;
-          case SDLK_c: action = "r2"; break;
-          case SDLK_t: action = "triangle"; break;
-          case SDLK_f: action = "square"; break;
-          case SDLK_ESCAPE: running = false; break;
+        if (event.key.keysym.sym == SDLK_ESCAPE) running = false;
+        for (const auto& [code, mapped] : kKeyActions) {
+          if (code == event.key.keysym.sym) action = repeats(mapped) ? hold(action_name(mapped), key) : action_name(mapped);
         }
       } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
         const auto button = static_cast<SDL_GameControllerButton>(event.cbutton.button);
-        switch (button) {
-          case SDL_CONTROLLER_BUTTON_DPAD_UP: action = hold("up", SDL_SCANCODE_UNKNOWN, button); break;
-          case SDL_CONTROLLER_BUTTON_DPAD_DOWN: action = hold("down", SDL_SCANCODE_UNKNOWN, button); break;
-          case SDL_CONTROLLER_BUTTON_DPAD_LEFT: action = hold("left", SDL_SCANCODE_UNKNOWN, button); break;
-          case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: action = hold("right", SDL_SCANCODE_UNKNOWN, button); break;
-          case SDL_CONTROLLER_BUTTON_A: action = "confirm"; break;
-          case SDL_CONTROLLER_BUTTON_B: action = "back"; break;
-          case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: action = "l1"; break;
-          case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: action = "r1"; break;
-          case SDL_CONTROLLER_BUTTON_Y: action = "triangle"; break;
-          case SDL_CONTROLLER_BUTTON_X: action = "square"; break;
-          default: break;
+        for (const auto& [code, mapped] : kButtonActions) {
+          if (code == button)
+            action = repeats(mapped) ? hold(action_name(mapped), SDL_SCANCODE_UNKNOWN, button) : action_name(mapped);
         }
       } else if (event.type == SDL_CONTROLLERAXISMOTION) {
         // Triggers are analog: an action on crossing half travel, re-armed below a quarter.
@@ -266,8 +263,8 @@ struct Host {
           if (!down && event.caxis.value > 16384) { down = true; action = name; }
           else if (down && event.caxis.value < 8192) down = false;
         };
-        if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) trigger(l2_down, "l2");
-        else if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) trigger(r2_down, "r2");
+        if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) trigger(l2_down, action_name(HostAction::l2));
+        else if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) trigger(r2_down, action_name(HostAction::r2));
       }
       if (action && !dispatch(action)) return false;
     }

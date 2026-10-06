@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // Focus state without React: focusable nodes, nested scopes, D-pad moves, press, back and recovery.
 // Components keep one node or scope each and re-render only when their own node changes.
+import {reachable, screenRect, scrolledBy} from './frames.js';
 import {findClosest, findNearest, findWrap} from './geometry.js';
 
 /**
@@ -20,7 +21,7 @@ import {findClosest, findNearest, findWrap} from './geometry.js';
  *   restoreFocus?: boolean, inert?: boolean, onBack?: () => boolean | void,
  *   onAction?: (action: Action) => boolean | void}} ScopeProps
  *   `inert` takes the scope's subtree out of navigation (a hidden layer that stays mounted).
- * @typedef {'l1' | 'r1' | 'l2' | 'r2' | 'triangle' | 'square'} Action a button beyond D-pad, Cross and Circle
+ * @typedef {import('../input.js').ButtonAction} Action a button beyond D-pad, Cross and Circle
  * @typedef {{kind: 'scope', parent: Scope | null, props: ScopeProps, remembered: Node | null,
  *   returnTo: Node | null, dead: boolean}} Scope
  * @typedef {{kind: 'node', scope: Scope, frame: Frame | null, anchor: Anchor | null, props: NodeProps,
@@ -39,25 +40,6 @@ function within(scope, ancestor) {
 /** Whether no scope from `scope` up is inert. @param {Scope | null} scope */
 function navigable(scope) {
   for (; scope; scope = scope.parent) if (scope.props.inert) return false;
-  return true;
-}
-
-/** @param {Rect} a @param {Rect} b */
-function overlaps(a, b) {
-  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-}
-
-/**
- * Whether a move from inside `from` (the focused node's frames) can reach `node`: entering a
- * ScrollView from outside reaches only what it shows, at least in part, not items scrolled away.
- * @param {Node} node @param {Set<Frame>} from
- */
-function reachable(node, from) {
-  let rect = node.rect;
-  for (let frame = node.frame; frame && !from.has(frame); frame = frame.parent) {
-    rect = {...rect, x: rect.x - frame.x, y: rect.y - frame.y};
-    if (frame.viewport && !overlaps(rect, frame.viewport)) return false;
-  }
   return true;
 }
 
@@ -127,7 +109,7 @@ export class FocusManager {
     this.clearTimer(node.pressTimer);
     if (this.focused !== node) return;
     this.focused = null;
-    const lost = {scope: node.scope, rect: this.rectOf(node)};
+    const lost = {scope: node.scope, rect: screenRect(node)};
     this.schedule(() => this.recover(lost));
   }
 
@@ -181,7 +163,7 @@ export class FocusManager {
     if (!current) return this.focus(this.root);
     const override = current.props[NEXT[direction]];
     if (override != null) return this.focus(override);
-    const from = this.rectOf(current);
+    const from = screenRect(current);
     if (!from) return false;
     const frames = new Set();
     for (let frame = current.frame; frame; frame = frame.parent) frames.add(frame);
@@ -237,22 +219,12 @@ export class FocusManager {
     return false;
   }
 
-  /** @param {Node} node @returns {Rect | null} the rectangle on screen, scrolling applied */
-  rectOf(node) {
-    let rect = node.rect;
-    if (!rect) return null;
-    for (let frame = node.frame; frame; frame = frame.parent) {
-      rect = {...rect, x: rect.x - frame.x, y: rect.y - frame.y};
-    }
-    return rect;
-  }
-
   /** @param {Scope} scope @returns {Array<{node: Node, rect: Rect, order: number}>} */
   candidates(scope) {
     const result = [];
     for (const node of this.nodes) {
       if (!within(node.scope, scope) || !navigable(node.scope)) continue;
-      const rect = this.rectOf(node);
+      const rect = screenRect(node);
       if (rect && (rect.width > 0 || rect.height > 0)) result.push({node, rect, order: node.order});
     }
     return result;
@@ -312,7 +284,7 @@ export class FocusManager {
       let anchor = node.anchor;
       while (anchor && anchor.frame !== frame) anchor = anchor.parent;
       frame.reveal(rect, anchor?.rect ?? null);
-      rect = {...rect, x: rect.x - frame.x, y: rect.y - frame.y};
+      rect = scrolledBy(rect, frame);
     }
   }
 
@@ -328,7 +300,7 @@ export class FocusManager {
   evict() {
     const node = this.focused;
     if (!node || navigable(node.scope)) return;
-    this.setFocus(this.fallback({scope: node.scope, rect: this.rectOf(node)}));
+    this.setFocus(this.fallback({scope: node.scope, rect: screenRect(node)}));
   }
 
   /**

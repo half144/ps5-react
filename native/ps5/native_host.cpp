@@ -15,6 +15,7 @@
 #include "gl_presenter.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
+#include "actions.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
 #include "screenshot.hpp"
@@ -133,11 +134,12 @@ constexpr hui::Action kButtonActions[] = {
 };
 static_assert(std::size(kButtonActions) == std::size(kButtonNames));
 
-// Buttons delivered to the app as actions beyond the D-pad, Cross and Circle.
-constexpr std::pair<hui::Action, const char*> kExtraActions[] = {
-  {hui::Action::page_prev, "l1"}, {hui::Action::page_next, "r1"},
-  {hui::Action::jump_prev, "l2"}, {hui::Action::jump_next, "r2"},
-  {hui::Action::north, "triangle"}, {hui::Action::west, "square"},
+// Buttons delivered to the app as actions; the D-pad and left stick come through input.nav.
+constexpr std::pair<hui::Action, HostAction> kExtraActions[] = {
+  {hui::Action::confirm, HostAction::confirm}, {hui::Action::back, HostAction::back},
+  {hui::Action::page_prev, HostAction::l1}, {hui::Action::page_next, HostAction::r1},
+  {hui::Action::jump_prev, HostAction::l2}, {hui::Action::jump_next, HostAction::r2},
+  {hui::Action::north, HostAction::triangle}, {hui::Action::west, HostAction::square},
 };
 
 GamepadState gamepad_state(const hui::InputFrame& input) {
@@ -153,10 +155,10 @@ GamepadState gamepad_state(const hui::InputFrame& input) {
 
 const char* nav_action(hui::Direction direction) {
   switch (direction) {
-    case hui::Direction::up: return "up";
-    case hui::Direction::down: return "down";
-    case hui::Direction::left: return "left";
-    case hui::Direction::right: return "right";
+    case hui::Direction::up: return action_name(HostAction::up);
+    case hui::Direction::down: return action_name(HostAction::down);
+    case hui::Direction::left: return action_name(HostAction::left);
+    case hui::Direction::right: return action_name(HostAction::right);
     default: return nullptr;
   }
 }
@@ -261,10 +263,8 @@ bool run_proof() {
       host_platform_tick(now);
       ps5_react_set_gamepad(gamepad_state(input));
       if (const char* direction = nav_action(input.nav)) ok = dispatch(direction);
-      if (ok && input.is_pressed(hui::Action::confirm)) ok = dispatch("confirm");
-      if (ok && input.is_pressed(hui::Action::back)) ok = dispatch("back");
-      for (const auto& [button, name] : kExtraActions) {
-        if (ok && input.is_pressed(button)) ok = dispatch(name);
+      for (const auto& [button, action] : kExtraActions) {
+        if (ok && input.is_pressed(button)) ok = dispatch(action_name(action));
       }
       commands.poll(now, script);
       if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
