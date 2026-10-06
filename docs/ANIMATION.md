@@ -185,6 +185,45 @@ Fixed card sizes make the highlight position plain arithmetic. Keep scaled
 cards within 256 logical px at the 2560-wide render (see
 [Performance](#performance-on-the-cpu-renderer)).
 
+### Focus: a light running around the border
+
+The PS5 focus ring is a light travelling around the focused item's rounded
+border, bright at its head and fading in a long tail. Four `View` styles draw
+it, over the content, inside the box, following its `borderRadius`:
+
+| Style | Meaning |
+| --- | --- |
+| `borderSweepColor` | Colour at the head (its alpha scales the whole light) |
+| `borderSweepWidth` | Ring thickness in render px; 0 draws nothing |
+| `borderSweepLength` | Tail as a fraction of the perimeter (default 0.3) |
+| `borderSweepPhase` | Head position, 0–1 clockwise from the top edge's left end; wraps at 1 |
+
+Animate the phase with an `Animated` value: the engine moves it every frame
+with no JavaScript, and a phase-only change repaints the bands along the four
+edges the ring reaches (about a quarter of a card), not the card:
+
+```jsx
+function FocusLight({style}) {
+  const phase = useAnimatedValue(0);
+  useEffect(() => {
+    const run = Animated.loop(Animated.timing(phase, {toValue: 1, duration: 2400, easing: Easing.linear}));
+    run.start();
+    return () => run.stop();
+  }, []);
+  return (
+    <Animated.View pointerEvents="none" style={[{position: 'absolute', left: 0, top: 0, right: 0, bottom: 0,
+      borderRadius: 18, borderSweepColor: '#ffffff', borderSweepWidth: 4, borderSweepPhase: phase}, style]} />
+  );
+}
+```
+
+Mount it only on the focused item (`useIsFocused`), so one light runs at a
+time. Inside a scaled element (`whileFocus={{scale: 1.04}}`) the light scales
+with it, but a phase step then repaints the element's whole scaled box, as any
+change under a transform does; on a large card, keep the light outside the
+scaled subtree, or lift the card with `y` instead of `scale`. For a soft halo,
+put a second, wider sweep with a lower alpha behind the first.
+
 ### Page transitions
 
 Give each page a `key` inside `AnimatePresence mode="wait"`: the old page

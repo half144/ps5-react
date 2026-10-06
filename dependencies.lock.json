@@ -20,7 +20,8 @@
       "patches/embeddedReact-text-wrap-height.patch",
       "patches/embeddedReact-image-radius.patch",
       "patches/embeddedReact-bold-wrap.patch",
-      "patches/embeddedReact-paint-free-move.patch"
+      "patches/embeddedReact-paint-free-move.patch",
+      "patches/embeddedReact-border-sweep.patch"
     ]
   },
   "platform": {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add the `borderSweepColor`, `borderSweepWidth`, `borderSweepLength` and
+  `borderSweepPhase` View styles: a light running around the rounded border
+  like the PS5 focus ring, bright at its head and fading behind it. The phase
+  animates on the native driver and repaints only the border bands. Engine
+  patch. See docs/ANIMATION.md.
+
 - Stop a growing list from repainting the whole screen while it scrolls: a
   container that paints nothing and only moved or resized (a `VirtualList`
   filling rows below the screen) damaged its whole box, the full viewport, on
