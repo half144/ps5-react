@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v3) between the hosts and `@ps5-react/core`.
+// Native API contract (ABI v4) between the hosts and `@ps5-react/core`.
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
 // ErRuntimeConfig.install_host_globals and implements the filesystem with POSIX
@@ -32,6 +32,8 @@
 //   pad.resetLightBar()
 //   pad.vibrate(strength, seconds) strength 0..1
 //   pad.state()                    {connected, leftX, leftY, rightX, rightY, l2, r2, buttons}
+//   power.keepAwake(enabled)       ABI v4; while true, the console does not enter rest mode
+//                                  for inactivity (the desktop display does not sleep)
 //   network.download(url, path, options) task ID; queues native binary file I/O
 //     options: expectedBytes, storageRoot, pieces[{url, offset, size, sha1}],
 //              sha256, connections, adaptive, rangeBytes, resume, recoverCompleted, headers
@@ -124,6 +126,8 @@ bool open_url(const char* url);
 void set_light_bar(std::uint8_t r, std::uint8_t g, std::uint8_t b);
 void reset_light_bar();
 void vibrate(float strength, float seconds);
+// While enabled, keeps the system from sleeping for inactivity; the app's last call wins.
+void keep_awake(bool enabled);
 } // namespace host
 
 // ABI v2: synchronous native task submission/polling; I/O runs off-thread.

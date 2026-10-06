@@ -252,6 +252,7 @@ bool run_proof() {
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
       if (input.is_pressed(hui::Action::menu)) break;
       pad.tick(static_cast<float>(now - previous) / 1000000.0f);
+      host_platform_tick(now);
       ps5_react_set_gamepad(gamepad_state(input));
       if (const char* direction = nav_action(input.nav)) ok = dispatch(direction);
       if (ok && input.is_pressed(hui::Action::confirm)) ok = dispatch("confirm");

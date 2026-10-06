@@ -155,4 +155,10 @@ void vibrate(float strength, float seconds) {
   if (!controller || SDL_GameControllerRumble(controller, level, level, static_cast<Uint32>(seconds * 1000)) != 0)
     std::printf("[pad] vibrate %.2f for %.2fs (no controller rumble)\n", strength, seconds);
 }
+// SDL keeps the display awake while a window is open; keepAwake(false) lets it sleep.
+void keep_awake(bool enabled) {
+  if (enabled) SDL_DisableScreenSaver();
+  else SDL_EnableScreenSaver();
+  std::printf("[power] keep awake %s\n", enabled ? "on" : "off");
+}
 } // namespace host

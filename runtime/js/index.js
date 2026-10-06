@@ -8,8 +8,8 @@ export {AppRegistry, Text, Animated, useAnimatedValue, Easing, LayoutAnimation, 
 export {View, Image, Pressable, ScrollView, VirtualList, FocusScope, useFocusable, useFocus, useIsFocused} from './focus/index.js';
 export {motion, AnimatePresence, transitions} from './motion/index.js';
 export {DownloadFormats} from './download-formats.js';
-export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useGamepad, Linking, BackHandler, Http, Downloads}
-  from './native.js';
+export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useGamepad, Linking, Power, BackHandler,
+  Http, Downloads} from './native.js';
 
 // ABI v1 compatibility: each direction is followed by its legacy action.
 const legacyActions = {up: 'previous', left: 'previous', down: 'next', right: 'next'};

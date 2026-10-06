@@ -48,6 +48,7 @@ int sceUserServiceGetForegroundUser(int* user);
 int sceUserServiceGetUserName(int user, char* name, std::size_t size);
 int sceUserServiceGetLoginUserIdList(LoginUserIdList* list);
 int sceSystemServiceLaunchWebBrowser(const char* uri, void* parameters);
+int sceSystemServicePowerTick(void);
 int sceKernelOpen(const char* path, int flags, int mode);
 int sceKernelGetdents(int fd, char* buffer, int size);
 int sceKernelClose(int fd);
@@ -58,6 +59,10 @@ int ps5_fstatfs(int fd, struct statfs* buffer) __asm__("_fstatfs");
 
 namespace {
 hui::ps5::Pad* active_pad = nullptr;
+bool keeping_awake = false;
+std::int64_t next_power_tick_us = 0;
+// The idle timer before rest mode is minutes long at its shortest; a tick restarts it, like input.
+constexpr std::int64_t kPowerTickIntervalUs = 30 * 1000000;
 
 // Resolves a function from a module the title does not link, on first use. Only
 // the modules the platform already needs are linked: a NEEDED module the title
@@ -355,6 +360,11 @@ void set_light_bar(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
 // scePadResetLightBar; the default is the first player's blue.
 void reset_light_bar() { set_light_bar(0, 0, 255); }
 
+void keep_awake(bool enabled) {
+  keeping_awake = enabled;
+  next_power_tick_us = 0;
+}
+
 void vibrate(float strength, float seconds) {
   if (!active_pad) return;
   // Pad::rumble ignores zero; a strength below 1/255 writes stopped motors and
@@ -363,3 +373,10 @@ void vibrate(float strength, float seconds) {
   else active_pad->rumble(strength, seconds);
 }
 } // namespace host
+
+void host_platform_tick(std::int64_t now_us) {
+  if (!keeping_awake || now_us < next_power_tick_us) return;
+  next_power_tick_us = now_us + kPowerTickIntervalUs;
+  if (const int result = sceSystemServicePowerTick(); result != 0)
+    async_log::write("[PS5-REACT] sceSystemServicePowerTick=0x%08x", static_cast<unsigned>(result));
+}

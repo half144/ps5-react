@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add `Power.keepAwake(enabled)` (native API ABI v4) to keep the console out
+  of rest mode during long downloads: the PS5 host ticks the system power
+  timer every 30 s while it is on, the desktop preview toggles the screen
+  saver. Not yet validated on hardware. See docs/NATIVE-API.md.
+
 - Fix a translated element leaving its children behind: a `y` or `x`
   translate without scale or rotation moved only the element's own paint, so a
   header slid past the top edge stayed frozen on screen as its items, and a

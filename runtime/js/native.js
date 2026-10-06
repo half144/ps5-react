@@ -147,6 +147,15 @@ export const Linking = {
   },
 };
 
+export const Power = {
+  /**
+   * While on, the console does not enter rest mode for inactivity (the desktop display does not
+   * sleep): turn it on for a long download, off when it ends. The last call wins.
+   * @param {boolean} enabled
+   */
+  keepAwake: enabled => host().power.keepAwake(Boolean(enabled)),
+};
+
 const backListeners = [];
 
 export const BackHandler = {

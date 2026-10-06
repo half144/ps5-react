@@ -102,6 +102,11 @@ modules, every filesystem operation, other firmware, or later rebuilt hashes.
 Generated build receipts continue to default to `hardware_tested: false`; use
 this record to identify the qualified artifacts.
 
+## Not yet validated
+
+- `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,
+  but no console has been observed staying out of rest mode with it on.
+
 ## Remote images — 2026-10-06
 
 Overdrive (`PPSA99058`, game-store `65a3e58`) on the same PS5 Slim Digital,

@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v3) is
+each host installs before the bundle runs. Its exact shape (ABI v4) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -199,14 +199,29 @@ function Sticks() {
 ```
 
 Menus use focus navigation ([NAVIGATION.md](NAVIGATION.md)). `useController`
-receives the raw `up`, `down`, `left`, `right`, `confirm`, and `back` actions
-(plus `previous`/`next` for compatibility); `useGamepad` is for raw analog and
+receives the raw `up`, `down`, `left`, `right`, `confirm`, `back`, `l1`, `r1`,
+`l2`, `r2`, `triangle`, and `square` actions (plus `previous`/`next` for
+compatibility); `useGamepad` is for raw analog and
 button state. Options is still reserved for the host's exit action.
 
 ## Linking
 
 `Linking.openURL(url)` opens an `http://` or `https://` URL in the system
 browser and returns `true` when the host launched it. Other schemes throw.
+
+## Power
+
+`Power.keepAwake(enabled)` keeps the console out of rest mode for inactivity
+while `true`, for work that runs with nobody touching the controller, such as a
+download of several hours. Turn it on when the work starts and off when it
+ends; the last call wins, so an app with several jobs keeps one count of its
+own.
+
+The PS5 host calls `sceSystemServicePowerTick` every 30 seconds while it is on,
+which restarts the inactivity timer as input does (the method FTP and download
+homebrew use). The desktop preview disables or enables the SDL screen saver and
+prints `[power] keep awake on|off`. **Not yet validated on hardware**: no test
+has shown a console staying awake through its rest-mode timeout.
 
 ## BackHandler
 

@@ -252,7 +252,7 @@ const pad = useGamepad(); // sticks, triggers, held buttons
 
 React Native-style modules reach platform services through the host:
 `Platform`, `DeviceInfo`, `FileSystem`, `Notifications`, `Users`, `Controller`
-with `useGamepad`, `Linking`, `BackHandler`, `Http`, and `Downloads`. Native
+with `useGamepad`, `Linking`, `Power`, `BackHandler`, `Http`, and `Downloads`. Native
 bridge calls run synchronously on the render thread; networking submits tasks
 to workers and exposes promises in JavaScript. The macOS preview implements the same API against a sandbox in
 `.build/<app>/sandbox/`. The filesystem integration was user-confirmed on
