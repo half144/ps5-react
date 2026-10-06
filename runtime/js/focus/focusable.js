@@ -53,14 +53,20 @@ export function useFocusNode(options, enabled = true) {
     }};
   }
   const node = enabled ? self.current.node : null;
-  useNodeState(node);
+  const [, rerender] = useReducer(count => count + 1, 0);
+  // Two effects, not one per concern: React allocates every effect again on each render, and the
+  // rings they form are garbage only a collection frees.
   useLayoutEffect(() => {
     if (node) manager.setProps(node, options);
   });
   useLayoutEffect(() => {
     if (!node) return undefined;
+    node.listeners.add(rerender);
     manager.register(node);
-    return () => manager.unregister(node);
+    return () => {
+      node.listeners.delete(rerender);
+      manager.unregister(node);
+    };
   }, [node]);
   if (!node) return null;
   return {node, focused: manager.focused === node, pressed: node.pressed,

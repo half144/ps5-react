@@ -82,7 +82,11 @@ Lengths are logical px of a 1280-wide layout, like class names.
    Rows in `required` that are missing or still filling (the first layout, a
    jump) mount whole at once.
 4. Each mounted row is a memoized component: a window step renders the
-   entering row only, not every mounted card.
+   entering row only, not every mounted card. A row that gains an item
+   re-renders alone, without the list, and keeps the elements of the items it
+   already shows, so React renders the new card only. Rendering the row's
+   earlier cards again on each step added half again to the garbage a scroll leaves for
+   QuickJS's collector.
 
 Because the next row down already has laid-out rectangles when focus moves,
 spatial navigation finds it, and the per-frame scroll stepping is unchanged. The

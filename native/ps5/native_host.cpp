@@ -16,6 +16,7 @@
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "input_script.hpp"
+#include "js_heap.hpp"
 #include "screenshot.hpp"
 #include "filesystem_access.hpp"
 #include <algorithm>
@@ -160,7 +161,10 @@ const char* nav_action(hui::Direction direction) {
   }
 }
 
+GcScheduler gc_scheduler(hui::sys::monotonic_us);
+
 bool dispatch(const char* action) {
+  gc_scheduler.input(hui::sys::monotonic_us());
   er_perf_phase_begin(ER_PERF_PHASE_JS);
   JSContext* ctx = er_runtime_context();
   JSValue global = JS_GetGlobalObject(ctx);
@@ -216,6 +220,7 @@ bool run_proof() {
     config.log = react_log;
     config.max_stack_size = 1024 * 1024;
     config.memory_limit = 32 * 1024 * 1024;
+    config.malloc_functions = js_heap_functions();
     config.install_host_globals = ps5_react_install_host_api;
     runtime = er_runtime_init(&config);
     ok = runtime;
@@ -296,6 +301,8 @@ bool run_proof() {
       ok = ok && display.swap();
       stats.lap(FrameStats::swap, hui::sys::monotonic_us());
       if (!ok) break;
+      if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), hui::sys::monotonic_us()))
+        async_log::write("[PS5-REACT] %s", line);
       if (!first_present) {
         first_present = hui::sys::monotonic_us();
         hui::sys::hide_splash_screen();
