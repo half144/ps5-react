@@ -21,7 +21,8 @@
       "patches/embeddedReact-image-radius.patch",
       "patches/embeddedReact-bold-wrap.patch",
       "patches/embeddedReact-paint-free-move.patch",
-      "patches/embeddedReact-border-sweep.patch"
+      "patches/embeddedReact-border-sweep.patch",
+      "patches/embeddedReact-border-gradient.patch"
     ]
   },
   "platform": {

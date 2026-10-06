@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add the `borderGradient` View style (`{type: 'conic', width, angle, stops}`)
+  and the animatable `borderGradientAngle`: a conic gradient seen only through
+  the rounded border ring, the classic rotating-gradient border. Turning it
+  runs on the native driver and repaints only the border bands. Engine patch.
+  See docs/ANIMATION.md.
+
 - Add the `borderSweepColor`, `borderSweepWidth`, `borderSweepLength` and
   `borderSweepPhase` View styles: a light running around the rounded border
   like the PS5 focus ring, bright at its head and fading behind it. The phase

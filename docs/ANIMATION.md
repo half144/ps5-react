@@ -217,6 +217,33 @@ function FocusLight({style}) {
 }
 ```
 
+The classic rotating-gradient border is the other way to draw it: a conic
+gradient turning behind the item, seen only through its border. The
+`borderGradient` style draws exactly that, and `borderGradientAngle` turns it:
+
+```jsx
+const angle = useAnimatedValue(0);
+// Animated.loop(Animated.timing(angle, {toValue: 360, duration: 2400, easing: Easing.linear})).start();
+<Animated.View pointerEvents="none" style={{position: 'absolute', left: 0, top: 0, right: 0, bottom: 0,
+  borderRadius: 18, borderGradientAngle: angle,
+  borderGradient: {type: 'conic', width: 4, stops: [
+    {color: 'rgba(255,255,255,0)', offset: 0}, {color: '#ffffff', offset: 0.3},
+    {color: 'rgba(255,255,255,0)', offset: 0.31}]}}} />
+```
+
+| `borderGradient` key | Meaning |
+| --- | --- |
+| `type` | `'conic'` |
+| `width` | Ring thickness in render px |
+| `angle` | Start angle in degrees, CSS `conic-gradient(from …)`: 0 up, clockwise |
+| `stops` | Up to 6 `{color, offset}` around the circle; colours keep their alpha |
+
+`borderGradientAngle` (degrees) overrides `angle` and animates on the native
+driver, repainting only the ring's bands like the sweep. A conic gradient turns
+around the centre, so on a long card the light moves faster along the short
+sides; `borderSweep*` moves at one speed along the perimeter. Neither has a
+Tailwind class: their stops and animated values need a style object.
+
 Mount it only on the focused item (`useIsFocused`), so one light runs at a
 time. Inside a scaled element (`whileFocus={{scale: 1.04}}`) the light scales
 with it, but a phase step then repaints the element's whole scaled box, as any
