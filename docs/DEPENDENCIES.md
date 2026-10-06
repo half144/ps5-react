@@ -66,6 +66,8 @@ an opaque node above covers it, so its next move erases what it painted.
 `embeddedReact-text-wrap-height.patch` (Apache-2.0 layout, text renderer and
 test files; not yet proposed upstream) makes an auto-height Text as tall as the
 lines it wraps into, capped by `numberOfLines`, including in flexed rows.
+`embeddedReact-image-radius.patch` (Apache-2.0 engine and test files; not yet
+proposed upstream) clips an `Image` to its `borderRadius`.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.

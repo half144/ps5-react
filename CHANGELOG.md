@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Clip an `Image` to its `borderRadius`: covers drew square corners whatever
+  `rounded-*` said. The bitmap now follows the same anti-aliased rounded shape
+  as a background; square images draw as before. Fixed by an engine patch.
+
 - Make a remote `<Image>` lighter: one component with one state object, one
   hook to re-render with and one effect, stable layout and load callbacks, and
   the host element rendered directly unless the image is focusable. Mounting

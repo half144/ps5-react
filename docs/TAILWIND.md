@@ -281,6 +281,10 @@ only: `fontWeight` 600 and above is bold, everything else regular.
 | `rounded`, `rounded-{none,sm,md,lg,xl,2xl,3xl,full}`, `rounded-[<px>]` | `borderRadius` (none 0, sm 2, bare 4, md 6, lg 8, xl 12, 2xl 16, 3xl 24, full 9999) |
 | `rounded-t-*`, `-r-*`, `-b-*`, `-l-*`, `-tl-*`, `-tr-*`, `-br-*`, `-bl-*` | Corner radii |
 
+Radii round backgrounds, gradients, borders and an `Image`'s bitmap. A rounded
+`overflow-hidden` parent clips its children to its rectangle, not its corners:
+round the image itself.
+
 ### Effects, images, and transforms
 
 | Class | Style |
