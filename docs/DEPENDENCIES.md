@@ -42,6 +42,9 @@ strip and a card apart in the damage set, and
 `embeddedReact-scroll-copy-paint-free.patch` (proposed with the scroll copy)
 stops a container that paints nothing from forcing a scrolled viewport to
 repaint; both modify Apache-2.0 engine and test files.
+`embeddedReact-software-avx2.patch` (Apache-2.0 software backend; not yet
+proposed upstream) blends eight pixels per step on AVX2 targets, bit-identical
+to the scalar loops.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.

@@ -8,6 +8,8 @@
   full-screen frame paid 10-15 ms for its own statistics: opening an Overdrive
   game page went from a 51 ms to a 36 ms frame and going back from 39 to 20 ms.
   Raster figures logged before this change include that overhead.
+- On AVX2 targets (the PS5) the software backend blends eight pixels per step,
+  bit-identical to the scalar loops.
 - When the surface matches the render size, the presenter keeps the frame in
   two buffer textures (`texelFetch`) and uploads changed rows with
   `glBufferSubData`. On the PS5 that costs about 0.46 ms for 1920×540 rows
