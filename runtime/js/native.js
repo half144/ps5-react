@@ -312,11 +312,12 @@ function pollImagesSoon() {
  * the returned function releases the reference, cancelling the load when nothing else holds it.
  * @param {string} uri @param {number} width @param {number} height box in render pixels
  * @param {number} fit 0 cover, 1 contain, 2 stretch, 3 none
+ * @param {boolean} prefetch loads after images that elements draw
  * @param {(result: {state: string, name: string, width: number, height: number, error: string}) => void} listener
  * @returns {() => void}
  */
-export function acquireImage(uri, width, height, fit, listener) {
-  const result = host().image.load(uri, width, height, fit);
+export function acquireImage(uri, width, height, fit, prefetch, listener) {
+  const result = host().image.load(uri, width, height, fit, prefetch);
   const {id} = result;
   if (result.state === 'loading') {
     if (!pendingImages.has(id)) pendingImages.set(id, new Set());

@@ -5,6 +5,7 @@
 import http.server
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -123,8 +124,9 @@ def main():
         directory = Path(temporary)
         binary = compile_client(directory)
 
-        def run(*arguments):
-            result = subprocess.run([str(binary), *map(str, arguments)], capture_output=True, text=True, timeout=30)
+        def run(*arguments, cache=""):
+            result = subprocess.run([str(binary), *map(str, arguments)], capture_output=True, text=True, timeout=30,
+                                    env={**os.environ, "IMAGE_CACHE": cache})
             if result.returncode or not result.stdout.strip():
                 raise AssertionError(result.stderr or f"client exited {result.returncode}")
             return json.loads(result.stdout)
@@ -172,8 +174,14 @@ def main():
         # 12 images of 4 MiB against a 32 MiB budget: the 4 oldest unused go, the one in use stays.
         evicted = run("evict", origin + "/photo.jpg", 12)
         assert evicted == {"loaded": 12, "evicted": 4, "first": 2, "kept": True}, evicted
+        # A second launch serves the encoded bytes from the disk cache without a request.
+        cache = directory / "cache"
+        before = len(Handler.requests)
+        first = run("load", origin + "/photo.jpg?disk", 64, 64, COVER, directory / "pixels", cache=cache)
+        again = run("load", origin + "/photo.jpg?disk", 32, 32, COVER, directory / "pixels", cache=cache)
+        assert first["ready"] and again["ready"] and len(Handler.requests) == before + 1, (first, again)
         print("Remote images: cover/contain/stretch fitting without enlargement, box-filter quality, premultiplied "
-              "alpha, error messages, shared fetches, cancellation and LRU eviction passed.")
+              "alpha, error messages, shared fetches, cancellation, LRU eviction and the disk cache passed.")
     server.shutdown()
 
 

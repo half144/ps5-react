@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "host_api.hpp"
 #include "image_loader.hpp"
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -57,9 +58,10 @@ JSValue load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return JS_EXCEPTION;
   if (width < 1 || height < 1 || width > 8192 || height > 8192 || fit < 0 || fit > 3)
     return JS_ThrowRangeError(ctx, "image.load %s: box %dx%d must be 1..8192 pixels per side", url.c_str(), width, height);
+  const bool prefetch = argc > 4 && JS_ToBool(ctx, argv[4]) == 1;
   images::Result result;
   std::string error;
-  if (!images::load(url, width, height, static_cast<images::Fit>(fit), result, error))
+  if (!images::load(url, width, height, static_cast<images::Fit>(fit), prefetch, result, error))
     return JS_ThrowPlainError(ctx, "%s", error.c_str());
   return state(ctx, result);
 }
@@ -86,6 +88,11 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 
 } // namespace
+
+bool ps5_react_start_images() {
+  char cache[PATH_MAX];
+  return images::start(host::resolve_path("/download0/.cache/images", cache, sizeof cache) ? cache : "");
+}
 
 void ps5_react_stop_images() { images::stop(unregister); }
 

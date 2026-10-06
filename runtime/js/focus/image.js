@@ -49,7 +49,7 @@ function RemoteImage({uri, resizeMode = 'cover', onLoad, onError, onLayout, forw
       }
     };
     try {
-      release = acquireImage(uri, box.width, box.height, fit, handle);
+      release = acquireImage(uri, box.width, box.height, fit, false, handle);
     } catch (error) {
       handle({state: 'failed', name: '', error: error.message});
     }
@@ -88,7 +88,7 @@ Image.displayName = 'Image';
  */
 Image.prefetch = (uri, {width, height, resizeMode = 'cover'}) => new Promise((resolve, reject) => {
   let release = null, settled = false;
-  release = acquireImage(uri, Math.round(width), Math.round(height), FITS[resizeMode] ?? 0, result => {
+  release = acquireImage(uri, Math.round(width), Math.round(height), FITS[resizeMode] ?? 0, true, result => {
     if (result.state === 'loading') return;
     settled = true;
     release?.();

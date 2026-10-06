@@ -35,14 +35,14 @@ void print(const images::Result& r) {
 
 std::uint32_t load(const std::string& url, int w, int h, int fit, images::Result& result) {
   std::string error;
-  const auto id = images::load(url, w, h, static_cast<images::Fit>(fit), result, error);
+  const auto id = images::load(url, w, h, static_cast<images::Fit>(fit), false, result, error);
   if (!id) { std::cerr << error << '\n'; std::exit(4); }
   return id;
 }
 } // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 3 || !network::start() || !images::start()) return 3;
+  if (argc < 3 || !network::start() || !images::start(std::getenv("IMAGE_CACHE") ? std::getenv("IMAGE_CACHE") : "")) return 3;
   const std::string mode = argv[1], url = argv[2];
   images::Result now;
   if (mode == "load" && argc >= 7) {

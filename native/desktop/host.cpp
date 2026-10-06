@@ -1,7 +1,6 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-#include "image_loader.hpp"
 #include "network.hpp"
 #include "app_config.hpp"
 #define SDL_MAIN_HANDLED
@@ -26,9 +25,12 @@ void er_register_assets(void);
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "input_script.hpp"
+#include "screenshot.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -142,7 +144,7 @@ struct Host {
   bool boot(const char* path) {
     backend_started = er_software_backend_init(width, height);
     if (!backend_started || !damage_tracker_install(width, height)) return false;
-    if (network::start()) images::start();
+    if (network::start()) ps5_react_start_images();
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;
@@ -198,7 +200,13 @@ struct Host {
     if (!action) return true;
     if (log_frames) std::printf("[PS5-REACT] script: %s\n", action);
     if (!std::strcmp(action, "quit")) running = false;
-    else return dispatch(action);
+    else if (!std::strncmp(action, "shot:", 5)) {
+      // The preview keeps shots in the sandbox's temporary folder rather than the app's sources.
+      char path[PATH_MAX];
+      const std::string name = std::string("/temp0/") + (action + 5) + ".bmp";
+      const bool saved = host::resolve_path(name.c_str(), path, sizeof path) && save_screenshot(path);
+      std::printf("[PS5-REACT] shot %s: %s\n", path, saved ? "saved" : std::strerror(errno));
+    } else return dispatch(action);
     return true;
   }
 

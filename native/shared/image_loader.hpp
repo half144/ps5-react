@@ -20,6 +20,8 @@ constexpr std::size_t kCacheEntries = 128;
 constexpr std::size_t kMaxEncodedBytes = 8 * 1024 * 1024;
 // Encoded bytes kept by URL, so the same image drawn at another size decodes without a fetch.
 constexpr std::size_t kEncodedCacheBytes = 8 * 1024 * 1024;
+// Encoded responses kept on disk between launches; entries older than a week are fetched again.
+constexpr std::size_t kDiskCacheBytes = 64 * 1024 * 1024;
 // One image decodes at a time, holding up to about 8 bytes per source pixel (PNG) while it does.
 constexpr std::uint64_t kMaxSourcePixels = 5000000;
 
@@ -32,13 +34,16 @@ struct Result {
   std::string error;
 };
 
-// start() requires a started network::start(). stop() calls `evict` for every image handed out
-// by poll(), then joins both workers and frees every image.
-bool start();
+// start() requires a started network::start(); `cache_directory` (created when missing, empty to
+// disable) holds the disk cache. stop() calls `evict` for every image handed out by poll(), then
+// joins both workers and frees every image.
+bool start(const std::string& cache_directory);
 void stop(void (*evict)(std::uint32_t id));
 // Render thread. Returns the id (0 with `error` on invalid input); each load takes one reference,
 // shared by every load of the same url, box and fit. `result` reports a finished entry at once.
-std::uint32_t load(const std::string& url, int width, int height, Fit fit, Result& result, std::string& error);
+// Prefetches are fetched and decoded after images an element draws.
+std::uint32_t load(const std::string& url, int width, int height, Fit fit, bool prefetch, Result& result,
+                   std::string& error);
 // Drops one reference. Unfinished work without references is cancelled.
 void release(std::uint32_t id);
 // Finished loads since the last poll. Evicts unused images over budget first, calling `evict`

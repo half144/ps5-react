@@ -59,8 +59,9 @@ other shots of a gallery.
 ## Memory and threads
 
 Two native workers own the work: one fetches over a dedicated libcurl multi
-handle (up to four connections, separate from the download queue, so images
-never wait behind a large file), one decodes. Workers never touch JavaScript or
+handle (up to twelve connections, separate from the download queue, so images
+never wait behind a large file), one decodes. Images that an element draws are
+fetched and decoded before prefetches, in request order. Workers never touch JavaScript or
 the engine. The render thread only submits, releases and polls once per frame
 while loads are pending, then registers finished pixels with the engine.
 
@@ -73,8 +74,13 @@ while loads are pending, then registers finished pixels with the engine.
 
 All of it comes from the 128 MiB process heap shared with QuickJS, the
 framebuffer and the download buffers. Hosts stop the image workers and free
-every image before shutting the runtime down. Nothing is cached on disk; each
-launch fetches again.
+every image before shutting the runtime down.
+
+Fetched bytes are also kept on disk in the app's data directory
+(`FileSystem.dataDir` + `/.cache/images`, at most 64 MiB, least recently used
+first), so a relaunch decodes art without the network. Entries are fetched
+again after a week; responses over 16 MiB are not stored. Deleting the
+directory clears the cache.
 
 ## Hardware status
 

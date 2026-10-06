@@ -39,8 +39,9 @@
 //   network.cancel(id)             requests cancellation
 //   network.poll()                 progress/results; consumes terminal snapshots
 //   network.version()              transport version string
-//   image.load(url, width, height, fit) {id, state, name, width, height, error}; takes a reference
-//                                  fit: 0 cover, 1 contain, 2 stretch, 3 none; state 'loading' |
+//   image.load(url, width, height, fit, prefetch) {id, state, name, width, height, error}; takes a
+//                                  reference; fit: 0 cover, 1 contain, 2 stretch, 3 none; prefetch
+//                                  (optional) loads after drawn images; state 'loading' |
 //                                  'ready' | 'failed'; name is the engine image name when ready
 //   image.release(id)              drops a reference; cancels unfinished work without references
 //   image.poll()                   [{id, state, name, width, height, error}] finished since last poll
@@ -129,5 +130,7 @@ void vibrate(float strength, float seconds);
 JSValue ps5_react_network_api(JSContext* ctx);
 // ABI v3: remote images fetched and decoded off-thread, registered with the engine on poll.
 JSValue ps5_react_image_api(JSContext* ctx);
+// Starts the image workers (after network::start) with the disk cache in the app's data directory.
+bool ps5_react_start_images();
 // Unregisters every remote image from the engine, then stops the image workers and frees them.
 void ps5_react_stop_images();
