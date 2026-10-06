@@ -98,6 +98,12 @@ def dependency(name, override=None):
     return path
 
 
+def stb_image():
+    """Directory holding the pinned single-file image decoder (public domain or MIT)."""
+    pinned = LOCK["stbImage"]
+    return fetch(pinned["url"], DEPS / "stbImage/stb_image.h", pinned["sha256"]).parent
+
+
 def app_files(app):
     """App sources; an external app directory may also be its own repository."""
     for directory, folders, files in os.walk(app):

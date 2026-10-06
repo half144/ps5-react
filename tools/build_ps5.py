@@ -15,7 +15,7 @@ import tarfile
 import urllib.request
 import zipfile
 
-from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency
+from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
 from network_ports import ports, copy_notices
 
 BUILD = ROOT / ".build/starter/ps5"
@@ -131,13 +131,14 @@ def main():
                ROOT / "native/ps5/elevation_transport.cpp",
                ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/network.cpp",
                ROOT / "native/shared/network_api.cpp", ROOT / "native/ps5/network_platform.cpp",
+               ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/gl_presenter.cpp",
                ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/input_script.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system")],
                hui / "src/core/input.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]
     includes = [hui / "src", ROOT / "native/shared", ROOT / "native/ps5", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
-                er / "backends/software", quickjs]
+                er / "backends/software", quickjs, stb_image()]
     if access_client:
         sources.append(access_client / "examples/sandbox-elevation/src/elevation.cpp")
         includes.append(access_client / "examples/sandbox-elevation")
@@ -201,6 +202,8 @@ def main():
     else:
         for name in ("lapy.elf", "lapy-manifest.json"):
             (app / name).unlink(missing_ok=True)
+    stb = (stb_image() / "stb_image.h").read_text()
+    (notices / "stb_image-LICENSE").write_text(stb[stb.index("This software is available under 2 licenses"):])
     if network_ports:
         copy_notices(access_client, notices / "networking")
         shutil.copy2(access_client / "LICENSE", notices / "networking-compat-LICENSE")

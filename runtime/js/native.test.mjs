@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {Downloads, Http} from './native.js';
+import {acquireImage, Downloads, Http} from './native.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
   let tick;
@@ -54,4 +54,35 @@ test('native network tasks deliver progress, release listeners and stop polling'
     globalThis.clearInterval = originalClear;
     delete globalThis.__ps5ReactNative;
   }
+});
+
+test('remote images poll only while loads are pending and release every reference', () => {
+  const released = [];
+  let finished = [];
+  let polls = 0;
+  globalThis.__ps5ReactNative = {image: {
+    load: (uri, width, height) => (width === 10
+      ? {id: 7, state: 'ready', name: '@image:7', width: 10, height: 10, error: ''}
+      : {id: 8, state: 'loading', name: '', width: 0, height: 0, error: ''}),
+    release: id => released.push(id),
+    poll: () => { polls++; const out = finished; finished = []; return out; },
+  }};
+  const seen = [];
+  const releaseReady = acquireImage('https://example.com/a.jpg', 10, 10, 0, result => seen.push(result.state));
+  globalThis.__ps5ReactFrame(16);
+  assert.equal(polls, 0, 'a cached image needs no polling');
+  const releaseLoading = acquireImage('https://example.com/b.jpg', 20, 20, 0, result => seen.push(result.state));
+  globalThis.__ps5ReactFrame(16);
+  finished = [{id: 8, state: 'ready', name: '@image:8', width: 20, height: 20, error: ''}];
+  globalThis.__ps5ReactFrame(16);
+  globalThis.__ps5ReactFrame(16);
+  assert.equal(polls, 2, 'polling stops once nothing is pending');
+  assert.deepEqual(seen, ['ready', 'loading', 'ready']);
+  releaseReady();
+  releaseLoading();
+  assert.deepEqual(released, [7, 8]);
+  globalThis.__ps5ReactFrame(16);
+  globalThis.__ps5ReactFrame(16);
+  assert.equal(polls, 3, 'a release polls once more so eviction can run');
+  delete globalThis.__ps5ReactNative;
 });

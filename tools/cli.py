@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-from common import ROOT, app_config, app_files, bundle, dependency, run
+from common import ROOT, app_config, app_files, bundle, dependency, run, stb_image
 
 
 def sandbox(app):
@@ -37,7 +37,7 @@ def desktop(app, test=False):
     build = ROOT / ".build" / app.name / "desktop"
     quickjs = dependency("quickjsSource")
     run(["cmake", "-S", ROOT / "native/desktop", "-B", build,
-         f"-DER_ROOT={er}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", "-DCMAKE_BUILD_TYPE=Release"],
+         f"-DER_ROOT={er}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", "-DCMAKE_BUILD_TYPE=Release"],
         log=build / "configure.log")
     run(["cmake", "--build", build, "--target", "ps5-react-preview", "-j", "6"], log=build / "build.log")
     command = [build / "ps5-react-preview", generated / "app.bundle.js"]
@@ -50,6 +50,7 @@ def desktop(app, test=False):
         if app != ROOT / "apps/starter":
             raise ValueError("The scripted UI test belongs to starter; use preview for other apps")
         run(["python3", ROOT / "tools/test_network.py"], log=ROOT / ".build/network-test.log")
+        run(["python3", ROOT / "tools/test_images.py"], log=ROOT / ".build/image-test.log")
         command.append("--self-test")
     return command, build
 

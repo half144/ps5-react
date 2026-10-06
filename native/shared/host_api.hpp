@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v2) between the hosts and `@ps5-react/core`.
+// Native API contract (ABI v3) between the hosts and `@ps5-react/core`.
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
 // ErRuntimeConfig.install_host_globals and implements the filesystem with POSIX
@@ -39,6 +39,11 @@
 //   network.cancel(id)             requests cancellation
 //   network.poll()                 progress/results; consumes terminal snapshots
 //   network.version()              transport version string
+//   image.load(url, width, height, fit) {id, state, name, width, height, error}; takes a reference
+//                                  fit: 0 cover, 1 contain, 2 stretch, 3 none; state 'loading' |
+//                                  'ready' | 'failed'; name is the engine image name when ready
+//   image.release(id)              drops a reference; cancels unfinished work without references
+//   image.poll()                   [{id, state, name, width, height, error}] finished since last poll
 //   exit()                         asks the host to close after this frame
 // Failures throw a JS Error whose message names the call, the path, and strerror.
 #pragma once
@@ -122,3 +127,7 @@ void vibrate(float strength, float seconds);
 
 // ABI v2: synchronous native task submission/polling; I/O runs off-thread.
 JSValue ps5_react_network_api(JSContext* ctx);
+// ABI v3: remote images fetched and decoded off-thread, registered with the engine on poll.
+JSValue ps5_react_image_api(JSContext* ctx);
+// Unregisters every remote image from the engine, then stops the image workers and frees them.
+void ps5_react_stop_images();
