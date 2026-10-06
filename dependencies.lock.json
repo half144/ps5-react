@@ -16,7 +16,8 @@
       "patches/embeddedReact-image-unload.patch",
       "patches/embeddedReact-aspect-main-size.patch",
       "patches/embeddedReact-translate-subtree.patch",
-      "patches/embeddedReact-occluded-translate.patch"
+      "patches/embeddedReact-occluded-translate.patch",
+      "patches/embeddedReact-text-wrap-height.patch"
     ]
   },
   "platform": {

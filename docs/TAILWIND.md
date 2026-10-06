@@ -244,6 +244,12 @@ with any alpha the color already has. `bg-opacity-*` and similar are rejected.
 | `line-clamp-none` | `numberOfLines: 0` |
 | `text-ellipsis`, `text-clip` | `ellipsizeMode` `tail` / `clip` |
 
+A `Text` without a fixed height is as tall as the lines it wraps into at the
+width it gets, at most `numberOfLines` (none means unlimited): a short title
+with `line-clamp-3` takes one line, not three. In a row, a `flex-1` text wraps
+at the width left to it and the row grows to hold it. Give the element a height
+(`h-*`, `min-h-*`) where a fixed block is wanted, such as aligned card titles.
+
 Font sizes (size / line height, logical px): `xs` 12/16, `sm` 14/20, `base`
 16/24, `lg` 18/28, `xl` 20/28, `2xl` 24/32, `3xl` 30/36, `4xl` 36/40, and
 `5xl` 48, `6xl` 60, `7xl` 72, `8xl` 96, `9xl` 128 with line height 1×.

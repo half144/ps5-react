@@ -60,6 +60,9 @@ together with its descendants, which kept painting at their layout boxes.
 `embeddedReact-occluded-translate.patch` (Apache-2.0 engine and test files; not
 yet proposed upstream) keeps a translated node's paint record translated while
 an opaque node above covers it, so its next move erases what it painted.
+`embeddedReact-text-wrap-height.patch` (Apache-2.0 layout, text renderer and
+test files; not yet proposed upstream) makes an auto-height Text as tall as the
+lines it wraps into, capped by `numberOfLines`, including in flexed rows.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
