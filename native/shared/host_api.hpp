@@ -55,6 +55,10 @@ constexpr std::size_t kMaxReadBytes = 8 * 1024 * 1024;
 // Shared (host_api.cpp).
 void ps5_react_install_host_api(JSContext* ctx);
 bool ps5_react_exit_requested();
+// Calls `globalThis.__ps5ReactFrame(elapsedMs)` (runtime/js/frame.js) once per frame, after
+// er_runtime_pump() and before er_commit(): per-frame motion steps by the time the frame advances
+// on screen. False when it threw.
+bool ps5_react_frame(JSContext* ctx, double elapsed_ms);
 
 // Latest controller state, set by the host once per frame before er_runtime_pump().
 struct GamepadState {

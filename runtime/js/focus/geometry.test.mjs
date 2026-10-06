@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {approach, findClosest, findNearest, findWrap, revealOffset} from './geometry.js';
+import {findClosest, findNearest, findWrap, revealOffset, scrollStep} from './geometry.js';
 
 const rect = (x, y, width = 100, height = 100) => ({x, y, width, height});
 const grid = () => {
@@ -82,12 +82,34 @@ test('reveal scrolls the least, keeps a margin, and clamps', () => {
   assert.equal(revealOffset(0, 400, 500, 300, 1000, 10), 390);
 });
 
-test('a scroll step approaches its target, capped per frame, and lands exactly', () => {
-  assert.equal(approach(0, 100, 16, 70, 10), 100 * (1 - Math.exp(-16 / 70)));
-  assert.equal(approach(0, 2000, 16, 70, 4), 64);
-  assert.equal(approach(1000, 0, 16, 70, 4), 936);
-  assert.equal(approach(99.6, 100, 16, 70, 4), 100);
-  let y = 0;
-  for (let frame = 0; frame < 120 && y !== 600; frame++) y = approach(y, 600, 16, 70, 4);
-  assert.equal(y, 600);
+/** Per-frame steps of a scroll from `from` to `to`, retargeting by `extra` px every `every` frames. */
+function steps(from, to, {extra = 0, every = 0, frames = 200} = {}) {
+  let position = from, speed = 0, target = to;
+  const deltas = [];
+  for (let frame = 1; frame <= frames && (position !== target || (every && frame < frames)); frame++) {
+    if (every && frame % every === 0) target += extra;
+    const [next, nextSpeed] = scrollStep(position, speed, target, 60, 18, 6);
+    deltas.push(next - position);
+    [position, speed] = [next, nextSpeed];
+  }
+  return {position, deltas};
+}
+
+test('a scroll step speeds up, cruises and brakes to land exactly in whole pixels', () => {
+  const {position, deltas} = steps(0, 1000);
+  assert.equal(position, 1000);
+  assert.deepEqual(deltas.slice(0, 4), [18, 36, 54, 60]);
+  assert.ok(deltas.every(Number.isInteger));
+  // Braking never speeds up again and ends without a tail of tiny steps.
+  const braking = deltas.slice(deltas.lastIndexOf(60) + 1);
+  assert.ok(braking.every((delta, i) => i === 0 || delta <= braking[i - 1]));
+  assert.ok(braking.length <= 11);
+  assert.deepEqual(steps(1000, 0).deltas.slice(0, 2), [-18, -36]);
+  assert.deepEqual(steps(0, 3).deltas, [3]);
+});
+
+test('a target that keeps moving ahead scrolls at one steady speed', () => {
+  // A held key: one 421 px row every 6 frames, faster than the cap.
+  const {deltas} = steps(0, 421, {extra: 421, every: 6, frames: 70});
+  assert.ok(deltas.slice(6).every(delta => delta >= 58 && delta <= 60), deltas.join());
 });

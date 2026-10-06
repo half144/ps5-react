@@ -68,6 +68,12 @@ and `back`. For ABI v1 compatibility the runtime also delivers `previous` (after
 `up`/`left`) and `next` (after `down`/`right`) to `useController` handlers only.
 Desktop: arrow keys, Enter, Backspace. Options/Escape still exit.
 
+Once per frame, after the pump and before the commit, hosts also call
+`globalThis.__ps5ReactFrame(elapsedMs)` with the time the frame advances (on the
+PS5 a whole number of 60 Hz vblanks). Focus scrolling steps there, so it moves on
+every presented frame; a timer drifts against the display and skips or doubles
+frames.
+
 | Action | Desktop | PS5 |
 | --- | --- | --- |
 | `up`, `down`, `left`, `right` | Arrow keys | D-pad, left stick |
@@ -158,9 +164,10 @@ returns whether something took focus, so it can be returned from `onBack`.
 ## ScrollView
 
 A `ScrollView` scrolls its focused descendant into view (minimal movement with a
-margin), easing toward the target through the native scroll offset (about 200 ms for
-one move) at no more than 40 logical px per frame, so a held key scrolls at a steady
-speed instead of restarting the ease on every repeat.
+margin) through the native scroll offset, stepped once per presented frame in whole
+pixels: it speeds up over four frames to at most 40 logical px per frame and
+brakes to stop exactly on the target, with no slow tail. A held key scrolls at that
+steady speed, and a new target mid-scroll keeps the current speed.
 
 ```jsx
 <ScrollView className="flex-1 gap-1">

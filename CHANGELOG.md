@@ -20,6 +20,22 @@
   operation and throughput remain unverified. Add localhost native and JS
   lifecycle coverage to `npm test`.
 
+- Focus scrolling steps once per presented frame, through a new host frame
+  callback (`globalThis.__ps5ReactFrame`), in whole pixels: it speeds up over
+  four frames, cruises at 40 logical px per frame and brakes to the target.
+  It used to step from a 16 ms timer with an exponential ease: on the PS5,
+  frames with no timer tick presented no motion (about 45 per 330 scrolling
+  frames in five Overdrive runs) and every scroll ended in a crawl of 1-3 px
+  steps (about 110 frames). Now there are none of either, and a held key
+  scrolls at a constant 60 px per frame.
+- The PS5 frame log's engine split (`ERUI_PERF_STATS`) reads the time-stamp
+  counter (`sceKernelReadTsc`, about 11 ns) instead of `clock_gettime` (about
+  0.88 µs). The engine reads that clock around every blit and bridge call, so a
+  full-screen frame paid 10-15 ms for its own statistics: opening an Overdrive
+  game page went from a 51 ms to a 36 ms frame and going back from 39 to 20 ms.
+  Raster figures logged before this change include that overhead.
+- On AVX2 targets (the PS5) the software backend blends eight pixels per step,
+  bit-identical to the scalar loops.
 - When the surface matches the render size, the presenter keeps the frame in
   two buffer textures (`texelFetch`) and uploads changed rows with
   `glBufferSubData`. On the PS5 that costs about 0.46 ms for 1920×540 rows

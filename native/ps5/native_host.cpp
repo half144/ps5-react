@@ -33,6 +33,8 @@ extern "C" {
 #include "native_renderer.h"
 #include "software_backend.h"
 void er_register_assets(void);
+std::uint64_t sceKernelReadTsc(void);
+std::uint64_t sceKernelGetTscFrequency(void);
 extern const char proof_bundle[];
 extern const unsigned long proof_bundle_length;
 }
@@ -105,7 +107,10 @@ private:
   std::string pending_;
 };
 
-std::uint32_t perf_clock() { return static_cast<std::uint32_t>(hui::sys::monotonic_us()); }
+// The engine reads this clock around every blit, thousands of times in a full-screen frame:
+// clock_gettime made the frame log cost about 10 ms there, the time-stamp counter costs nothing.
+std::uint64_t tsc_per_us = 1;
+std::uint32_t perf_clock() { return static_cast<std::uint32_t>(sceKernelReadTsc() / tsc_per_us); }
 
 // Indexed like kButtonNames.
 constexpr hui::Action kButtonActions[] = {
@@ -219,6 +224,7 @@ bool run_proof() {
       if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) slow_frame_us = std::atoi(text) * 1000u;
       std::fclose(file);
     }
+    tsc_per_us = std::max<std::uint64_t>(sceKernelGetTscFrequency() / 1000000, 1);
     er_perf_set_clock(perf_clock);
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
@@ -242,7 +248,15 @@ bool run_proof() {
       stats.lap(FrameStats::input, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_JS);
       er_runtime_pump();
+      // The display shows a new frame every vblank, so motion advances by whole vblanks, not by the
+      // loop's jittery wall-clock interval.
+      const std::int64_t vblanks = std::max<std::int64_t>(1, (now - previous + 8333) / 16667);
+      ok = ps5_react_frame(er_runtime_context(), vblanks * 1000.0 / 60.0);
       er_perf_phase_end(ER_PERF_PHASE_JS);
+      if (!ok) {
+        async_log::write("[PS5-REACT] frame callback exception");
+        break;
+      }
       er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
       stats.lap(FrameStats::update, hui::sys::monotonic_us());

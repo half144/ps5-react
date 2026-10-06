@@ -252,7 +252,12 @@ struct Host {
     stats.lap(FrameStats::input, now_us());
     er_perf_phase_begin(ER_PERF_PHASE_JS);
     er_runtime_pump();
+    const bool stepped = ps5_react_frame(er_runtime_context(), std::min<Uint32>(SDL_GetTicks() - previous_tick, 50));
     er_perf_phase_end(ER_PERF_PHASE_JS);
+    if (!stepped) {
+      std::fprintf(stderr, "Frame callback failed\n");
+      return false;
+    }
     er_commit();
     stats.lap(FrameStats::update, now_us());
     if (ps5_react_exit_requested()) {

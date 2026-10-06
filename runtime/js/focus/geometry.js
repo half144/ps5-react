@@ -130,17 +130,21 @@ export function revealOffset(offset, start, size, viewport, max, margin) {
 }
 
 /**
- * One step of a scroll toward `target`: an exponential approach (time constant `tauMs`), so a new target
- * mid-scroll continues from the current position without restarting, capped at `maxPerMs` px per ms so a
- * held key never exposes more than a small strip per frame. Lands exactly on the target.
- * @param {number} current @param {number} target @param {number} dtMs @param {number} tauMs
- * @param {number} maxPerMs
+ * One frame of a scroll toward `target`, in whole pixels: the speed rises by up to `accel` px per frame,
+ * cruises at `maxSpeed`, and falls by `brake` px per frame to stop exactly on the target, with no slow
+ * tail. At cruise every frame moves the same distance, and a new target keeps the current speed, so a
+ * held key scrolls at one steady speed.
+ * @param {number} position whole px @param {number} speed px per frame, signed
+ * @param {number} target whole px @param {number} maxSpeed @param {number} accel @param {number} brake
+ * @returns {[number, number]} the new position and speed
  */
-export function approach(current, target, dtMs, tauMs, maxPerMs) {
-  const remaining = target - current;
-  const cap = maxPerMs * dtMs;
-  const step = remaining * (1 - Math.exp(-dtMs / tauMs));
-  const bounded = Math.max(-cap, Math.min(cap, step));
-  // The last pixel of an exponential tail would take many frames: finish it at once.
-  return Math.abs(remaining - bounded) < 1 ? target : current + bounded;
+export function scrollStep(position, speed, target, maxSpeed, accel, brake) {
+  const remaining = target - position;
+  if (remaining === 0) return [position, 0];
+  const direction = Math.sign(remaining);
+  const distance = Math.abs(remaining);
+  // The fastest speed that still stops within `distance`: v + (v - brake) + ... <= distance.
+  const stoppable = Math.floor((Math.sqrt(brake * brake + 8 * brake * distance) - brake) / 2);
+  const step = Math.min(distance, Math.max(1, Math.min(maxSpeed, stoppable, speed * direction + accel)));
+  return [position + direction * step, direction * step];
 }

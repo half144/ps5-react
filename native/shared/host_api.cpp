@@ -426,3 +426,20 @@ bool ps5_react_exit_requested() {
 void ps5_react_set_gamepad(const GamepadState& state) {
   gamepad = state;
 }
+
+bool ps5_react_frame(JSContext* ctx, double elapsed_ms) {
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue fn = JS_GetPropertyStr(ctx, global, "__ps5ReactFrame");
+  bool ok = true;
+  if (JS_IsFunction(ctx, fn)) {
+    JSValue arg = JS_NewFloat64(ctx, elapsed_ms);
+    JSValue result = JS_Call(ctx, fn, global, 1, &arg);
+    ok = !JS_IsException(result);
+    if (!ok) JS_FreeValue(ctx, JS_GetException(ctx));
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, arg);
+  }
+  JS_FreeValue(ctx, fn);
+  JS_FreeValue(ctx, global);
+  return ok;
+}

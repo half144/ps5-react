@@ -102,13 +102,10 @@ next child only after the previous one left.
   elements whose laid-out size fits the transform scratch buffer (512×512
   physical px in the default profile). Translate and opacity have no size limit;
   full-screen opacity is expensive.
-- On the PS5 the cost of a change is its raster, roughly 10-20 ns per changed
-  pixel (more under scaled images and gradients); uploading it costs about
-  0.5 ms per 1920×540 rows through the presenter's buffer textures. A 60 fps
-  frame fits well under 1 Mpx of change at 1080p. Before buffer textures, uploads
-  cost about 15 ns per pixel and a 1920×860 block rising in ran at 26 ms
-  frames; such a block still repaints all of it every frame, so prefer
-  animating small elements.
+- On the PS5 the cost of a change is mostly its raster, about 5 ns per changed
+  pixel at 1080p (more under scaled images and gradients), plus about 0.5 ms to
+  upload 1920×540 rows through the presenter's buffer textures. Full-screen
+  changes still take a frame or more each, so prefer animating small elements.
 - Animated opacity applies to View-family nodes; `motion.Text`/`motion.Image`
   wrap themselves in a View to fade.
 - Values are allocated lazily per animated key and released on unmount.
