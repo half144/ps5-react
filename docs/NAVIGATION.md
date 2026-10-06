@@ -207,7 +207,10 @@ A `ScrollView` scrolls its focused descendant into view (minimal movement with a
 margin) through the native scroll offset, stepped once per presented frame in whole
 pixels: it speeds up over four frames to at most 40 logical px per frame and
 brakes to stop exactly on the target, with no slow tail. A held key scrolls at that
-steady speed, and a new target mid-scroll keeps the current speed.
+steady speed, and a new target mid-scroll keeps the current speed. When focus
+moves faster than that (a held key over tall rows) and the target gets more than
+a third of the viewport ahead, the cap rises by a quarter of the excess, so the
+screen follows focus instead of falling ever further behind.
 
 ```jsx
 <ScrollView className="flex-1 gap-1">

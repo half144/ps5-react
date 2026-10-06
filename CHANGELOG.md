@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Let focus scrolling catch up with a held key: once the target is more than a
+  third of the viewport ahead, the speed cap rises with the distance, so tall
+  rows no longer leave the screen a page behind focus (and a `VirtualList`
+  mounting every row in between).
+
 - Fix black rows in a `VirtualList` while a held key scrolls it: rows still on
   screen behind the scroll target were unmounted when tall rows let the target
   run ahead of the scroll, and a filling row could stop at its first card. The

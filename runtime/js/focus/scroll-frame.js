@@ -5,7 +5,7 @@
 // NativeUI.scrollTo (patches/embeddedReact-scroll-to.patch) and `onScrollTarget`. Free of React so
 // tests can drive it with a stand-in NativeUI.
 import {onFrame} from '../frame.js';
-import {anchorOffset, revealOffset, scrollStep} from './geometry.js';
+import {anchorOffset, catchUpSpeed, revealOffset, scrollStep} from './geometry.js';
 
 // 32 logical px of a 1280-wide layout, in screen px like the layout rectangles.
 const MARGIN = 32 / 1280;
@@ -63,8 +63,10 @@ export function createFrame(parent) {
         // A late frame advances the vblanks it covered, at most two, so a hitch is not followed by a jump.
         for (let n = Math.min(2, Math.max(1, Math.round(elapsedMs / FRAME_MS))); n > 0; n--) {
           let speedX, speedY;
-          [x, speedX] = scrollStep(x, frame.speed[0], frame.target[0], maxSpeed, accel, brake);
-          [y, speedY] = scrollStep(y, frame.speed[1], frame.target[1], maxSpeed, accel, brake);
+          const capX = catchUpSpeed(frame.target[0] - x, frame.viewport.width, maxSpeed);
+          const capY = catchUpSpeed(frame.target[1] - y, frame.viewport.height, maxSpeed);
+          [x, speedX] = scrollStep(x, frame.speed[0], frame.target[0], capX, accel, brake);
+          [y, speedY] = scrollStep(y, frame.speed[1], frame.target[1], capY, accel, brake);
           frame.speed = [speedX, speedY];
         }
         const [atX, atY] = NativeUI.scrollTo(frame.handle, x, y);
