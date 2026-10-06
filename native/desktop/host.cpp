@@ -26,6 +26,7 @@ void er_register_assets(void);
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "input_script.hpp"
+#include "js_heap.hpp"
 #include "screenshot.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
@@ -105,6 +106,7 @@ struct Host {
   Uint32 slow_frame_us = 33000;
   SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
+  GcScheduler gc_scheduler{now_us};
   bool l2_down = false, r2_down = false;
 
   ~Host() {
@@ -152,6 +154,7 @@ struct Host {
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;
+    cfg.malloc_functions = js_heap_functions();
     cfg.max_stack_size = 1024 * 1024;
     cfg.install_host_globals = ps5_react_install_host_api;
     runtime_started = er_runtime_init(&cfg);
@@ -178,6 +181,7 @@ struct Host {
   }
 
   bool dispatch(const char* action) {
+    gc_scheduler.input(now_us());
     er_perf_phase_begin(ER_PERF_PHASE_JS);
     JSContext* ctx = er_runtime_context();
     JSValue global = JS_GetGlobalObject(ctx);
@@ -307,6 +311,8 @@ struct Host {
     stats.lap(FrameStats::present, now_us());
     if (swap) SDL_GL_SwapWindow(window);
     stats.lap(FrameStats::swap, now_us());
+    if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), now_us()); line && log_frames)
+      std::printf("[PS5-REACT] %s\n", line);
     const Uint32 now = SDL_GetTicks();
     embedded_renderer_tick(std::min<Uint32>(now - previous_tick, 50));
     previous_tick = now;

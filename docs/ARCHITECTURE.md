@@ -38,6 +38,16 @@ has no knowledge of React state, fonts, or widgets. The engine and JavaScript
 run on the same render thread. The PS5 host keeps the heap, shims, CRT, SDK
 pair, and FSELF path used by the hardware-tested proof of concept.
 
+QuickJS frees most objects when their last reference goes, but cycles (React
+fibers of unmounted components, effect lists) wait for its collector, a pause of
+tens of milliseconds on the PS5 that runs inside whatever allocation crosses its
+threshold, often the frame handling a key press. Hosts install a counting
+allocator (`native/shared/js_heap.cpp`) and collect in idle frames, half a
+second after the last input, once a third of the room before that threshold is
+garbage, so bursts of input start with most of it. The threshold itself is
+never raised, and `memory_limit` still bounds the heap. Hosts log each
+collection as `gc: idle` or `gc: automatic` with the live heap.
+
 `className` and `tw` styling is compiled by `tools/tailwind` during bundling into
 literal style objects; class names and CSS never reach QuickJS or the engine.
 See [TAILWIND.md](TAILWIND.md).

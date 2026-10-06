@@ -17,20 +17,43 @@ const REBASE_MARGIN = 2;
 
 const same = (a, b) => a[0] === b[0] && a[1] === b[1];
 
+/** Whether `a` and `b` hold the same items in [first, end), as far as each reaches. */
+function sameItems(a, b, first, end) {
+  if (a === b) return true;
+  if (Math.min(a.length, end) !== Math.min(b.length, end)) return false;
+  for (let index = first; index < Math.min(a.length, end); index++) if (a[index] !== b[index]) return false;
+  return true;
+}
+
 // A row re-renders only when its own items or sizes change, not on every window step: re-rendering
-// every mounted card on each step cost more than mounting the new row.
-const Row = memo(function Row({data, first, end, renderItem, keyExtractor, recycle, height, gap, columnGap}) {
+// every mounted card on each step cost more than mounting the new row. A filling row re-renders
+// alone as it gains items (list.rowRenders), and keeps the elements of the items it has, so React
+// skips them: each step renders one new card, not the list and the row's earlier cards again.
+const Row = memo(function Row({list, row, data, columns, renderItem, keyExtractor, recycle, height, gap, columnGap}) {
+  const [, rerender] = useReducer(count => count + 1, 0);
+  useLayoutEffect(() => {
+    list.rowRenders.set(row, rerender);
+    return () => { if (list.rowRenders.get(row) === rerender) list.rowRenders.delete(row); };
+  }, [row]);
+  const cache = useRef([]).current;
+  const first = row * columns;
+  const end = Math.min(data.length, first + (list.filling.get(row) ?? columns));
   const items = [];
   for (let index = first; index < end; index++) {
     const item = data[index];
-    items.push(createElement(Fragment, {key: recycle ? index - first : keyExtractor(item, index)},
-      renderItem({item, index})));
+    const slot = index - first;
+    let entry = cache[slot];
+    if (!entry || entry.item !== item || entry.index !== index || entry.renderItem !== renderItem) {
+      entry = cache[slot] = {item, index, renderItem, element: createElement(Fragment,
+        {key: recycle ? slot : keyExtractor(item, index)}, renderItem({item, index}))};
+    }
+    items.push(entry.element);
   }
+  cache.length = end - first;
   return createElement(View, {style: {flexDirection: 'row', height, columnGap, marginBottom: gap}}, items);
-}, (a, b) => a.first === b.first && a.end === b.end && a.renderItem === b.renderItem && a.height === b.height
+}, (a, b) => a.row === b.row && a.columns === b.columns && a.renderItem === b.renderItem && a.height === b.height
   && a.gap === b.gap && a.columnGap === b.columnGap
-  && (a.data === b.data || (a.data.length >= a.end && b.data.length >= b.end
-    && a.data.slice(a.first, a.end).every((item, i) => item === b.data[b.first + i]))));
+  && sameItems(a.data, b.data, a.row * a.columns, (a.row + 1) * a.columns));
 
 /**
  * @typedef {{data: readonly any[], renderItem: (info: {item: any, index: number}) => import('react').ReactNode,
@@ -62,6 +85,7 @@ export function VirtualList(props) {
     // `base`: the first row the content represents.
     const list = {
       props, rows, stride, layout: null, range: [0, Math.min(rows, props.initialNumRows ?? 2)], filling: new Map(),
+      rowRenders: new Map(),
       base: 0, scroll: 0, direction: 1, slots: new Map(), stepping: null, endFor: -1, required: null, desired: null,
       span: () => Math.max(1, Math.floor(SPAN_PX / list.stride)),
       /** The row of the focused element when it is in this list, else -1. */
@@ -127,7 +151,9 @@ export function VirtualList(props) {
           list.setRange(stepRange(list.range, list.required, list.desired, 1), Infinity);
           changed = true;
         }
-        for (let row = first; row < end; row++) changed = list.filling.delete(row) || changed;
+        for (let row = first; row < end; row++) {
+          if (list.filling.delete(row)) changed = list.renderRow(row) || changed;
+        }
         if (changed) rerender();
       },
       /**
@@ -144,11 +170,19 @@ export function VirtualList(props) {
           const [row, count] = [...list.filling].reduce((a, b) => (Math.abs(b[0] - middle) < Math.abs(a[0] - middle) ? b : a));
           if (count + batch >= columns) list.filling.delete(row);
           else list.filling.set(row, count + batch);
+          if (!list.renderRow(row)) rerender();
+          return;
         } else {
           list.stopStepping();
           return;
         }
         rerender();
+      },
+      /** Re-renders a mounted row alone; false when it is not mounted yet and the list has to render. */
+      renderRow(row) {
+        const render = list.rowRenders.get(row);
+        render?.();
+        return render !== undefined;
       },
       /** Mounts `range`; rows entering it start with `count` items. */
       setRange(range, count) {
@@ -188,7 +222,7 @@ export function VirtualList(props) {
   // New data or sizes move the window; a longer list may also call onEndReached again.
   useLayoutEffect(() => list.update(), [rows, stride]);
 
-  const {base, filling} = list;
+  const {base} = list;
   const spanEnd = Math.min(rows, base + list.span());
   const first = Math.max(base, Math.min(list.range[0], spanEnd));
   const end = Math.max(first, Math.min(list.range[1], spanEnd));
@@ -197,10 +231,8 @@ export function VirtualList(props) {
   const children = [];
   if (first > base) children.push(createElement(View, {key: 'before', style: {height: (first - base) * stride}}));
   for (let row = first; row < end; row++) {
-    children.push(createElement(Row, {key: recycle ? list.slots.get(row) : row, data, renderItem, keyExtractor,
-      recycle, first: row * numColumns, end: Math.min(data.length, row * numColumns + (filling.get(row) ?? numColumns)),
-      height,
-      gap: row < rows - 1 ? gap : 0, columnGap}));
+    children.push(createElement(Row, {key: recycle ? list.slots.get(row) : row, list, row, data, columns: numColumns,
+      renderItem, keyExtractor, recycle, height, gap: row < rows - 1 ? gap : 0, columnGap}));
   }
   if (end < spanEnd) {
     const after = (spanEnd - end) * stride - (spanEnd === rows ? gap : 0);

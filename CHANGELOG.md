@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Collect JavaScript garbage in idle frames: hosts count the QuickJS heap and
+  run its collector half a second after the last input once a third of the
+  room before its threshold is garbage, so a collection (40–70 ms on the PS5)
+  lands in a pause rather than mid-scroll; the threshold is never raised. Each
+  collection is logged as `gc: idle` or `gc: automatic`. `VirtualList` fill
+  steps re-render the filling row alone and keep its existing cards, cutting
+  the garbage a scroll through a grid leaves by about a third, and focusable elements
+  use one effect fewer per render.
+
 - Size a `Text` by the lines it actually wraps into: an auto-height text was one
   line tall (cutting wrapped text to its first line) or exactly `numberOfLines`
   lines whether or not it needed them. It now wraps at the width it gets, at
