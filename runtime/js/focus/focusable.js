@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // Focusable elements: one manager node per element, re-rendered only when that node changes.
-import {createElement, forwardRef, useContext, useLayoutEffect, useReducer, useRef} from 'react';
-import {FrameContext, manager, NodeContext, ScopeContext} from './runtime.js';
+import {createElement, forwardRef, useContext, useLayoutEffect, useReducer, useRef, useState} from 'react';
+import {AnchorContext, FrameContext, manager, NodeContext, ScopeContext} from './runtime.js';
 
 /**
  * @typedef {import('./manager.js').NodeProps & {focusable?: boolean,
@@ -43,9 +43,10 @@ function useNodeState(node) {
 export function useFocusNode(options, enabled = true) {
   const scope = useContext(ScopeContext);
   const frame = useContext(FrameContext);
+  const anchor = useContext(AnchorContext);
   const self = useRef(null);
   if (enabled && !self.current) {
-    const node = manager.createNode(scope, frame, options);
+    const node = manager.createNode(scope, frame, options, anchor);
     self.current = {node, onLayout: event => {
       manager.setRect(node, event.layout);
       node.props.onLayout?.(event);
@@ -96,6 +97,26 @@ function Focusable({host, props, forwardedRef}) {
 }
 
 /**
+ * `scrollAnchor`: the enclosing ScrollView aligns this element's start when it reveals a focused
+ * descendant (or the element itself), instead of revealing only that descendant.
+ */
+function Anchor({inner, props, forwardedRef}) {
+  const frame = useContext(FrameContext);
+  const parent = useContext(AnchorContext);
+  const [anchor] = useState(() => {
+    const created = {parent, frame, rect: null, props, onLayout: event => {
+      created.rect = event.layout;
+      created.props.onLayout?.(event);
+    }};
+    return created;
+  });
+  anchor.props = props;
+  const {scrollAnchor, ...rest} = props;
+  return createElement(AnchorContext.Provider, {value: anchor},
+    createElement(inner, {...rest, ref: forwardedRef, onLayout: anchor.onLayout}));
+}
+
+/**
  * A host component that joins D-pad navigation when it is focusable; otherwise it renders the host
  * element directly, so plain elements carry no focus state.
  * @param {string} host Embedded React host tag
@@ -103,6 +124,7 @@ function Focusable({host, props, forwardedRef}) {
  */
 export function createFocusable(host, byDefault = false) {
   const Component = forwardRef((props, ref) => {
+    if (props.scrollAnchor) return createElement(Anchor, {inner: Component, props, forwardedRef: ref});
     if (isFocusable(props, byDefault)) return createElement(Focusable, {host, props, forwardedRef: ref});
     if (ref === null && typeof props.style !== 'function' && !('focusable' in props)) return createElement(host, props);
     const rest = {ref};

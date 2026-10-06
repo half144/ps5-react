@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {findClosest, findNearest, findWrap, revealOffset, scrollStep} from './geometry.js';
+import {anchorOffset, findClosest, findNearest, findWrap, revealOffset, scrollStep} from './geometry.js';
 
 const rect = (x, y, width = 100, height = 100) => ({x, y, width, height});
 const grid = () => {
@@ -112,4 +112,15 @@ test('a target that keeps moving ahead scrolls at one steady speed', () => {
   // A held key: one 421 px row every 6 frames, faster than the cap.
   const {deltas} = steps(0, 421, {extra: 421, every: 6, frames: 70});
   assert.ok(deltas.slice(6).every(delta => delta >= 58 && delta <= 60), deltas.join());
+});
+
+test('an anchor aligns its start past the margin, scrolls to 0 near the top, and never hides the item', () => {
+  // A section at 600 whose card sits at 650: the title stays on screen, not just the card.
+  assert.equal(anchorOffset(0, 650, 100, 600, 300, 1000, 10), 590);
+  assert.equal(anchorOffset(800, 650, 100, 600, 300, 1000, 10), 590);
+  // The hero at the top of the content scrolls all the way back to 0.
+  assert.equal(anchorOffset(400, 200, 100, 5, 300, 1000, 10), 0);
+  assert.equal(anchorOffset(0, 1300, 50, 1200, 300, 1000, 10), 1000);
+  // An anchor taller than the viewport: the item far below its start moves the least instead.
+  assert.equal(anchorOffset(0, 700, 50, 100, 300, 1000, 10), revealOffset(0, 700, 50, 300, 1000, 10));
 });

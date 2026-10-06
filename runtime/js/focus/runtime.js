@@ -15,6 +15,8 @@ export const ScopeContext = createContext(manager.root);
 export const FrameContext = createContext(null);
 /** @type {import('react').Context<import('./manager.js').Node | null>} the nearest focusable ancestor */
 export const NodeContext = createContext(null);
+/** @type {import('react').Context<import('./manager.js').Anchor | null>} the nearest `scrollAnchor` ancestor */
+export const AnchorContext = createContext(null);
 
 subscribeInput(action => {
   if (action === 'confirm') manager.press();

@@ -8,8 +8,10 @@ import {findClosest, findNearest, findWrap} from './geometry.js';
 /**
  * @typedef {import('./geometry.js').Rect} Rect
  * @typedef {import('./geometry.js').Direction} Direction
- * @typedef {{parent: Frame | null, x: number, y: number, reveal: (rect: Rect) => void}} Frame
+ * @typedef {{parent: Frame | null, x: number, y: number, reveal: (rect: Rect, anchor: Rect | null) => void}} Frame
  *   A scrolling ancestor; `x`/`y` is how far its content is scrolled.
+ * @typedef {{parent: Anchor | null, frame: Frame | null, rect: Rect | null}} Anchor
+ *   An element with `scrollAnchor`, whose start its ScrollView aligns when revealing a descendant.
  * @typedef {{focusKey?: string, onPress?: () => void, onFocus?: () => void, onBlur?: () => void,
  *   autoFocus?: boolean, disabled?: boolean, nextFocusUp?: string, nextFocusDown?: string,
  *   nextFocusLeft?: string, nextFocusRight?: string}} NodeProps
@@ -20,8 +22,8 @@ import {findClosest, findNearest, findWrap} from './geometry.js';
  * @typedef {'l1' | 'r1' | 'l2' | 'r2' | 'triangle' | 'square'} Action a button beyond D-pad, Cross and Circle
  * @typedef {{kind: 'scope', parent: Scope | null, props: ScopeProps, remembered: Node | null,
  *   returnTo: Node | null, dead: boolean}} Scope
- * @typedef {{kind: 'node', scope: Scope, frame: Frame | null, props: NodeProps, rect: Rect | null,
- *   order: number, pressed: boolean, dead: boolean, listeners: Set<() => void>,
+ * @typedef {{kind: 'node', scope: Scope, frame: Frame | null, anchor: Anchor | null, props: NodeProps,
+ *   rect: Rect | null, order: number, pressed: boolean, dead: boolean, listeners: Set<() => void>,
  *   pressTimer: unknown}} Node
  */
 
@@ -67,10 +69,11 @@ export class FocusManager {
 
   /**
    * Called while rendering, so `order` follows document order for elements mounted together.
-   * @param {Scope} scope @param {Frame | null} frame @param {NodeProps} props @returns {Node}
+   * @param {Scope} scope @param {Frame | null} frame @param {NodeProps} props
+   * @param {Anchor | null} [anchor] the nearest `scrollAnchor` ancestor (or the element itself) @returns {Node}
    */
-  createNode(scope, frame, props) {
-    return {kind: 'node', scope, frame, props, rect: null, order: this.order++, pressed: false, dead: false,
+  createNode(scope, frame, props, anchor = null) {
+    return {kind: 'node', scope, frame, anchor, props, rect: null, order: this.order++, pressed: false, dead: false,
       listeners: new Set(), pressTimer: null};
   }
 
@@ -275,12 +278,17 @@ export class FocusManager {
     for (const listener of this.listeners) listener();
   }
 
-  /** Scrolls every scrolling ancestor, innermost first, until `node` is in view. @param {Node} node */
+  /**
+   * Scrolls every scrolling ancestor, innermost first, until `node` is in view; each one aligns the
+   * nearest `scrollAnchor` ancestor that it contains directly, if any. @param {Node} node
+   */
   reveal(node) {
     let rect = node.rect;
     if (!rect) return;
     for (let frame = node.frame; frame; frame = frame.parent) {
-      frame.reveal(rect);
+      let anchor = node.anchor;
+      while (anchor && anchor.frame !== frame) anchor = anchor.parent;
+      frame.reveal(rect, anchor?.rect ?? null);
       rect = {...rect, x: rect.x - frame.x, y: rect.y - frame.y};
     }
   }

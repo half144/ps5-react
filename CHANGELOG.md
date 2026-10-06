@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add `scrollAnchor` on `View` and `Pressable`: a vertical `ScrollView` aligns
+  the top of the focused element's nearest anchor (a section with its title,
+  the hero) past the margin instead of revealing only the element, falling back
+  to minimal movement when that would hide it. Add `ScrollView`
+  `onScrollTarget({x, y})`, called with each new focus-scroll target. See
+  docs/NAVIGATION.md.
+
 - Deliver L1, R1, L2, R2, Triangle and Square as the `l1`, `r1`, `l2`, `r2`,
   `triangle` and `square` actions (host input ABI v3): to `useController`, to
   the new `FocusScope.onAction` handler (innermost first, until one returns

@@ -42,7 +42,8 @@ around 6000 nodes. Paging kept both in bounds by mounting 20 cards at a time.
   own, the span re-centres: the spacer above the rows shrinks or grows, and the
   scroll offset and the focus rectangles move by the same amount in the same
   frame, so nothing moves on screen. The page around the list must fit in the
-  remaining 8000 px.
+  remaining 8000 px. A re-centre does not call the `ScrollView`'s
+  `onScrollTarget`: its offsets past the span are not page positions.
 
 ## Props
 

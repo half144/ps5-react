@@ -130,6 +130,18 @@ export function revealOffset(offset, start, size, viewport, max, margin) {
 }
 
 /**
+ * The offset that aligns an anchor's start `margin` past the viewport start (clamped), so a section
+ * title stays above its focused card; minimal movement instead when that would not show the item.
+ * @param {number} offset @param {number} start @param {number} size @param {number} anchor anchor start
+ * @param {number} viewport @param {number} max @param {number} margin
+ */
+export function anchorOffset(offset, start, size, anchor, viewport, max, margin) {
+  const aligned = Math.min(Math.max(anchor - margin, 0), max);
+  if (start >= aligned && start + size <= aligned + viewport) return aligned;
+  return revealOffset(offset, start, size, viewport, max, margin);
+}
+
+/**
  * One frame of a scroll toward `target`, in whole pixels: the speed rises by up to `accel` px per frame,
  * cruises at `maxSpeed`, and falls by `brake` px per frame to stop exactly on the target, with no slow
  * tail. At cruise every frame moves the same distance, and a new target keeps the current speed, so a

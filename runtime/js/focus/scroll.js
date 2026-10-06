@@ -7,7 +7,7 @@
 import {createElement, forwardRef, useContext, useLayoutEffect, useState} from 'react';
 import {ScrollView as HostScrollView} from 'embedded-react';
 import {onFrame} from '../frame.js';
-import {revealOffset, scrollStep} from './geometry.js';
+import {anchorOffset, revealOffset, scrollStep} from './geometry.js';
 import {FrameContext} from './runtime.js';
 
 // 32 logical px of a 1280-wide layout, in screen px like the layout rectangles.
@@ -31,19 +31,26 @@ function createFrame(parent) {
   const frame = {
     parent, x: 0, y: 0, props: {}, forwardedRef: null, handle: null, viewport: null, timer: null, target: null,
     speed: [0, 0], position: [0, 0], listeners: new Set(),
-    /** @param {import('./geometry.js').Rect} rect pre-scroll, like `viewport` */
-    reveal(rect) {
+    /**
+     * @param {import('./geometry.js').Rect} rect pre-scroll, like `viewport`
+     * @param {import('./geometry.js').Rect | null} anchor its `scrollAnchor` ancestor in this frame, aligned
+     *   on a vertical frame's y axis; the x axis and horizontal frames always move the least
+     */
+    reveal(rect, anchor) {
       const {viewport, handle} = frame;
       if (!viewport || handle == null) return;
       const [fromX, fromY, maxX, maxY] = NativeUI.scrollTo(handle, NaN, NaN);
       const margin = Math.round(screen.width * MARGIN);
       const x = revealOffset(frame.x, rect.x - viewport.x, rect.width, viewport.width, maxX, margin);
-      const y = revealOffset(frame.y, rect.y - viewport.y, rect.height, viewport.height, maxY, margin);
+      const y = anchor && !frame.props.horizontal
+        ? anchorOffset(frame.y, rect.y - viewport.y, rect.height, anchor.y - viewport.y, viewport.height, maxY, margin)
+        : revealOffset(frame.y, rect.y - viewport.y, rect.height, viewport.height, maxY, margin);
       if (x === frame.x && y === frame.y) return;
       frame.x = x;
       frame.y = y;
       frame.animate(fromX, fromY, x, y);
       frame.notify();
+      frame.props.onScrollTarget?.({x, y});
     },
     // A new target while scrolling only moves the target; the steps carry on at the current speed.
     animate(fromX, fromY, toX, toY) {
@@ -71,9 +78,11 @@ function createFrame(parent) {
         frame.position = [x, y];
         if (x !== frame.target[0] || y !== frame.target[1]) return;
         frame.stop();
+        const clamped = x !== frame.x || y !== frame.y;
         frame.x = x;
         frame.y = y;
         frame.notify();
+        if (clamped) frame.props.onScrollTarget?.({x, y});
       });
     },
     /**
@@ -120,7 +129,8 @@ function createFrame(parent) {
 
 /**
  * Embedded React's ScrollView, plus scrolling its focused descendant into view (minimal movement
- * with a margin, eased and speed-capped).
+ * with a margin, or aligned to its `scrollAnchor` ancestor; eased and speed-capped).
+ * `onScrollTarget({x, y})` reports each new focus-scroll target offset, when the scroll starts.
  */
 export const ScrollView = forwardRef((props, ref) => {
   const parent = useContext(FrameContext);
@@ -128,7 +138,7 @@ export const ScrollView = forwardRef((props, ref) => {
   frame.props = props;
   frame.forwardedRef = ref;
   useLayoutEffect(() => () => frame.stop(), []);
-  const {children, ...rest} = props;
+  const {children, onScrollTarget, ...rest} = props;
   return createElement(HostScrollView, {...rest, ref: frame.ref, onLayout: frame.onLayout, onScroll: frame.onScroll},
     createElement(FrameContext.Provider, {value: frame}, children));
 });

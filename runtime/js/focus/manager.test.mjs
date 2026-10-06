@@ -306,3 +306,17 @@ test('shoulder and face buttons bubble through enclosing onAction handlers', () 
   assert.deepEqual(calls, ['inner:l1', 'inner:r1', 'outer:r1', 'inner:triangle', 'outer:triangle']);
   assert.equal(t.key(), 'button');
 });
+
+test('each frame reveals with the nearest scrollAnchor ancestor that it contains directly', () => {
+  const t = setup();
+  const revealed = [];
+  const outer = {parent: null, x: 0, y: 0, reveal: (rect, anchor) => revealed.push(['outer', anchor?.y])};
+  const rail = {parent: outer, x: 0, y: 0, reveal: (rect, anchor) => revealed.push(['rail', anchor?.y])};
+  const page = {parent: null, frame: null, rect: {x: 0, y: 0, width: 1000, height: 5000}};
+  const section = {parent: page, frame: outer, rect: {x: 0, y: 600, width: 1000, height: 300}};
+  const card = t.focus.createNode(t.focus.root, rail, {focusKey: 'card'}, section);
+  t.focus.register(card);
+  t.focus.setRect(card, {x: 0, y: 650, width: 100, height: 100});
+  t.focus.focus('card');
+  assert.deepEqual(revealed, [['rail', undefined], ['outer', 600]]);
+});

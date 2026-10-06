@@ -197,6 +197,44 @@ For lists of more than a few dozen items, or any list that loads more as it
 scrolls, put a [`VirtualList`](LISTS.md) in the `ScrollView`: it mounts only
 the rows near the viewport and near focus, and calls `onEndReached` near the end.
 
+### Section anchors
+
+Minimal movement reveals only the focused element: focusing a card in a
+horizontal rail below a section title can leave the title cut off. Mark the
+section with `scrollAnchor` (on a `View` or `Pressable`; keep it constant for
+the element's lifetime) and a vertical `ScrollView` aligns the section's top to
+the viewport top plus the margin instead, whichever element inside it takes focus:
+
+```jsx
+<ScrollView className="flex-1" onScrollTarget={({y}) => setHeaderHidden(y > heroHeight)}>
+  <View scrollAnchor className="h-[420px]">…hero with a Play button…</View>
+  {sections.map(section => (
+    <View key={section.id} scrollAnchor className="pt-10 gap-4">
+      <Text>{section.title}</Text>
+      <ScrollView horizontal className="h-[260px]">…cards…</ScrollView>
+    </View>
+  ))}
+</ScrollView>
+```
+
+- Each `ScrollView` uses the nearest `scrollAnchor` ancestor of the focused
+  element that lies directly inside it (not inside a nested `ScrollView`). In
+  the example, the horizontal rail still moves the least to show the card, and
+  the page aligns the section.
+- The offset is clamped to the content, so an anchor within the margin of the
+  content's top (the hero) scrolls all the way back to 0.
+- When the aligned offset would not show the focused element (an anchor taller
+  than the viewport), the `ScrollView` falls back to minimal movement for it.
+- Only the vertical axis of a vertical `ScrollView` aligns; horizontal
+  `ScrollView`s and the x axis always move the least.
+- An element can be its own anchor (`<View scrollAnchor focusable>`).
+
+`onScrollTarget({x, y})` on a `ScrollView` reports the offset it scrolls to on
+focus, once per new target when the scroll starts (and again if the content
+shrank and the scroll settled short of it). Touch scrolling does not call it;
+use `onScroll` for the live offset. Offsets are render pixels, like layout
+rectangles.
+
 ## Tailwind and motion integration
 
 - On an element that is focusable (`focusable`, `onPress`, or `Pressable`) and
