@@ -35,7 +35,7 @@ void print(const images::Result& r) {
 
 std::uint32_t load(const std::string& url, int w, int h, int fit, images::Result& result) {
   std::string error;
-  const auto id = images::load(url, w, h, static_cast<images::Fit>(fit), result, error);
+  const auto id = images::load(url, w, h, static_cast<images::Fit>(fit), false, result, error);
   if (!id) { std::cerr << error << '\n'; std::exit(4); }
   return id;
 }

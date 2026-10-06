@@ -58,9 +58,10 @@ JSValue load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return JS_EXCEPTION;
   if (width < 1 || height < 1 || width > 8192 || height > 8192 || fit < 0 || fit > 3)
     return JS_ThrowRangeError(ctx, "image.load %s: box %dx%d must be 1..8192 pixels per side", url.c_str(), width, height);
+  const bool prefetch = argc > 4 && JS_ToBool(ctx, argv[4]) == 1;
   images::Result result;
   std::string error;
-  if (!images::load(url, width, height, static_cast<images::Fit>(fit), result, error))
+  if (!images::load(url, width, height, static_cast<images::Fit>(fit), prefetch, result, error))
     return JS_ThrowPlainError(ctx, "%s", error.c_str());
   return state(ctx, result);
 }

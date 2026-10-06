@@ -41,7 +41,9 @@ bool start(const std::string& cache_directory);
 void stop(void (*evict)(std::uint32_t id));
 // Render thread. Returns the id (0 with `error` on invalid input); each load takes one reference,
 // shared by every load of the same url, box and fit. `result` reports a finished entry at once.
-std::uint32_t load(const std::string& url, int width, int height, Fit fit, Result& result, std::string& error);
+// Prefetches are fetched and decoded after images an element draws.
+std::uint32_t load(const std::string& url, int width, int height, Fit fit, bool prefetch, Result& result,
+                   std::string& error);
 // Drops one reference. Unfinished work without references is cancelled.
 void release(std::uint32_t id);
 // Finished loads since the last poll. Evicts unused images over budget first, calling `evict`

@@ -39,8 +39,9 @@
 //   network.cancel(id)             requests cancellation
 //   network.poll()                 progress/results; consumes terminal snapshots
 //   network.version()              transport version string
-//   image.load(url, width, height, fit) {id, state, name, width, height, error}; takes a reference
-//                                  fit: 0 cover, 1 contain, 2 stretch, 3 none; state 'loading' |
+//   image.load(url, width, height, fit, prefetch) {id, state, name, width, height, error}; takes a
+//                                  reference; fit: 0 cover, 1 contain, 2 stretch, 3 none; prefetch
+//                                  (optional) loads after drawn images; state 'loading' |
 //                                  'ready' | 'failed'; name is the engine image name when ready
 //   image.release(id)              drops a reference; cancels unfinished work without references
 //   image.poll()                   [{id, state, name, width, height, error}] finished since last poll

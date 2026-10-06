@@ -68,10 +68,10 @@ test('remote images poll only while loads are pending and release every referenc
     poll: () => { polls++; const out = finished; finished = []; return out; },
   }};
   const seen = [];
-  const releaseReady = acquireImage('https://example.com/a.jpg', 10, 10, 0, result => seen.push(result.state));
+  const releaseReady = acquireImage('https://example.com/a.jpg', 10, 10, 0, false, result => seen.push(result.state));
   globalThis.__ps5ReactFrame(16);
   assert.equal(polls, 0, 'a cached image needs no polling');
-  const releaseLoading = acquireImage('https://example.com/b.jpg', 20, 20, 0, result => seen.push(result.state));
+  const releaseLoading = acquireImage('https://example.com/b.jpg', 20, 20, 0, false, result => seen.push(result.state));
   globalThis.__ps5ReactFrame(16);
   finished = [{id: 8, state: 'ready', name: '@image:8', width: 20, height: 20, error: ''}];
   globalThis.__ps5ReactFrame(16);

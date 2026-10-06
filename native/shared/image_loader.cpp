@@ -50,7 +50,7 @@
 namespace images {
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr unsigned kConnections = 4, kAttempts = 3;
+constexpr unsigned kConnections = 12, kAttempts = 3;
 
 struct Entry {
   ~Entry() { std::free(pixels); }
@@ -59,6 +59,8 @@ struct Entry {
   int box_width = 0, box_height = 0;
   Fit fit = Fit::cover;
   std::atomic<bool> cancelled{false};
+  // Drawn by an element, not only prefetched: fetched and decoded before prefetches.
+  std::atomic<bool> wanted{false};
   // Written by the workers before the entry is handed to poll() under the service mutex.
   std::shared_ptr<const std::string> body;
   std::uint32_t* pixels = nullptr;
@@ -346,7 +348,7 @@ public:
     running_ = false;
   }
 
-  std::uint32_t load(const std::string& url, int width, int height, Fit fit, Result& result, std::string& error) {
+  std::uint32_t load(const std::string& url, int width, int height, Fit fit, bool prefetch, Result& result, std::string& error) {
     if (!running_) { error = "Image.load " + url + ": networking is not available"; return 0; }
     const std::string key = std::to_string(static_cast<int>(fit)) + ' ' + std::to_string(width) + 'x' +
                             std::to_string(height) + ' ' + url;
@@ -362,6 +364,7 @@ public:
       { std::lock_guard lock(mutex_); fetches_.push_back(entry); }
       curl_multi_wakeup(multi_);
     }
+    if (!prefetch) entry->wanted = true;
     ++entry->refs; entry->used = ++clock_;
     result = report(*entry);
     return entry->id;
@@ -552,13 +555,15 @@ private:
         if (stopping_) break;
         const auto now = Clock::now();
         // Loads joining a transfer or served from cache take no connection; this bound is loose.
-        for (std::size_t n = fetches_.size(); n && active + starting.size() < kConnections; --n) {
-          EntryPtr entry = std::move(fetches_.front());
-          fetches_.pop_front();
-          if (entry->cancelled) continue;
-          if (entry->retry_at > now) fetches_.push_back(std::move(entry));
-          else starting.push_back(std::move(entry));
-        }
+        // Images on screen first, then prefetches, each in request order.
+        for (const bool prefetches : {false, true})
+          for (std::size_t n = fetches_.size(); n && active + starting.size() < kConnections; --n) {
+            EntryPtr entry = std::move(fetches_.front());
+            fetches_.pop_front();
+            if (entry->cancelled) continue;
+            if (entry->retry_at > now || (!prefetches && !entry->wanted)) fetches_.push_back(std::move(entry));
+            else starting.push_back(std::move(entry));
+          }
       }
       for (EntryPtr& entry : starting) start_fetch(std::move(entry), active);
       int running = 0;
@@ -583,8 +588,10 @@ private:
         std::unique_lock lock(mutex_);
         wake_.wait(lock, [&] { return stopping_ || !decodes_.empty(); });
         if (stopping_) break;
-        entry = std::move(decodes_.front());
-        decodes_.pop_front();
+        auto next = std::find_if(decodes_.begin(), decodes_.end(), [](const EntryPtr& e) { return e->wanted.load(); });
+        if (next == decodes_.end()) next = decodes_.begin();
+        entry = std::move(*next);
+        decodes_.erase(next);
       }
       if (entry->cancelled) continue;
       decode(*entry);
@@ -617,8 +624,9 @@ Service service;
 bool start(const std::string& cache_directory) { return service.start(cache_directory); }
 void stop(void (*evict)(std::uint32_t)) { service.stop(evict); }
 void discard(std::uint32_t id, const std::string& reason) { service.discard(id, reason); }
-std::uint32_t load(const std::string& url, int width, int height, Fit fit, Result& result, std::string& error) {
-  return service.load(url, width, height, fit, result, error);
+std::uint32_t load(const std::string& url, int width, int height, Fit fit, bool prefetch, Result& result,
+                   std::string& error) {
+  return service.load(url, width, height, fit, prefetch, result, error);
 }
 void release(std::uint32_t id) { service.release(id); }
 std::vector<Result> poll(void (*evict)(std::uint32_t)) { return service.poll(evict); }
@@ -628,7 +636,7 @@ namespace images {
 bool start(const std::string&) { return false; }
 void stop(void (*)(std::uint32_t)) {}
 void discard(std::uint32_t, const std::string&) {}
-std::uint32_t load(const std::string& url, int, int, Fit, Result&, std::string& error) {
+std::uint32_t load(const std::string& url, int, int, Fit, bool, Result&, std::string& error) {
   error = "Image.load " + url + ": enable networking: true and filesystemAccess: console in app.json"; return 0;
 }
 void release(std::uint32_t) {}

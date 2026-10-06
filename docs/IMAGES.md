@@ -59,8 +59,9 @@ other shots of a gallery.
 ## Memory and threads
 
 Two native workers own the work: one fetches over a dedicated libcurl multi
-handle (up to four connections, separate from the download queue, so images
-never wait behind a large file), one decodes. Workers never touch JavaScript or
+handle (up to twelve connections, separate from the download queue, so images
+never wait behind a large file), one decodes. Images that an element draws are
+fetched and decoded before prefetches, in request order. Workers never touch JavaScript or
 the engine. The render thread only submits, releases and polls once per frame
 while loads are pending, then registers finished pixels with the engine.
 
