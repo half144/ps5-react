@@ -8,6 +8,18 @@
   container recorded its untranslated position, so its next move erased the
   wrong area. Fixed by an engine patch.
 
+- Add `Sound` (native ABI v5): import a 16-bit PCM WAV and the build bakes it
+  into the app; `Sound.play(name, {volume, pan})` posts it to the
+  ps5-homebrew-ui mixer, which renders on an audio thread (PS5: sceAudioOut;
+  desktop: SDL), one voice per sound so a held D-pad does not stack ticks.
+  `Sound.setVolume` sets the master volume. Add `useNavigationEvents`, which
+  reports each focus move, blocked direction, press, back and button action
+  with whether something handled it; `FocusManager.move` and `press` now
+  return those outcomes. The starter and `npm run create` apps play a set
+  derived from Google's Material Design sound resources (CC BY 4.0, prepared
+  by `tools/ui_sounds.mjs`; attribution in `licenses/material-sounds-NOTICE.txt`)
+  through `sounds.js`. Not yet validated on hardware. See docs/NATIVE-API.md.
+
 - Add `Power.keepAwake(enabled)` (native API ABI v4) to keep the console out
   of rest mode during long downloads: the PS5 host ticks the system power
   timer every 30 s while it is on, the desktop preview toggles the screen

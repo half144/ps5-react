@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useLayoutEffect, useState} from 'react';
 import {AppRegistry, View, Text, FocusScope} from '@ps5-react/core';
+import {useInterfaceSounds} from './sounds.js';
 
 const text = 'font-inter text-body text-white';
 const BUTTONS = [['Add 1', count => count + 1], ['Add 10', count => count + 10], ['Reset', () => 0]];
@@ -11,6 +12,7 @@ const BUTTONS = [['Add 1', count => count + 1], ['Add 10', count => count + 10],
 function App() {
   const [state, setState] = useState({focus: 0, count: 0, detail: false});
   const {focus, count, detail} = state;
+  useInterfaceSounds();
   useLayoutEffect(() => {
     globalThis.__ps5ReactTestState = {focus, count, detail: Number(detail)};
   }, [focus, count, detail]);

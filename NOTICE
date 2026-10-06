@@ -14,3 +14,7 @@ licenses, and notices. See docs/DEPENDENCIES.md and licenses/.
 tools/tailwind/colors.mjs and the default scales in tools/tailwind/theme.mjs are
 derived from Tailwind CSS v3.4.17, Copyright (c) Tailwind Labs, Inc., under the
 MIT License (licenses/tailwindcss-LICENSE).
+
+The interface sounds in apps/starter/assets/sounds/ are derived from Google's
+Material Design sound resources, (c) Google, under CC BY 4.0
+(licenses/material-sounds-NOTICE.txt lists the sources and changes).

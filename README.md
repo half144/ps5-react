@@ -273,7 +273,8 @@ Logs and test screenshots are under `.build/<app>/`.
 
 - The PS5 framework starter has not yet been independently hardware-tested.
 - Rasterization runs on the CPU; there is no direct GPU UI backend or measured FPS claim.
-- DOM, general browser APIs, Node.js APIs, audio, and text input are not implemented.
+- DOM, general browser APIs, Node.js APIs, music or streamed audio, and text input are not implemented;
+  short baked sounds are (`Sound`).
   Native HTTP and downloads expose a bounded subset; global `fetch` is unavailable.
 - Spatial focus is not yet tested on hardware; there are no pointer, touch, or text-input focus modes.
 - Dependencies are pinned, but cross-machine bit-identical builds are not guaranteed.

@@ -29,7 +29,7 @@
 import {createRequire} from 'node:module';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename} from 'node:path';
-import {existsSync, readdirSync, readFileSync} from 'node:fs';
+import {existsSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 const here = resolve(process.argv[2], 'bridges/quickjs/js');
 const require = createRequire(resolve(here, 'package.json'));
 const {build} = require('esbuild');
@@ -68,6 +68,37 @@ if (!existsSync(entry)) {
 // recorded, so it gets baked below. Only what the app imports is baked.
 const images = new Map(); // name -> path
 const fonts = new Map(); // family -> path
+const sounds = new Map(); // name -> {rate, channels, samples} (added by PS5 React)
+
+// 16-bit PCM WAV, mono or stereo: decoded here so the hosts only copy samples (added by PS5 React).
+function decodeWav(path) {
+  const file = readFileSync(path);
+  if (file.toString('ascii', 0, 4) !== 'RIFF' || file.toString('ascii', 8, 12) !== 'WAVE') {
+    throw new Error('not a RIFF/WAVE file');
+  }
+  let format = null;
+  for (let at = 12; at + 8 <= file.length; at += 8 + file.readUInt32LE(at + 4) + (file.readUInt32LE(at + 4) & 1)) {
+    const id = file.toString('ascii', at, at + 4);
+    const size = file.readUInt32LE(at + 4);
+    if (id === 'fmt ') {
+      format = {code: file.readUInt16LE(at + 8), channels: file.readUInt16LE(at + 10),
+        rate: file.readUInt32LE(at + 12), bits: file.readUInt16LE(at + 22)};
+    } else if (id === 'data' && format) {
+      const {code, channels, rate, bits} = format;
+      if ((code !== 1 && code !== 0xfffe) || bits !== 16 || channels < 1 || channels > 2 || rate < 8000 || rate > 96000) {
+        throw new Error(`expected 16-bit PCM, mono or stereo, 8-96 kHz; got format ${code}, ${bits}-bit, `
+          + `${channels} channels, ${rate} Hz`);
+      }
+      const data = file.subarray(at + 8, at + 8 + size);
+      const samples = Array.from({length: data.length >> 1}, (_, i) => data.readInt16LE(i * 2));
+      if (samples.length < channels * 2 || samples.length > 10 * rate * channels) {
+        throw new Error('expected between 2 frames and 10 seconds of audio');
+      }
+      return {rate, channels, samples};
+    }
+  }
+  throw new Error('no fmt and data chunks');
+}
 const assetPlugin = {
   name: 'embedded-react-assets',
   setup(build) {
@@ -84,6 +115,18 @@ const assetPlugin = {
       fonts.set(family, args.path);
       return {
         contents: `module.exports = ${JSON.stringify(family)};`,
+        loader: 'js',
+      };
+    });
+    build.onLoad({filter: /\.wav$/i}, args => {
+      const name = basename(args.path).replace(/\.[^.]+$/, '');
+      try {
+        sounds.set(name, decodeWav(args.path));
+      } catch (error) {
+        return {errors: [{text: `${args.path}: ${error.message}`}]};
+      }
+      return {
+        contents: `module.exports = ${JSON.stringify(name)};`,
         loader: 'js',
       };
     });
@@ -174,3 +217,15 @@ console.log(
   `Baked ${summary.images} image(s), ${summary.fonts} font size(s) -> dist/assets.generated.c\n` +
     `  fonts: ${fontDesc}`,
 );
+
+// Added by PS5 React: imported WAVs -> sounds.generated.c (native/shared/baked_sounds.h), always written.
+const entries = [...sounds.entries()];
+writeFileSync(resolve(distDir, 'sounds.generated.c'), [
+  '#include "baked_sounds.h"',
+  ...entries.map(([, {samples}], i) => `static const int16_t sound_${i}[] = {${samples.join(',')}};`),
+  `const BakedSound ps5_react_sounds[] = {${entries.length ? entries.map(([name, {rate, channels, samples}], i) =>
+    `{${JSON.stringify(name)}, sound_${i}, ${Math.floor(samples.length / channels)}, ${rate}, ${channels}}`).join(',\n  ') : '{0}'}};`,
+  `const uint32_t ps5_react_sound_count = ${entries.length};`,
+  '',
+].join('\n'));
+console.log(`Baked ${entries.length} sound(s)${entries.length ? `: ${entries.map(([name]) => name).join(', ')}` : ''}`);

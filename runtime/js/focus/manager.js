@@ -175,20 +175,14 @@ export class FocusManager {
     this.setFocus(null);
   }
 
-  /** @param {Direction} direction */
+  /** @param {Direction} direction @returns {boolean} whether focus moved */
   move(direction) {
     const current = this.focused;
-    if (!current) {
-      this.focus(this.root);
-      return;
-    }
+    if (!current) return this.focus(this.root);
     const override = current.props[NEXT[direction]];
-    if (override != null) {
-      this.focus(override);
-      return;
-    }
+    if (override != null) return this.focus(override);
     const from = this.rectOf(current);
-    if (!from) return;
+    if (!from) return false;
     const frames = new Set();
     for (let frame = current.frame; frame; frame = frame.parent) frames.add(frame);
     for (let scope = current.scope; scope; scope = scope.parent) {
@@ -198,16 +192,20 @@ export class FocusManager {
         ?? (scope.props.wrap ? findWrap(from, candidates, direction) : null);
       if (winner) {
         this.setFocus(this.entryPoint(winner.node, current));
-        return;
+        return true;
       }
-      if (scope.props.trap) return;
+      if (scope.props.trap) return false;
     }
+    return false;
   }
 
-  /** Cross: press feedback for `pressMs`, then the focused element's onPress. */
+  /**
+   * Cross: press feedback for `pressMs`, then the focused element's onPress.
+   * @returns {boolean | null} whether an enabled element with `onPress` took it; null without focus
+   */
   press() {
     const node = this.focused;
-    if (!node) return;
+    if (!node) return null;
     this.clearTimer(node.pressTimer);
     node.pressed = true;
     node.pressTimer = this.setTimer(() => {
@@ -215,7 +213,9 @@ export class FocusManager {
       this.notify(node);
     }, this.pressMs);
     this.notify(node);
-    if (!node.props.disabled) node.props.onPress?.();
+    if (node.props.disabled || !node.props.onPress) return false;
+    node.props.onPress();
+    return true;
   }
 
   /** Circle: each enclosing scope's `onBack`, innermost first, until one consumes it. @returns {boolean} */

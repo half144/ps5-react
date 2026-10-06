@@ -10,6 +10,7 @@
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
 #include "filesystem_access.hpp"
+#include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
 #include <dirent.h>
@@ -372,6 +373,15 @@ void vibrate(float strength, float seconds) {
   if (strength <= 0.0f || seconds <= 0.0f) active_pad->rumble(0.001f, 0.001f);
   else active_pad->rumble(strength, seconds);
 }
+
+namespace {
+// ps5-homebrew-ui's output thread: the main 48 kHz stereo port, 256-frame grains.
+hui::ps5::AudioOut audio_out;
+}
+
+bool start_audio(hui::audio::Mixer& mixer) { return audio_out.start(mixer); }
+
+void stop_audio() { audio_out.stop(); }
 } // namespace host
 
 void host_platform_tick(std::int64_t now_us) {

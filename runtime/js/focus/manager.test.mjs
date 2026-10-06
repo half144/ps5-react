@@ -55,6 +55,23 @@ test('scope autoFocus takes the first element, and moves stay inside the grid', 
   assert.equal(t.key(), 'g01');
 });
 
+test('move and press report what happened, for navigation feedback', () => {
+  const t = setup();
+  const scope = t.scope(t.focus.root, {autoFocus: true, trap: true});
+  t.node('a', 0, 0, scope, {onPress: () => {}});
+  t.node('b', 120, 0, scope, {onPress: () => {}, disabled: true});
+  t.node('c', 240, 0, scope);
+  t.focus.mountScope(scope);
+  assert.equal(t.focus.move('left'), false);
+  assert.equal(t.focus.press(), true);
+  assert.equal(t.focus.move('right'), true);
+  assert.equal(t.focus.press(), false);
+  t.focus.move('right');
+  assert.equal(t.focus.press(), false);
+  t.focus.blur();
+  assert.equal(t.focus.press(), null);
+});
+
 test('a move escapes to the parent scope unless the scope traps', () => {
   const t = setup();
   const left = t.scope(t.focus.root, {autoFocus: true});
