@@ -11,5 +11,5 @@ Changes: mixed to mono, trimmed, shortened, faded, normalized and converted to
   confirm.wav  <- navigation_forward-selection-minimal
   back.wav     <- navigation_backward-selection-minimal
   error.wav    <- navigation_unavailable-selection
-  page.wav     <- navigation_transition-right
+  page.wav     <- ui_tap-variant-01
   notify.wav   <- notification_simple-01

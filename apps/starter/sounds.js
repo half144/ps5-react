@@ -12,7 +12,7 @@ import page from './assets/sounds/page.wav';
 
 export {default as notify} from './assets/sounds/notify.wav';
 
-// The page whoosh leans toward the shoulder that was pressed.
+// The page tap leans toward the shoulder that was pressed.
 const PAGE_PAN = {l1: -0.4, l2: -0.4, r1: 0.4, r2: 0.4};
 
 export function useInterfaceSounds() {
