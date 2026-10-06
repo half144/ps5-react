@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix black rows in a `VirtualList` while a held key scrolls it: rows still on
+  screen behind the scroll target were unmounted when tall rows let the target
+  run ahead of the scroll, and a filling row could stop at its first card. The
+  window now keeps every row between the scroll position and its target.
+
 - Wrap bold text that is slightly wider than its box: lines broke at the
   regular glyph width, so a bold title a few pixels too wide drew as one line
   cut at the edge instead of continuing on its second line. Engine patch.

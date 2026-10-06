@@ -69,7 +69,9 @@ Lengths are logical px of a 1280-wide layout, like class names.
 1. **What must be mounted now** (`required`): rows overlapping the viewport of
    the enclosing `ScrollView`, plus the focused row and the rows above and
    below it. The viewport position is the scroll *target*, which focus sets
-   before the scroll animates, so rows exist where the scroll is going.
+   before the scroll animates, so rows exist where the scroll is going; while
+   the scroll is still on its way there, every row between where it is and the
+   target is required too, so a held key never unmounts rows still on screen.
 2. **What is worth mounting** (`desired`): `required` plus `overscan` rows in
    the direction of travel and one behind.
 3. Each presented frame (`globalThis.__ps5ReactFrame`) does one step: each

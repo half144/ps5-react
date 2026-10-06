@@ -9,16 +9,18 @@
  * The rows a list needs now (`required`: on screen, plus the focused row and its neighbours) and the
  * rows worth keeping ahead of it (`desired`: `required` plus overscan, more in the direction of travel).
  * Lengths are in the scroll frame's content px.
- * @param {{rows: number, stride: number, top: number, scroll: number, viewport: number,
+ * @param {{rows: number, stride: number, top: number, scroll: number, from?: number, viewport: number,
  *   focusedRow: number, direction: number, ahead: number, behind: number}} options
  *   `stride` is a row plus the gap after it; `top` is where the list starts in the scrolled content;
+ *   `scroll` is the scroll target and `from` where the scroll is now, when it is still moving there:
+ *   every row the viewport passes on the way is on screen at some point, so all of them are required;
  *   `focusedRow` is -1 when focus is elsewhere; `direction` is the sign of the last scroll.
  * @returns {{required: Range, desired: Range}}
  */
-export function windowRows({rows, stride, top, scroll, viewport, focusedRow, direction, ahead, behind}) {
+export function windowRows({rows, stride, top, scroll, from = scroll, viewport, focusedRow, direction, ahead, behind}) {
   const clamp = row => Math.min(rows, Math.max(0, row));
-  let first = Math.floor((scroll - top) / stride);
-  let end = Math.ceil((scroll + viewport - top) / stride);
+  let first = Math.floor((Math.min(scroll, from) - top) / stride);
+  let end = Math.ceil((Math.max(scroll, from) + viewport - top) / stride);
   if (focusedRow >= 0) {
     first = Math.min(first, focusedRow - 1);
     end = Math.max(end, focusedRow + 2);
