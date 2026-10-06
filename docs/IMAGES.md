@@ -17,6 +17,9 @@ them with no opt-in.
 
 ## Drawing
 
+- **Corners.** `borderRadius` (`rounded-*`) clips the bitmap to the same rounded
+  shape a background with that radius fills, anti-aliased like it.
+
 - **Size.** The image is decoded for the element's box in render pixels. When
   the style fixes both `width` and `height` in pixels, loading starts on mount;
   otherwise it starts after the first layout (one frame later). A box that
