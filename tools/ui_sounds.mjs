@@ -17,7 +17,7 @@ const SOUNDS = {
   confirm: ['navigation_forward-selection-minimal', -16, 0.3],
   back: ['navigation_backward-selection-minimal', -16, 0.3],
   error: ['navigation_unavailable-selection', -18, 0.25],
-  page: ['navigation_transition-right', -18, 0.45],
+  page: ['ui_tap-variant-01', -18, 0.12],
   notify: ['notification_simple-01', -16, 0.9],
 };
 
