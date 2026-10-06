@@ -127,6 +127,14 @@ scope first wraps within the same row or column; with nothing there, the search
 continues outward as usual. When no scope has a candidate, focus stays where it
 is.
 
+An element inside a `ScrollView` that the focused element is not inside is a
+candidate only while its rectangle overlaps that `ScrollView`'s viewport, at
+least in part. Entering a scroll view from outside (Right from the last header
+item, Down into a rail) therefore reaches only what it shows, never an item
+scrolled out of view; moves inside a scroll view, including down a scrolling
+page past its viewport, reach any of its elements as before. Nested scroll
+views apply this per level.
+
 Because rectangles are pre-transform, `focused:scale-105`, `whileFocus` lifts,
 and animated translations never change where focus goes next. Let the layout
 express the order you want, and use `nextFocus*` only for exceptions.

@@ -8,8 +8,9 @@ import {findClosest, findNearest, findWrap} from './geometry.js';
 /**
  * @typedef {import('./geometry.js').Rect} Rect
  * @typedef {import('./geometry.js').Direction} Direction
- * @typedef {{parent: Frame | null, x: number, y: number, reveal: (rect: Rect, anchor: Rect | null) => void}} Frame
- *   A scrolling ancestor; `x`/`y` is how far its content is scrolled.
+ * @typedef {{parent: Frame | null, x: number, y: number, viewport: Rect | null,
+ *   reveal: (rect: Rect, anchor: Rect | null) => void}} Frame
+ *   A scrolling ancestor; `x`/`y` is how far its content is scrolled, `viewport` its pre-scroll rectangle.
  * @typedef {{parent: Anchor | null, frame: Frame | null, rect: Rect | null}} Anchor
  *   An element with `scrollAnchor`, whose start its ScrollView aligns when revealing a descendant.
  * @typedef {{focusKey?: string, onPress?: () => void, onFocus?: () => void, onBlur?: () => void,
@@ -38,6 +39,25 @@ function within(scope, ancestor) {
 /** Whether no scope from `scope` up is inert. @param {Scope | null} scope */
 function navigable(scope) {
   for (; scope; scope = scope.parent) if (scope.props.inert) return false;
+  return true;
+}
+
+/** @param {Rect} a @param {Rect} b */
+function overlaps(a, b) {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/**
+ * Whether a move from inside `from` (the focused node's frames) can reach `node`: entering a
+ * ScrollView from outside reaches only what it shows, at least in part, not items scrolled away.
+ * @param {Node} node @param {Set<Frame>} from
+ */
+function reachable(node, from) {
+  let rect = node.rect;
+  for (let frame = node.frame; frame && !from.has(frame); frame = frame.parent) {
+    rect = {...rect, x: rect.x - frame.x, y: rect.y - frame.y};
+    if (frame.viewport && !overlaps(rect, frame.viewport)) return false;
+  }
   return true;
 }
 
@@ -163,8 +183,11 @@ export class FocusManager {
     if (override != null) return this.focus(override);
     const from = this.rectOf(current);
     if (!from) return false;
+    const frames = new Set();
+    for (let frame = current.frame; frame; frame = frame.parent) frames.add(frame);
     for (let scope = current.scope; scope; scope = scope.parent) {
-      const candidates = this.candidates(scope).filter(candidate => candidate.node !== current);
+      const candidates = this.candidates(scope)
+        .filter(candidate => candidate.node !== current && reachable(candidate.node, frames));
       const winner = findNearest(from, candidates, direction)
         ?? (scope.props.wrap ? findWrap(from, candidates, direction) : null);
       if (winner) {
