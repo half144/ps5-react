@@ -56,6 +56,10 @@ Each carries a patch in `patches/` until the pinned revision includes it:
 | `embeddedReact-identity-scale.patch` | [#286](https://github.com/TheMasterCoder007/embedded-react/issues/286) | [#287](https://github.com/TheMasterCoder007/embedded-react/pull/287) |
 | `embeddedReact-scroll-offset.patch`, `embeddedReact-scroll-to.patch` | [#288](https://github.com/TheMasterCoder007/embedded-react/issues/288), [#290](https://github.com/TheMasterCoder007/embedded-react/issues/290) | [#289](https://github.com/TheMasterCoder007/embedded-react/pull/289), [#291](https://github.com/TheMasterCoder007/embedded-react/pull/291) |
 | `embeddedReact-view-gradient.patch` | [#282](https://github.com/TheMasterCoder007/embedded-react/issues/282) | [#283](https://github.com/TheMasterCoder007/embedded-react/pull/283) |
+| `embeddedReact-scroll-copy.patch`, `embeddedReact-scroll-copy-paint-free.patch` | [#292](https://github.com/TheMasterCoder007/embedded-react/issues/292) | [#293](https://github.com/TheMasterCoder007/embedded-react/pull/293) (commits 4e74624, e56b83e) |
 
 The upstream scaled-image fix keeps the original float bilinear weights; our
 patch also switches to integer weights (up to 2 levels per channel apart).
+
+`embeddedReact-damage-split.patch` (keep a scroll strip and a card apart in
+the damage set) is not yet proposed upstream.
