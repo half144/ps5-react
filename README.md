@@ -282,6 +282,7 @@ Logs and test screenshots are under `.build/<app>/`.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Navigation](docs/NAVIGATION.md)
+- [Long lists](docs/LISTS.md)
 - [Styling with className](docs/TAILWIND.md)
 - [Native modules](docs/NATIVE-API.md)
 - [HTTP and large downloads](docs/NETWORKING.md)
