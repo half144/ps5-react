@@ -67,7 +67,8 @@ AppRegistry.registerComponent('menu', () => Menu);
 `back`, and, since ABI v3, `l1`, `r1`, `l2`, `r2`, `triangle`, and `square`
 (one action per press, no repeat). For ABI v1 compatibility the runtime also
 delivers `previous` (after `up`/`left`) and `next` (after `down`/`right`) to
-`useController` handlers only. Options/Escape still exit.
+`useController` handlers only. Options/Escape still exit. Both hosts and input
+scripts take the names from `native/shared/actions.hpp`.
 
 The focus manager does not move on the ABI v3 buttons: they go to the enclosing
 `FocusScope.onAction` handlers (tabs on L1/R1, a filter on Triangle) and to

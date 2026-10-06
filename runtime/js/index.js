@@ -16,8 +16,7 @@ const legacyActions = {up: 'previous', left: 'previous', down: 'next', right: 'n
 
 /**
  * Subscribe while mounted; Options is reserved for the host's exit action.
- * @param {(action: 'up' | 'down' | 'left' | 'right' | 'previous' | 'next' | 'confirm' | 'back' | 'l1' | 'r1' | 'l2'
- *   | 'r2' | 'triangle' | 'square') => void} handler
+ * @param {(action: import('./input.js').Action | 'previous' | 'next') => void} handler
  */
 export function useController(handler) {
   const current = useRef(handler);

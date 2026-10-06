@@ -3,14 +3,14 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "input_script.hpp"
 
+#include "actions.hpp"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 
 namespace {
-constexpr const char* kActions[] = {"up", "down", "left", "right", "confirm", "back", "l1", "r1", "l2", "r2",
-                                     "triangle", "square", "quit"};
 constexpr std::uint32_t kRepeatMs = 110; // The desktop host's held-key repeat interval.
 } // namespace
 
@@ -53,13 +53,13 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
       }
       token.resize(star);
     }
-    const char* action = nullptr;
-    for (const char* known : kActions)
+    const char* action = token == "quit" ? "quit" : nullptr;
+    for (const char* known : kActionNames)
       if (token == known) action = known;
     if (!action) {
-      std::snprintf(error, size,
-                    "unknown action '%s' (use up, down, left, right, confirm, back, l1, r1, l2, r2, "
-                    "triangle, square, quit, wait:MS, shot:NAME)", token.c_str());
+      std::string known;
+      for (const char* name : kActionNames) known += std::string(name) + ", ";
+      std::snprintf(error, size, "unknown action '%s' (use %squit, wait:MS, shot:NAME)", token.c_str(), known.c_str());
       return false;
     }
     for (long i = 0; i < count; ++i) {

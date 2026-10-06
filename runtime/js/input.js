@@ -19,9 +19,14 @@ globalThis.__ps5ReactDispatch = action => {
 };
 
 /**
+ * The host actions, as native/shared/actions.hpp names them.
+ * @typedef {'l1' | 'r1' | 'l2' | 'r2' | 'triangle' | 'square'} ButtonAction shoulders, triggers, Triangle, Square
+ * @typedef {'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | ButtonAction} Action
+ */
+
+/**
  * Internal: receive every host action until the returned function is called.
- * @param {(action: 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | import('./focus/manager.js').Action) => void}
- *   listener
+ * @param {(action: Action) => void} listener
  */
 export function subscribeInput(listener) {
   listeners.add(listener);

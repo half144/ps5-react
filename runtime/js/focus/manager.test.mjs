@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {screenRect} from './frames.js';
 import {FocusManager} from './manager.js';
 
 /** A manager whose recovery and press timers run when the test says so. */
@@ -243,7 +244,7 @@ test('scrolled frames shift rectangles and are revealed innermost first', () => 
   const node = t.focus.createNode(t.focus.root, inner, {focusKey: 'deep'});
   t.focus.register(node);
   t.focus.setRect(node, {x: 0, y: 400, width: 100, height: 100});
-  assert.equal(t.focus.rectOf(node).y, 100);
+  assert.equal(screenRect(node).y, 100);
   t.focus.focus(top);
   t.focus.move('down');
   assert.equal(t.key(), 'deep');
