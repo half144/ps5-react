@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Wrap bold text that is slightly wider than its box: lines broke at the
+  regular glyph width, so a bold title a few pixels too wide drew as one line
+  cut at the edge instead of continuing on its second line. Engine patch.
+
 - Clip an `Image` to its `borderRadius`: covers drew square corners whatever
   `rounded-*` said. The bitmap now follows the same anti-aliased rounded shape
   as a background; square images draw as before. Fixed by an engine patch.
