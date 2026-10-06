@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The PS5 frame log's engine split (`ERUI_PERF_STATS`) reads the time-stamp
+  counter (`sceKernelReadTsc`, about 11 ns) instead of `clock_gettime` (about
+  0.88 µs). The engine reads that clock around every blit and bridge call, so a
+  full-screen frame paid 10-15 ms for its own statistics: opening an Overdrive
+  game page went from a 51 ms to a 36 ms frame and going back from 39 to 20 ms.
+  Raster figures logged before this change include that overhead.
 - When the surface matches the render size, the presenter keeps the frame in
   two buffer textures (`texelFetch`) and uploads changed rows with
   `glBufferSubData`. On the PS5 that costs about 0.46 ms for 1920×540 rows
