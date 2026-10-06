@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Entering a `ScrollView` from outside it with the D-pad reaches only elements
+  it shows at least in part: Right from the last header item no longer jumps
+  to a card scrolled out of a rail. Moves inside a scroll view are unchanged.
+
 - Add `scrollAnchor` on `View` and `Pressable`: a vertical `ScrollView` aligns
   the top of the focused element's nearest anchor (a section with its title,
   the hero) past the margin instead of revealing only the element, falling back

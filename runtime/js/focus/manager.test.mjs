@@ -320,3 +320,30 @@ test('each frame reveals with the nearest scrollAnchor ancestor that it contains
   t.focus.focus('card');
   assert.deepEqual(revealed, [['rail', undefined], ['outer', 600]]);
 });
+
+test('entering a ScrollView from outside reaches only items it shows, moves inside reach any', () => {
+  const t = setup();
+  const page = {parent: null, x: 0, y: 0, viewport: {x: 0, y: 200, width: 1000, height: 400}, reveal: () => {}};
+  const rail = {parent: page, x: 0, y: 0, viewport: {x: 0, y: 200, width: 500, height: 100}, reveal: () => {}};
+  const inFrame = (key, frame, x, y) => {
+    const node = t.focus.createNode(t.focus.root, frame, {focusKey: key});
+    t.focus.register(node);
+    t.focus.setRect(node, {x, y, width: 100, height: 100});
+  };
+  t.node('header-end', 400, 0);
+  inFrame('hidden', rail, 600, 200);
+  inFrame('below', page, 0, 700);
+  inFrame('deep', page, 0, 300);
+  t.focus.focus('header-end');
+  t.focus.move('right');
+  assert.equal(t.key(), 'header-end');
+  inFrame('partly', rail, 450, 200);
+  t.focus.move('right');
+  assert.equal(t.key(), 'partly');
+  t.focus.move('right');
+  assert.equal(t.key(), 'hidden');
+  // Inside the page, the item below its viewport stays reachable: the normal way down a page.
+  t.focus.focus('deep');
+  t.focus.move('down');
+  assert.equal(t.key(), 'below');
+});
