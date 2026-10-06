@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A horizontal ScrollView beside a transparent container, such as a section
+  header whose box overlaps the rail through a negative margin, scrolls by
+  copy again instead of repainting its whole viewport each frame. On the PS5
+  the Overdrive genre rail went from 23 ms frames (about 43 fps) for the whole
+  scroll to 60 fps.
+
 - `--app-dir <path>` previews, watches, and builds an app outside `apps/`;
   `create --dir <parent>` scaffolds one. Build receipts record app sources as
   `app/<path>` instead of `apps/<name>/<path>`.
