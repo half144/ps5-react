@@ -1,6 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
+#include "image_loader.hpp"
 #include "network.hpp"
 #include "app_config.hpp"
 #define SDL_MAIN_HANDLED
@@ -103,6 +104,7 @@ struct Host {
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
 
   ~Host() {
+    ps5_react_stop_images();
     network::stop();
     if (runtime_started) er_runtime_shutdown();
     if (backend_started) er_software_backend_destroy();
@@ -140,7 +142,7 @@ struct Host {
   bool boot(const char* path) {
     backend_started = er_software_backend_init(width, height);
     if (!backend_started || !damage_tracker_install(width, height)) return false;
-    network::start();
+    if (network::start()) images::start();
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;

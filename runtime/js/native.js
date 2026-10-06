@@ -5,6 +5,7 @@
 // Every call is synchronous and runs on the render thread; see docs/NATIVE-API.md.
 import {useEffect, useState} from 'react';
 import {normalizeDownloadManifest} from './download-formats.js';
+import {onFrame} from './frame.js';
 
 function host() {
   const api = globalThis.__ps5ReactNative;
@@ -284,3 +285,56 @@ export const Downloads = {
   },
   get transportVersion() { return host().network.version(); },
 };
+
+const pendingImages = new Map();
+let stopImagePolling = null;
+
+function pollImages() {
+  for (const result of host().image.poll()) {
+    const listeners = pendingImages.get(result.id);
+    pendingImages.delete(result.id);
+    for (const listener of listeners ?? []) listener(result);
+  }
+  if (pendingImages.size === 0) {
+    stopImagePolling();
+    stopImagePolling = null;
+  }
+}
+
+// One more poll: a release can push unused images over the cache budget, and polls evict.
+function pollImagesSoon() {
+  stopImagePolling ??= onFrame(pollImages);
+}
+
+/**
+ * Internal: the native reference behind one `<Image source={{uri}}>`. `listener` receives
+ * `{state, name, width, height, error}` now and, while loading, once more when the load finishes;
+ * the returned function releases the reference, cancelling the load when nothing else holds it.
+ * @param {string} uri @param {number} width @param {number} height box in render pixels
+ * @param {number} fit 0 cover, 1 contain, 2 stretch, 3 none
+ * @param {(result: {state: string, name: string, width: number, height: number, error: string}) => void} listener
+ * @returns {() => void}
+ */
+export function acquireImage(uri, width, height, fit, listener) {
+  const result = host().image.load(uri, width, height, fit);
+  const {id} = result;
+  if (result.state === 'loading') {
+    if (!pendingImages.has(id)) pendingImages.set(id, new Set());
+    pendingImages.get(id).add(listener);
+    pollImagesSoon();
+  }
+  const release = () => {
+    const listeners = pendingImages.get(id);
+    listeners?.delete(listener);
+    if (listeners?.size === 0) pendingImages.delete(id);
+    host().image.release(id);
+    pollImagesSoon();
+  };
+  try {
+    listener(result);
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return release;
+}

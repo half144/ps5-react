@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // Independent React proof: PS5 lifecycle/display/input, software UI and GL texture.
 
+#include "image_loader.hpp"
 #include "network.hpp"
 #include "app_config.hpp"
 #include "async_log.hpp"
@@ -18,6 +19,7 @@
 #include "input_script.hpp"
 #include "filesystem_access.hpp"
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,6 +42,13 @@ extern const unsigned long proof_bundle_length;
 }
 
 namespace {
+// A file in the app folder's dev/ directory. After console filesystem elevation /app0 is only a
+// logical path, so it is resolved like the native API's paths.
+std::string dev_path(const char* name) {
+  char path[PATH_MAX];
+  return host::resolve_path((std::string("/app0/dev/") + name).c_str(), path, sizeof path) ? path : "";
+}
+
 constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
 constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT) * 1000000;
 
@@ -48,7 +57,7 @@ void react_log(const char* line) { async_log::write("[REACT] %s", line); }
 // An app folder may carry dev/input-script.txt (InputScript syntax) for unattended profiling; it is
 // never part of a build, only added to a test deploy.
 void load_input_script(InputScript& script) {
-  FILE* file = std::fopen("/app0/dev/input-script.txt", "rb");
+  FILE* file = std::fopen(dev_path("input-script.txt").c_str(), "rb");
   if (!file) return;
   char text[4096] = {};
   text[std::fread(text, 1, sizeof text - 1, file)] = '\0';
@@ -66,7 +75,7 @@ class LiveCommands {
 public:
   void start() {
     struct stat info;
-    enabled_ = stat("/app0/dev", &info) == 0 && S_ISDIR(info.st_mode);
+    enabled_ = stat(dev_path("").c_str(), &info) == 0 && S_ISDIR(info.st_mode);
     if (enabled_) read(false);
   }
 
@@ -83,7 +92,7 @@ public:
 
 private:
   void read(bool queue) {
-    FILE* file = std::fopen("/app0/dev/commands.txt", "rb");
+    FILE* file = std::fopen(dev_path("commands.txt").c_str(), "rb");
     if (!file) return;
     char text[4096] = {};
     text[std::fread(text, 1, sizeof text - 1, file)] = '\0';
@@ -191,7 +200,7 @@ bool run_proof() {
     host_platform_set_pad(&pad);
   }
   if (ok) {
-    network::start();
+    if (network::start()) images::start();
     ErRuntimeConfig config = {};
     config.screen_width = width; config.screen_height = height;
     config.screen_scale = 2;
@@ -219,7 +228,7 @@ bool run_proof() {
     commands.start();
     // A test deploy may lower the slow-frame threshold (milliseconds) with dev/slow-frame-ms.txt.
     std::uint32_t slow_frame_us = 33000;
-    if (FILE* file = std::fopen("/app0/dev/slow-frame-ms.txt", "rb")) {
+    if (FILE* file = std::fopen(dev_path("slow-frame-ms.txt").c_str(), "rb")) {
       char text[16] = {};
       if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) slow_frame_us = std::atoi(text) * 1000u;
       std::fclose(file);
@@ -283,6 +292,7 @@ bool run_proof() {
     async_log::write("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
   }
   if (!ok && runtime) async_log::write("[PS5-REACT] error=%s", er_runtime_last_error());
+  ps5_react_stop_images();
   network::stop();
   if (runtime) er_runtime_shutdown();
   if (software) er_software_backend_destroy();

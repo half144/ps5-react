@@ -14,6 +14,7 @@ No proprietary Sony modules are redistributed.
 | ps5-opengl | SDK 1.0.0; GPL and per-component/Mesa licenses. The release includes sources and notices. |
 | React / QuickJS-ng | React 18.3.1, reconciler 0.29.2, QuickJS-ng 0.15.0; MIT. npm lockfile and QuickJS commit are pinned. |
 | Tailwind CSS palette and scales | v3.4.17 default colors and theme values copied into `tools/tailwind/`; MIT. Build-time data only; the `tailwindcss` package is not installed or used. |
+| stb_image | v2.30 single-file JPEG/PNG decoder for remote images; public domain or MIT (choice). Fetched from a pinned commit URL and verified by SHA-256 (`stbImage` in the lock file); builds copy its license to `notices/stb_image-LICENSE`. |
 | Inter / LLVM / payload SDK | Inter: SIL OFL. LLVM: Apache-2.0 with exceptions. The public SDK contains separately licensed components. |
 
 Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
@@ -21,6 +22,7 @@ Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
 [ps5-opengl 1.0.0](https://github.com/blackbearreloaded/ps5-opengl/releases/tag/v1.0.0),
 [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk),
 [QuickJS-ng](https://github.com/quickjs-ng/quickjs),
+[stb](https://github.com/nothings/stb),
 [Tailwind CSS v3.4.17](https://github.com/tailwindlabs/tailwindcss/tree/v3.4.17).
 
 Exact revisions, archive hashes, and compiler-rt package identity are recorded
@@ -46,6 +48,12 @@ repaint; both modify Apache-2.0 engine and test files.
 `embeddedReact-software-avx2.patch` (Apache-2.0 software backend; not yet
 proposed upstream) blends eight pixels per step on AVX2 targets, bit-identical
 to the scalar loops.
+`embeddedReact-image-unload.patch` (Apache-2.0 engine files; not yet proposed
+upstream) adds `er_image_unload` and `er_image_load_argb` with a caller-known
+opacity, so an image cache can give registry slots back.
+`embeddedReact-aspect-main-size.patch` (Apache-2.0 layout engine; not yet
+proposed upstream) derives a flow child's main size from a definite cross size
+and `aspectRatio`, as CSS and React Native do.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.

@@ -1,0 +1,181 @@
+# Copyright (C) 2026 half144 and PS5 React contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Additional attribution term: see LICENSE-ATTRIBUTION.
+"""Local remote-image loader tests: fetch, decode, fit, cache and cancellation; no console or internet."""
+import http.server
+import io
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+from PIL import Image, ImageChops, ImageDraw, ImageStat
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import ROOT, stb_image  # noqa: E402
+
+COVER, CONTAIN, STRETCH, NONE = range(4)
+
+
+def encoded(image, kind, **options):
+    buffer = io.BytesIO()
+    image.save(buffer, kind, **options)
+    return buffer.getvalue()
+
+
+def photo(width, height):
+    image = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(image)
+    for x in range(0, width, 8):
+        draw.rectangle((x, 0, x + 7, height), fill=(x * 255 // width, 90, 255 - x * 255 // width))
+    draw.ellipse((width // 4, height // 4, width * 3 // 4, height * 3 // 4), fill=(240, 200, 40))
+    return image
+
+
+def logo():
+    image = Image.new("RGBA", (400, 200), (0, 0, 0, 0))
+    ImageDraw.Draw(image).rounded_rectangle((40, 40, 360, 160), 30, fill=(250, 250, 250, 255))
+    return image
+
+
+BODIES = {
+    "/photo.png": ("image/png", encoded(photo(1600, 1200), "PNG")),
+    "/photo.jpg": ("image/jpeg", encoded(photo(1600, 1200), "JPEG", quality=95)),
+    "/logo.png": ("image/png", encoded(logo(), "PNG")),
+    "/huge.png": ("image/png", encoded(Image.new("RGB", (3000, 2000)), "PNG")),
+    "/text": ("text/plain", b"not an image"),
+}
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    requests = []
+
+    def handle(self):
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The client cancelled.
+
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        Handler.requests.append(self.path)
+        if path == "/slow.jpg":
+            time.sleep(3)
+            path = "/photo.jpg"
+        if path == "/large":
+            body = b"\0" * (9 * 1024 * 1024)
+            kind = "application/octet-stream"
+        elif path in BODIES:
+            kind, body = BODIES[path]
+        else:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The client cancelled.
+
+
+def compile_client(directory):
+    binary = directory / "client"
+    subprocess.run(["clang++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                    "-I", str(ROOT / "native/shared"), "-I", str(stb_image()),
+                    str(ROOT / "tools/tests/image_client.cpp"), str(ROOT / "native/shared/image_loader.cpp"),
+                    str(ROOT / "native/shared/network.cpp"), str(ROOT / "native/desktop/network_platform.cpp"),
+                    "-lcurl", "-o", str(binary)], check=True)
+    return binary
+
+
+def argb(path, width, height):
+    """Premultiplied ARGB8888 words to an RGBA image."""
+    pixels = struct.unpack(f"<{width * height}I", path.read_bytes())
+    rgba = bytearray()
+    for p in pixels:
+        a = p >> 24
+        rgba += bytes(((p >> 16 & 255) * 255 // a if a else 0, (p >> 8 & 255) * 255 // a if a else 0,
+                       (p & 255) * 255 // a if a else 0, a))
+    return Image.frombytes("RGBA", (width, height), bytes(rgba))
+
+
+def difference(a, b):
+    return max(ImageStat.Stat(ImageChops.difference(a.convert("RGB"), b.convert("RGB"))).mean)
+
+
+def main():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    with tempfile.TemporaryDirectory(prefix="ps5-react-images-") as temporary:
+        directory = Path(temporary)
+        binary = compile_client(directory)
+
+        def run(*arguments):
+            result = subprocess.run([str(binary), *map(str, arguments)], capture_output=True, text=True, timeout=30)
+            if result.returncode or not result.stdout.strip():
+                raise AssertionError(result.stderr or f"client exited {result.returncode}")
+            return json.loads(result.stdout)
+
+        def load(path, width, height, fit):
+            out = directory / "pixels"
+            result = run("load", origin + path, width, height, fit, out)
+            return result, (argb(out, result["width"], result["height"]) if result["ready"] else None)
+
+        source = photo(1600, 1200)
+        # Cover crops to the box's aspect ratio, then shrinks to the box with a box filter.
+        result, image = load("/photo.png", 300, 300, COVER)
+        assert (result["width"], result["height"], result["opaque"]) == (300, 300, True), result
+        expected = source.crop((200, 0, 1400, 1200)).resize((300, 300), Image.BOX)
+        assert difference(image, expected) < 1.5, difference(image, expected)
+        result, image = load("/photo.jpg", 320, 120, COVER)
+        assert (result["width"], result["height"]) == (320, 120), result
+        assert difference(image, source.crop((0, 300, 1600, 900)).resize((320, 120), Image.BOX)) < 3
+        # Contain keeps the whole image inside the box; nothing is enlarged.
+        result, _ = load("/photo.png", 400, 400, CONTAIN)
+        assert (result["width"], result["height"]) == (400, 300), result
+        result, _ = load("/photo.png", 3200, 3200, CONTAIN)
+        assert (result["width"], result["height"]) == (1600, 1200), result
+        result, _ = load("/photo.png", 3200, 600, COVER)
+        assert (result["width"], result["height"]) == (1600, 300), result
+        result, _ = load("/photo.png", 100, 50, STRETCH)
+        assert (result["width"], result["height"]) == (100, 50), result
+        result, _ = load("/photo.png", 10, 10, NONE)
+        assert (result["width"], result["height"]) == (1600, 1200), result
+        # Alpha is premultiplied and reported, so the engine blends only images that need it.
+        result, image = load("/logo.png", 200, 100, CONTAIN)
+        assert (result["width"], result["height"], result["opaque"]) == (200, 100, False), result
+        assert image.getpixel((0, 0))[3] == 0 and image.getpixel((100, 50)) == (250, 250, 250, 255)
+        # Errors name the call and the URL.
+        for path, reason in (("/missing.jpg", "HTTP 404"), ("/text", "not a decodable JPEG or PNG"),
+                             ("/huge.png", "5-megapixel"), ("/large", "exceeds 8 MiB")):
+            result, _ = load(path, 64, 64, COVER)
+            assert result["failed"] and result["error"].startswith(f"Image.load {origin}{path}") and reason in result["error"], result
+        before = len(Handler.requests)
+        assert run("shared", origin + "/photo.jpg") == {"same": True, "immediate": True}
+        assert len(Handler.requests) == before + 1
+        started = time.monotonic()
+        assert run("cancel", origin + "/slow.jpg") == {"reported": 0}
+        assert time.monotonic() - started < 2.5
+        # 12 images of 4 MiB against a 32 MiB budget: the 4 oldest unused go, the one in use stays.
+        evicted = run("evict", origin + "/photo.jpg", 12)
+        assert evicted == {"loaded": 12, "evicted": 4, "first": 2, "kept": True}, evicted
+        print("Remote images: cover/contain/stretch fitting without enlargement, box-filter quality, premultiplied "
+              "alpha, error messages, shared fetches, cancellation and LRU eviction passed.")
+    server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

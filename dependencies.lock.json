@@ -12,7 +12,9 @@
       "patches/embeddedReact-scroll-copy.patch",
       "patches/embeddedReact-damage-split.patch",
       "patches/embeddedReact-scroll-copy-paint-free.patch",
-      "patches/embeddedReact-software-avx2.patch"
+      "patches/embeddedReact-software-avx2.patch",
+      "patches/embeddedReact-image-unload.patch",
+      "patches/embeddedReact-aspect-main-size.patch"
     ]
   },
   "platform": {
@@ -35,6 +37,11 @@
   "quickjsSource": {
     "url": "https://github.com/quickjs-ng/quickjs.git",
     "revision": "433941b99fb3c5e7f98b7ebd78727972bcf467ee"
+  },
+  "stbImage": {
+    "version": "2.30",
+    "url": "https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_image.h",
+    "sha256": "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3"
   },
   "runtimeShim": {
     "sha256": "e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036"

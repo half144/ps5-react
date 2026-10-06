@@ -387,6 +387,39 @@ bool verify_file(Job& job) {
   return true;
 }
 
+} // namespace
+
+bool configure_transport(void* handle, const std::string& url, bool follow_redirects) {
+  CURL* curl = static_cast<CURL*>(handle);
+  bool ok = true;
+  const auto set = [&](CURLoption option, auto value) {
+    if (curl_easy_setopt(curl, option, value) != CURLE_OK) ok = false;
+  };
+  set(CURLOPT_URL, url.c_str());
+  set(CURLOPT_NOSIGNAL, 1L);
+  set(CURLOPT_PROTOCOLS_STR, "http,https");
+  set(CURLOPT_REDIR_PROTOCOLS_STR, url.starts_with("https:") ? "https" : "http,https");
+  set(CURLOPT_FOLLOWLOCATION, follow_redirects ? 1L : 0L);
+  set(CURLOPT_MAXREDIRS, 5L);
+  set(CURLOPT_HTTP_VERSION, static_cast<long>(CURL_HTTP_VERSION_1_1));
+  set(CURLOPT_SSL_VERIFYPEER, 1L); set(CURLOPT_SSL_VERIFYHOST, 2L);
+  if (const char* path = ca_path()) set(CURLOPT_CAINFO, path);
+  set(CURLOPT_ACCEPT_ENCODING, "identity");
+  set(CURLOPT_USERAGENT, "PS5React/0.1");
+  set(CURLOPT_CONNECTTIMEOUT, 10L);
+  set(CURLOPT_LOW_SPEED_LIMIT, 1L); set(CURLOPT_LOW_SPEED_TIME, 30L);
+  set(CURLOPT_TCP_KEEPALIVE, 1L);
+#ifdef PROSPERO
+  set(CURLOPT_IPRESOLVE, static_cast<long>(CURL_IPRESOLVE_V4));
+  set(CURLOPT_SOCKOPTFUNCTION, +[](void*, curl_socket_t fd, curlsocktype)->int {
+    int enabled = 1;
+    return setsockopt(fd, SOL_SOCKET, 0x1200, &enabled, sizeof enabled) == 0 ? CURL_SOCKOPT_OK : CURL_SOCKOPT_ERROR;
+  });
+#endif
+  return ok;
+}
+
+namespace {
 class Service {
 public:
   bool start();
@@ -658,34 +691,14 @@ bool Service::configure(Transfer& t) {
   const auto& etag = source ? source->etag : job.etag;
   const bool ranged = source ? source->ranged : job.ranged;
   if (ranged && !t.probe && !etag.empty()) add("If-Range: " + etag);
-  set(CURLOPT_URL, url.c_str());
-  set(CURLOPT_NOSIGNAL, 1L);
-  set(CURLOPT_PROTOCOLS_STR, "http,https");
-  set(CURLOPT_REDIR_PROTOCOLS_STR, url.starts_with("https:") ? "https" : "http,https");
   // Custom application headers must never be forwarded to an unrelated redirect origin.
-  set(CURLOPT_FOLLOWLOCATION, job.request.headers.empty() ? 1L : 0L);
-  set(CURLOPT_MAXREDIRS, 5L);
-  set(CURLOPT_HTTP_VERSION, static_cast<long>(CURL_HTTP_VERSION_1_1));
-  set(CURLOPT_SSL_VERIFYPEER, 1L); set(CURLOPT_SSL_VERIFYHOST, 2L);
-  if (const char* path = ca_path()) set(CURLOPT_CAINFO, path);
+  if (!configure_transport(t.curl, url, job.request.headers.empty())) ok = false;
   set(CURLOPT_BUFFERSIZE, 256L*1024);
-  set(CURLOPT_ACCEPT_ENCODING, "identity");
-  set(CURLOPT_USERAGENT, "PS5React/0.1");
-  set(CURLOPT_CONNECTTIMEOUT, 10L);
-  set(CURLOPT_LOW_SPEED_LIMIT, 1L); set(CURLOPT_LOW_SPEED_TIME, 30L);
-  set(CURLOPT_TCP_KEEPALIVE, 1L);
   set(CURLOPT_HTTPHEADER, t.headers);
   set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, &t);
   set(CURLOPT_HEADERFUNCTION, header); set(CURLOPT_HEADERDATA, &t);
   set(CURLOPT_XFERINFOFUNCTION, progress); set(CURLOPT_XFERINFODATA, &t);
   set(CURLOPT_NOPROGRESS, 0L); set(CURLOPT_PRIVATE, &t);
-#ifdef PROSPERO
-  set(CURLOPT_IPRESOLVE, static_cast<long>(CURL_IPRESOLVE_V4));
-  set(CURLOPT_SOCKOPTFUNCTION, +[](void*, curl_socket_t fd, curlsocktype)->int {
-    int enabled = 1;
-    return setsockopt(fd, SOL_SOCKET, 0x1200, &enabled, sizeof enabled) == 0 ? CURL_SOCKOPT_OK : CURL_SOCKOPT_ERROR;
-  });
-#endif
   if (t.probe) set(CURLOPT_RANGE, "0-0");
   else if (ranged) {
     const auto begin = t.begin-(source ? source->piece.offset : 0);
@@ -1104,5 +1117,6 @@ std::uint32_t enqueue(Request, std::string& error) {
 void cancel(std::uint32_t) {}
 std::vector<Snapshot> poll() { return {}; }
 const char* version() { return "disabled"; }
+bool configure_transport(void*, const std::string&, bool) { return false; }
 } // namespace network
 #endif

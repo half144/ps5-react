@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v2) is
+each host installs before the bundle runs. Its exact shape (ABI v3) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -141,6 +141,15 @@ there are no additional global native functions.
 PS5 builds require `networking: true` and `filesystemAccess: "console"`; desktop
 networking is available by default. See [NETWORKING.md](NETWORKING.md) for
 options, resource limits, errors, lifecycle and the hardware-validation gap.
+
+## Images
+
+`<Image source={{uri}}>` loads `http://` and `https://` URLs natively: fetched
+and decoded by two workers off the render thread, at the size the element is
+drawn, into a bounded LRU cache. `Image.prefetch(uri, {width, height,
+resizeMode})` warms that cache. The bridge (`image.load`, `image.release`,
+`image.poll`, ABI v3) is internal to the `Image` component. See
+[IMAGES.md](IMAGES.md) for sizing, formats, memory budgets and errors.
 
 ## Notifications
 

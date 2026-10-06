@@ -8,7 +8,7 @@ export {useFocusable, useIsFocused} from './focusable.js';
 export {FocusScope, useFocus} from './scope.js';
 export {ScrollView} from './scroll.js';
 export {VirtualList} from './virtual-list.js';
+export {Image} from './image.js';
 
 export const View = createFocusable('View');
-export const Image = createFocusable('Image');
 export const Pressable = createFocusable('Pressable', true);

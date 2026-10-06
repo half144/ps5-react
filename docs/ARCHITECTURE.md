@@ -23,7 +23,10 @@ and implements the filesystem with POSIX, while `native/ps5/` and
 `native/desktop/` implement the platform functions. Calls are synchronous on the
 render thread. Networking calls submit/cancel/poll bounded native tasks; two
 workers perform network and disk I/O without touching QuickJS or the engine.
-Hosts cancel and join those workers before runtime shutdown. See
+Remote images have two more workers (fetch and decode) that hand finished
+pixels to the render thread, which registers them with the engine
+([IMAGES.md](IMAGES.md)). Hosts cancel and join all workers before runtime
+shutdown. See
 [NETWORKING.md](NETWORKING.md) for the buffer, heap, stack and queue contract,
 and [NATIVE-API.md](NATIVE-API.md) for the bridge. When the surface matches the
 render size (the PS5), the presenter copies changed framebuffer rows into two

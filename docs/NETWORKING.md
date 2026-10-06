@@ -203,6 +203,9 @@ use the final URL for authenticated requests. Otherwise redirects are limited
 to five, and HTTPS cannot downgrade to HTTP. TLS peer and hostname verification
 are always enabled. Responses use identity encoding.
 
+Remote images (`<Image source={{uri}}>`, [IMAGES.md](IMAGES.md)) use the same
+transport policy on their own workers and connections, outside this queue.
+
 ## Performance and resource contract
 
 One persistent libcurl multi handle and reusable easy handles share connections.

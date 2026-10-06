@@ -10,6 +10,13 @@
   anything on screen. `ScrollView` frames gain change listeners and `shift`.
   See [Long lists](docs/LISTS.md).
 
+- Load `<Image source={{uri}}>` from http(s) URLs: native fetch and stb_image
+  decode on two workers, resampled to the drawn size (cover/contain/stretch,
+  never enlarged) as premultiplied ARGB, a 32 MiB LRU decoded cache, an 8 MiB
+  encoded cache shared across sizes, cancellation on unmount and
+  `Image.prefetch`. Engine patches add image unloading and size a flow child's
+  main axis from a definite cross size and `aspectRatio`. See docs/IMAGES.md.
+
 - Add opt-in receipt-backed recovery of published downloads after app interruption.
   Verify the full SHA-256 and original request/storage/file identity without
   contacting the provider; preserve unowned or damaged existing destinations.
