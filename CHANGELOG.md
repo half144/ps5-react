@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- When the surface matches the render size, the presenter keeps the frame in
+  two buffer textures (`texelFetch`) and uploads changed rows with
+  `glBufferSubData`. On the PS5 that costs about 0.46 ms for 1920×540 rows
+  against 14.9 ms through `glTexSubImage2D`; opening an Overdrive game page went
+  from an 80 ms to a 53 ms frame, and the gallery's 28 ms image-change frame
+  fits in 16.7 ms. Scroll moves need no GPU copy there. Other sizes keep the
+  scaled texture.
 - A horizontal ScrollView beside a transparent container, such as a section
   header whose box overlaps the rail through a negative margin, scrolls by
   copy again instead of repainting its whole viewport each frame. On the PS5

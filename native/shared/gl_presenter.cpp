@@ -33,6 +33,20 @@ out vec4 color;
 // storage puts them in B,G,R,A order.
 void main() { color = texture(frame, uv).bgra; }
 )";
+// One-to-one presentation reads framebuffer words straight from buffer textures, the top and bottom
+// halves in one each: the PS5 allows 1048576 texels per buffer texture, less than a 1080p frame.
+const char* buffer_fragment_source = R"(#version 410 core
+uniform samplerBuffer top;
+uniform samplerBuffer bottom;
+uniform ivec2 size;
+uniform int split;
+out vec4 color;
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  int y = size.y - 1 - p.y;
+  color = (y < split ? texelFetch(top, y * size.x + p.x) : texelFetch(bottom, (y - split) * size.x + p.x)).bgra;
+}
+)";
 
 GLuint compile(GLenum type, const char* source) {
   GLuint shader = glCreateShader(type);
@@ -49,29 +63,37 @@ GLuint compile(GLenum type, const char* source) {
   }
   return shader;
 }
+
+GLuint link(GLuint vertex, GLuint fragment) {
+  if (!vertex || !fragment) return 0;
+  GLuint program = glCreateProgram();
+  glAttachShader(program, vertex); glAttachShader(program, fragment);
+  glLinkProgram(program);
+  GLint linked = 0;
+  glGetProgramiv(program, GL_LINK_STATUS, &linked);
+  if (!linked) {
+    char log[2048] = {};
+    glGetProgramInfoLog(program, sizeof(log), nullptr, log);
+    std::fprintf(stderr, "Shader link failed: %s\n", log);
+    glDeleteProgram(program);
+    return 0;
+  }
+  return program;
+}
+
 } // namespace
 
 bool GlPresenter::init(int width, int height) {
   if (width <= 0 || height <= 0 || program_) return false;
   width_ = width; height_ = height;
-  synced_ = false;
+  synced_ = buffer_synced_ = false;
   GLuint vertex = compile(GL_VERTEX_SHADER, vertex_source);
   GLuint fragment = compile(GL_FRAGMENT_SHADER, fragment_source);
-  if (!vertex || !fragment) {
-    if (vertex) glDeleteShader(vertex);
-    if (fragment) glDeleteShader(fragment);
-    return false;
-  }
-  program_ = glCreateProgram();
-  glAttachShader(program_, vertex); glAttachShader(program_, fragment);
-  glLinkProgram(program_);
-  glDeleteShader(vertex); glDeleteShader(fragment);
-  GLint linked = 0;
-  glGetProgramiv(program_, GL_LINK_STATUS, &linked);
-  if (!linked) {
-    char log[2048] = {};
-    glGetProgramInfoLog(program_, sizeof(log), nullptr, log);
-    std::fprintf(stderr, "Shader link failed: %s\n", log);
+  GLuint buffer_fragment = compile(GL_FRAGMENT_SHADER, buffer_fragment_source);
+  program_ = link(vertex, fragment);
+  buffer_program_ = link(vertex, buffer_fragment);
+  for (GLuint shader : {vertex, fragment, buffer_fragment}) if (shader) glDeleteShader(shader);
+  if (!program_) {
     release();
     return false;
   }
@@ -83,20 +105,53 @@ bool GlPresenter::init(int width, int height) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-  return glGetError() == GL_NO_ERROR;
+  if (glGetError() != GL_NO_ERROR) return false;
+  GLint max_texels = 0;
+  glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &max_texels);
+  split_ = (height + 1) / 2;
+  if (buffer_program_ && max_texels / width >= split_) {
+    glGenBuffers(2, buffers_);
+    glGenTextures(2, buffer_textures_);
+    for (int i = 0; i < 2; ++i) {
+      glBindBuffer(GL_TEXTURE_BUFFER, buffers_[i]);
+      glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(width) * split_ * 4, nullptr, GL_DYNAMIC_DRAW);
+      glBindTexture(GL_TEXTURE_BUFFER, buffer_textures_[i]);
+      glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, buffers_[i]);
+    }
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+  }
+  // Without a buffer texture every size presents through the 2D texture.
+  if (glGetError() != GL_NO_ERROR) release_buffer();
+  return true;
 }
 
 bool GlPresenter::draw(const std::uint32_t* argb, int sw, int sh) {
   if (!program_ || !argb || sw <= 0 || sh <= 0) return false;
-  glBindTexture(GL_TEXTURE_2D, texture_);
-  upload(argb, {0, 0, width_, height_});
-  synced_ = false;
+  synced_ = buffer_synced_ = false;
+  if (one_to_one(sw, sh)) {
+    upload_rows(argb, 0, height_);
+  } else {
+    glBindTexture(GL_TEXTURE_2D, texture_);
+    upload(argb, {0, 0, width_, height_});
+  }
   return present(sw, sh);
 }
 
 bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage, std::span<const DamageMove> moves,
                        int sw, int sh) {
   if (!program_ || !argb || sw <= 0 || sh <= 0) return false;
+  if (one_to_one(sw, sh)) {
+    synced_ = false;
+    if (!buffer_synced_) {
+      upload_rows(argb, 0, height_);
+      buffer_synced_ = true;
+    } else {
+      upload_changed_rows(argb, damage, moves);
+    }
+    return present(sw, sh);
+  }
+  buffer_synced_ = false;
   glBindTexture(GL_TEXTURE_2D, texture_);
   // A new surface size also covers fullscreen changes and lost drawables.
   if (!synced_ || sw != surface_width_ || sh != surface_height_) {
@@ -113,6 +168,37 @@ bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage
     for (const ERRect& rect : damage) upload(argb, rect);
   }
   return present(sw, sh);
+}
+
+bool GlPresenter::one_to_one(int sw, int sh) const { return buffer_textures_[0] && sw == width_ && sh == height_; }
+
+// The buffer holds whole framebuffer rows, so a move needs no GPU copy: the rows it wrote are uploaded
+// like damage. Close row ranges go up as one call.
+void GlPresenter::upload_changed_rows(const std::uint32_t* argb, std::span<const ERRect> damage,
+                                      std::span<const DamageMove> moves) {
+  struct Rows { int y0, y1; };
+  Rows rows[ER_DAMAGE_RECTS_MAX + 8];
+  int count = 0;
+  for (const ERRect& r : damage) rows[count++] = {r.y, r.y + r.h};
+  for (const DamageMove& m : moves) rows[count++] = {m.src.y + m.dy, m.src.y + m.dy + m.src.h};
+  std::sort(rows, rows + count, [](const Rows& a, const Rows& b) { return a.y0 < b.y0; });
+  constexpr int gap = 16;
+  for (int i = 0; i < count;) {
+    int y0 = rows[i].y0, y1 = rows[i].y1;
+    for (++i; i < count && rows[i].y0 <= y1 + gap; ++i) y1 = std::max(y1, rows[i].y1);
+    upload_rows(argb, std::max(y0, 0), std::min(y1, height_));
+  }
+}
+
+void GlPresenter::upload_rows(const std::uint32_t* argb, int y0, int y1) {
+  const GLsizeiptr row = static_cast<GLsizeiptr>(width_) * 4;
+  for (int i = 0; i < 2; ++i) {
+    const int first = i * split_, a = std::max(y0, first), b = std::min(y1, first + split_);
+    if (b <= a) continue;
+    glBindBuffer(GL_TEXTURE_BUFFER, buffers_[i]);
+    glBufferSubData(GL_TEXTURE_BUFFER, (a - first) * row, (b - a) * row, argb + static_cast<std::size_t>(a) * width_);
+  }
+  glBindBuffer(GL_TEXTURE_BUFFER, 0);
 }
 
 void GlPresenter::upload(const std::uint32_t* argb, const ERRect& rect) {
@@ -150,21 +236,44 @@ bool GlPresenter::present(int sw, int sh) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST);
   glDisable(GL_FRAMEBUFFER_SRGB);
+  glBindVertexArray(vao_);
+  glActiveTexture(GL_TEXTURE0);
+  if (one_to_one(sw, sh)) {
+    glViewport(0, 0, sw, sh);
+    glBindTexture(GL_TEXTURE_BUFFER, buffer_textures_[0]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_BUFFER, buffer_textures_[1]);
+    glUseProgram(buffer_program_);
+    glUniform1i(glGetUniformLocation(buffer_program_, "top"), 0);
+    glUniform1i(glGetUniformLocation(buffer_program_, "bottom"), 1);
+    glUniform2i(glGetUniformLocation(buffer_program_, "size"), width_, height_);
+    glUniform1i(glGetUniformLocation(buffer_program_, "split"), split_);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    return glGetError() == GL_NO_ERROR;
+  }
   glViewport(0, 0, sw, sh);
   glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
   const float scale = std::min(float(sw) / width_, float(sh) / height_);
   const int vw = int(width_ * scale), vh = int(height_ * scale);
   glViewport((sw-vw)/2, (sh-vh)/2, vw, vh);
-  glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture_);
   glUseProgram(program_);
   glUniform1i(glGetUniformLocation(program_, "frame"), 0);
-  glBindVertexArray(vao_);
   glDrawArrays(GL_TRIANGLES, 0, 3);
   return glGetError() == GL_NO_ERROR;
 }
 
+void GlPresenter::release_buffer() {
+  if (buffer_textures_[0]) glDeleteTextures(2, buffer_textures_);
+  if (buffers_[0]) glDeleteBuffers(2, buffers_);
+  buffer_textures_[0] = buffer_textures_[1] = buffers_[0] = buffers_[1] = 0;
+  buffer_synced_ = false;
+}
+
 void GlPresenter::release() {
+  release_buffer();
+  if (buffer_program_) glDeleteProgram(buffer_program_);
+  buffer_program_ = 0;
   if (texture_) glDeleteTextures(1, &texture_);
   if (scratch_) glDeleteTextures(1, &scratch_);
   if (read_fbo_) glDeleteFramebuffers(1, &read_fbo_);
