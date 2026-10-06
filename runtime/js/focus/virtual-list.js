@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // A windowed list or grid inside a ScrollView: only the rows around the viewport and the focused
 // element are mounted; spacers stand in for the rest. See docs/LISTS.md.
-import {createElement, Fragment, memo, useContext, useLayoutEffect, useRef, useState} from 'react';
+import {createElement, Fragment, memo, useContext, useLayoutEffect, useReducer, useRef} from 'react';
 import {View} from 'embedded-react';
 import {onFrame} from '../frame.js';
 import {FrameContext, manager} from './runtime.js';
@@ -35,15 +35,15 @@ const Row = memo(function Row({data, first, end, renderItem, keyExtractor, recyc
 /**
  * @typedef {{data: readonly any[], renderItem: (info: {item: any, index: number}) => import('react').ReactNode,
  *   keyExtractor: (item: any, index: number) => string, itemHeight: number, numColumns?: number,
- *   rowGap?: number, columnGap?: number, overscan?: number, maxRowsPerFrame?: number,
+ *   rowGap?: number, columnGap?: number, overscan?: number, maxItemsPerFrame?: number,
  *   initialNumRows?: number, onEndReached?: () => void, onEndReachedThreshold?: number,
  *   recycle?: boolean, style?: any, onLayout?: (event: object) => void}} VirtualListProps
  *   Lengths are logical px of a 1280-wide layout, like class names.
  */
 
 /**
- * Renders the rows of `data` near the viewport of the enclosing ScrollView and near focus, mounting
- * further rows at most `maxRowsPerFrame` a frame ahead of the scroll.
+ * Renders the rows of `data` near the viewport of the enclosing ScrollView and near focus. Rows ahead
+ * of the scroll mount over several frames, `maxItemsPerFrame` items at a time.
  * @param {VirtualListProps} props
  */
 export function VirtualList(props) {
@@ -55,13 +55,14 @@ export function VirtualList(props) {
   const gap = Math.round((props.rowGap ?? 0) * scale);
   const stride = height + gap;
   const rows = Math.ceil(data.length / numColumns);
-  // [first, end) mounted, and the first row the content represents.
-  const [view, setView] = useState(() => [0, Math.min(rows, props.initialNumRows ?? 2), 0]);
+  const [, rerender] = useReducer(count => count + 1, 0);
   const self = useRef(null);
   if (!self.current) {
+    // `range`: rows [first, end) mounted; `filling`: row → items mounted so far, for rows still filling;
+    // `base`: the first row the content represents.
     const list = {
-      props, rows, stride, layout: null, range: [view[0], view[1]], base: 0, scroll: 0, direction: 1,
-      slots: new Map(), stepping: null, endFor: -1, required: null, desired: null,
+      props, rows, stride, layout: null, range: [0, Math.min(rows, props.initialNumRows ?? 2)], filling: new Map(),
+      base: 0, scroll: 0, direction: 1, slots: new Map(), stepping: null, endFor: -1, required: null, desired: null,
       span: () => Math.max(1, Math.floor(SPAN_PX / list.stride)),
       /** The row of the focused element when it is in this list, else -1. */
       focusedRow() {
@@ -92,9 +93,8 @@ export function VirtualList(props) {
           list.move(base);
           ({required: list.required, desired: list.desired} = window());
         }
-        // On screen or focused but unmounted (a first layout, a filter): mount it now, not row by row.
-        if (list.required[0] < list.range[0] || list.required[1] > list.range[1]) list.step();
-        if (!same(list.range, list.desired) && !list.stepping) list.stepping = onFrame(list.step);
+        list.mountRequired();
+        if ((!same(list.range, list.desired) || list.filling.size) && !list.stepping) list.stepping = onFrame(list.step);
         if (onEndReached && list.rows > 0 && list.endFor !== list.rows
           && nearEnd({...list.geometry(), threshold: onEndReachedThreshold})) {
           list.endFor = list.rows;
@@ -117,15 +117,49 @@ export function VirtualList(props) {
         list.base = base;
         list.scroll -= dy;
         frame.shift(dy);
-        setView([list.range[0], list.range[1], base]);
+        rerender();
       },
-      step() {
-        const next = stepRange(list.range, list.required, list.desired, list.props.maxRowsPerFrame ?? 1);
-        if (!same(next, list.range)) {
-          list.range = next;
-          setView([next[0], next[1], list.base]);
+      /** Rows on screen or around focus that are missing or still filling (a first layout, a jump) mount whole now. */
+      mountRequired() {
+        const [first, end] = list.required;
+        let changed = false;
+        if (first < list.range[0] || end > list.range[1]) {
+          list.setRange(stepRange(list.range, list.required, list.desired, 1), Infinity);
+          changed = true;
         }
-        if (same(next, list.desired)) list.stopStepping();
+        for (let row = first; row < end; row++) changed = list.filling.delete(row) || changed;
+        if (changed) rerender();
+      },
+      /**
+       * Once a frame: the window's edges move a row toward `desired`, entering rows starting with
+       * `maxItemsPerFrame` items; or, with the edges in place, the filling row nearest focus gets more.
+       */
+      step() {
+        const columns = list.props.numColumns ?? 1;
+        const batch = list.props.maxItemsPerFrame ?? 1;
+        const next = stepRange(list.range, list.required, list.desired, 1);
+        if (!same(next, list.range)) list.setRange(next, batch);
+        else if (list.filling.size) {
+          const middle = (list.required[0] + list.required[1]) / 2;
+          const [row, count] = [...list.filling].reduce((a, b) => (Math.abs(b[0] - middle) < Math.abs(a[0] - middle) ? b : a));
+          if (count + batch >= columns) list.filling.delete(row);
+          else list.filling.set(row, count + batch);
+        } else {
+          list.stopStepping();
+          return;
+        }
+        rerender();
+      },
+      /** Mounts `range`; rows entering it start with `count` items. */
+      setRange(range, count) {
+        const columns = list.props.numColumns ?? 1;
+        for (const row of list.filling.keys()) if (row < range[0] || row >= range[1]) list.filling.delete(row);
+        if (count < columns) {
+          for (let row = range[0]; row < range[1]; row++) {
+            if (row < list.range[0] || row >= list.range[1]) list.filling.set(row, count);
+          }
+        }
+        list.range = range;
       },
       stopStepping() {
         list.stepping?.();
@@ -154,17 +188,18 @@ export function VirtualList(props) {
   // New data or sizes move the window; a longer list may also call onEndReached again.
   useLayoutEffect(() => list.update(), [rows, stride]);
 
-  const base = view[2];
+  const {base, filling} = list;
   const spanEnd = Math.min(rows, base + list.span());
-  const first = Math.max(base, Math.min(view[0], spanEnd));
-  const end = Math.max(first, Math.min(view[1], spanEnd));
+  const first = Math.max(base, Math.min(list.range[0], spanEnd));
+  const end = Math.max(first, Math.min(list.range[1], spanEnd));
   if (recycle) list.slots = recycleSlots(list.slots, [first, end]);
   const columnGap = Math.round((props.columnGap ?? 0) * scale);
   const children = [];
   if (first > base) children.push(createElement(View, {key: 'before', style: {height: (first - base) * stride}}));
   for (let row = first; row < end; row++) {
     children.push(createElement(Row, {key: recycle ? list.slots.get(row) : row, data, renderItem, keyExtractor,
-      recycle, first: row * numColumns, end: Math.min(data.length, (row + 1) * numColumns), height,
+      recycle, first: row * numColumns, end: Math.min(data.length, row * numColumns + (filling.get(row) ?? numColumns)),
+      height,
       gap: row < rows - 1 ? gap : 0, columnGap}));
   }
   if (end < spanEnd) {

@@ -57,7 +57,7 @@ Lengths are logical px of a 1280-wide layout, like class names.
 | `numColumns` | Items per row (default 1) |
 | `rowGap`, `columnGap` | Space between rows and between items in a row |
 | `overscan` | Rows mounted beyond the viewport in the direction of travel (default 2; one row behind) |
-| `maxRowsPerFrame` | Rows each edge of the window may move per frame (default 1) |
+| `maxItemsPerFrame` | Items a row entering ahead of the scroll mounts per frame (default 1) |
 | `initialNumRows` | Rows mounted before the first layout (default 2) |
 | `onEndReached` | Called once per list length when the visible end is within `onEndReachedThreshold` viewports of the content end (default 1) |
 | `recycle` | Reuse leaving rows for entering ones (same elements, new items) instead of unmounting and mounting |
@@ -71,10 +71,15 @@ Lengths are logical px of a 1280-wide layout, like class names.
    before the scroll animates, so rows exist where the scroll is going.
 2. **What is worth mounting** (`desired`): `required` plus `overscan` rows in
    the direction of travel and one behind.
-3. Each presented frame (`globalThis.__ps5ReactFrame`), each edge of the
-   mounted range moves at most `maxRowsPerFrame` rows toward `desired`, so a
-   held key mounts one row at a time instead of a burst. Rows in `required`
-   that are missing (the first layout, a jump) mount at once.
+3. Each presented frame (`globalThis.__ps5ReactFrame`) does one step: each
+   edge of the mounted range moves a row toward `desired`, and a row entering
+   it starts with `maxItemsPerFrame` items; with the edges in place, the
+   filling row nearest focus gets that many more. Rows fill as a prefix (left
+   to right), so mounted items are always in their final place. Mounting a
+   whole row of cards in one frame costs more JavaScript than a frame has; one
+   card a frame does not, and a held key still leaves several frames per row.
+   Rows in `required` that are missing or still filling (the first layout, a
+   jump) mount whole at once.
 4. Each mounted row is a memoized component: a window step renders the
    entering row only, not every mounted card.
 

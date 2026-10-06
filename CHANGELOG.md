@@ -3,8 +3,8 @@
 ## Unreleased
 
 - Add `VirtualList` for long lists and grids inside a `ScrollView`: it mounts
-  the rows on screen, around focus and a little ahead of the scroll, at most a
-  row per frame per edge, with spacers for the rest, `onEndReached` for
+  the rows on screen, around focus and a little ahead of the scroll, filling
+  rows ahead an item per frame, with spacers for the rest, `onEndReached` for
   incremental loading and optional row recycling. Lists taller than the engine's
   16-bit layout range re-centre the rows the content represents without moving
   anything on screen. `ScrollView` frames gain change listeners and `shift`.
