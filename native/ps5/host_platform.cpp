@@ -5,6 +5,7 @@
 // libSce* calls. None of these calls has been verified on hardware yet.
 
 #include "host_api.hpp"
+#include "async_log.hpp"
 #include "host_platform.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
@@ -71,7 +72,7 @@ public:
       resolved_ = true;
       void* handle = dlopen(module_, RTLD_LAZY);
       void* symbol = handle ? dlsym(handle, name_) : nullptr;
-      if (!symbol) hui::sys::log("[PS5-REACT] %s unavailable from %s", name_, module_);
+      if (!symbol) async_log::write("[PS5-REACT] %s unavailable from %s", name_, module_);
       function_ = reinterpret_cast<Function>(symbol);
     }
     return function_;
@@ -125,7 +126,7 @@ void utc_timestamp(char* out, std::size_t size) {
 bool user_name(int id, char* name, std::size_t size) {
   const int result = sceUserServiceGetUserName(id, name, size);
   if (result != 0) {
-    hui::sys::log("[PS5-REACT] sceUserServiceGetUserName=0x%08x", static_cast<unsigned>(result));
+    async_log::write("[PS5-REACT] sceUserServiceGetUserName=0x%08x", static_cast<unsigned>(result));
     name[0] = '\0';
   }
   return result == 0;
@@ -150,7 +151,7 @@ bool resolve_path(const char* path, char* out, std::size_t size) {
   return resolve_filesystem_path(path, out, size);
 }
 
-void trace(const char* call) { hui::sys::log("[PS5-REACT] native %s", call); }
+void trace(const char* call) { async_log::write("[PS5-REACT] native %s", call); }
 
 // libkernel's sce* file calls return SCE_KERNEL_ERROR_* (0x8002xxxx, errno in the low bits).
 bool sce_failed(int result) {
@@ -334,7 +335,7 @@ bool notify(const char* message, const char* sub_message) {
   const auto send = notification_send.get();
   if (!send || length < 0 || static_cast<std::size_t>(length) >= sizeof payload) return false;
   const int result = send(kNotificationSystemUser, true, payload);
-  if (result != 0) hui::sys::log("[PS5-REACT] sceNotificationSend=0x%08x", static_cast<unsigned>(result));
+  if (result != 0) async_log::write("[PS5-REACT] sceNotificationSend=0x%08x", static_cast<unsigned>(result));
   return result == 0;
 }
 
@@ -342,7 +343,7 @@ bool open_url(const char* url) {
   if (std::strncmp(url, "http://", 7) != 0 && std::strncmp(url, "https://", 8) != 0) return false;
   const int result = sceSystemServiceLaunchWebBrowser(url, nullptr);
   if (result != 0)
-    hui::sys::log("[PS5-REACT] sceSystemServiceLaunchWebBrowser=0x%08x", static_cast<unsigned>(result));
+    async_log::write("[PS5-REACT] sceSystemServiceLaunchWebBrowser=0x%08x", static_cast<unsigned>(result));
   return result == 0;
 }
 

@@ -4,6 +4,7 @@
 // Independent React proof: PS5 lifecycle/display/input, software UI and GL texture.
 
 #include "app_config.hpp"
+#include "async_log.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
@@ -39,7 +40,7 @@ namespace {
 constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
 constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT) * 1000000;
 
-void react_log(const char* line) { hui::sys::log("[REACT] %s", line); }
+void react_log(const char* line) { async_log::write("[REACT] %s", line); }
 
 // An app folder may carry dev/input-script.txt (InputScript syntax) for unattended profiling; it is
 // never part of a build, only added to a test deploy.
@@ -50,8 +51,8 @@ void load_input_script(InputScript& script) {
   text[std::fread(text, 1, sizeof text - 1, file)] = '\0';
   std::fclose(file);
   char error[160];
-  if (script.parse(text, error, sizeof error)) hui::sys::log("[PS5-REACT] input script loaded");
-  else hui::sys::log("[PS5-REACT] input script ignored: %s", error);
+  if (script.parse(text, error, sizeof error)) async_log::write("[PS5-REACT] input script loaded");
+  else async_log::write("[PS5-REACT] input script ignored: %s", error);
 }
 
 // Live commands for a running title: a test machine overwrites dev/commands.txt with lines
@@ -73,7 +74,7 @@ public:
     read(true);
     if (pending_.empty() || !script.done()) return;
     char error[160];
-    if (!script.parse(pending_.c_str(), error, sizeof error)) hui::sys::log("[PS5-REACT] command ignored: %s", error);
+    if (!script.parse(pending_.c_str(), error, sizeof error)) async_log::write("[PS5-REACT] command ignored: %s", error);
     pending_.clear();
   }
 
@@ -91,7 +92,7 @@ private:
       steps += std::strspn(steps, " \t");
       last_sequence_ = sequence;
       if (!queue) continue;
-      hui::sys::log("[PS5-REACT] command: %s", steps);
+      async_log::write("[PS5-REACT] command: %s", steps);
       pending_ += steps;
       pending_ += ' ';
     }
@@ -146,7 +147,7 @@ bool dispatch(const char* action) {
   if (!ok) {
     JSValue error = JS_GetException(ctx);
     const char* message = JS_ToCString(ctx, error);
-    hui::sys::log("[PS5-REACT] input exception: %s", message ? message : "unknown");
+    async_log::write("[PS5-REACT] input exception: %s", message ? message : "unknown");
     if (message) JS_FreeCString(ctx, message);
     JS_FreeValue(ctx, error);
   }
@@ -167,20 +168,20 @@ bool run_proof() {
   FrameStats stats;
   bool runtime = false, software = false;
   bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT);
-  hui::sys::log("[PS5-REACT] display=%d", ok);
+  async_log::write("[PS5-REACT] display=%d", ok);
   if (ok) {
     ok = presenter.init(width, height);
-    hui::sys::log("[PS5-REACT] presenter=%d", ok);
+    async_log::write("[PS5-REACT] presenter=%d", ok);
   }
   if (ok) {
     software = er_software_backend_init(width, height);
     ok = software && damage_tracker_install(width, height);
-    hui::sys::log("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
+    async_log::write("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
   }
   // The pad opens before the bundle runs: it also initializes the user service
   // that the users, notification and browser calls need.
   if (ok) {
-    hui::sys::log("[PS5-REACT] pad=%d", pad.open());
+    async_log::write("[PS5-REACT] pad=%d", pad.open());
     host_platform_set_pad(&pad);
   }
   if (ok) {
@@ -193,16 +194,16 @@ bool run_proof() {
     config.install_host_globals = ps5_react_install_host_api;
     runtime = er_runtime_init(&config);
     ok = runtime;
-    hui::sys::log("[PS5-REACT] runtime=%d", ok);
+    async_log::write("[PS5-REACT] runtime=%d", ok);
   }
   if (ok) {
     er_register_assets();
     ok = er_runtime_load_source(proof_bundle, proof_bundle_length, "app.jsx.bundle");
-    hui::sys::log("[PS5-REACT] bundle=%d gc_accounting=%d", ok, er_runtime_gc_accounting_ok());
+    async_log::write("[PS5-REACT] bundle=%d gc_accounting=%d", ok, er_runtime_gc_accounting_ok());
   }
   if (ok) {
     // Input failure is logged; timeout still allows the display-only proof to end.
-    hui::sys::log("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
+    async_log::write("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
     std::uint64_t frames = 0;
     InputScript script;
@@ -220,7 +221,7 @@ bool run_proof() {
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
-      if (const char* line = stats.start_frame(now)) hui::sys::log("[PS5-REACT] %s", line);
+      if (const char* line = stats.start_frame(now)) async_log::write("[PS5-REACT] %s", line);
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
       if (input.is_pressed(hui::Action::menu)) break;
@@ -231,7 +232,7 @@ bool run_proof() {
       if (ok && input.is_pressed(hui::Action::back)) ok = dispatch("back");
       commands.poll(now, script);
       if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
-        hui::sys::log("[PS5-REACT] script: %s", action);
+        async_log::write("[PS5-REACT] script: %s", action);
         if (!std::strcmp(action, "quit")) break;
         ok = dispatch(action);
       }
@@ -255,17 +256,17 @@ bool run_proof() {
       if (!first_present) {
         first_present = hui::sys::monotonic_us();
         hui::sys::hide_splash_screen();
-        hui::sys::log("[PS5-REACT] first frame presented");
+        async_log::write("[PS5-REACT] first frame presented");
       }
       embedded_renderer_tick(static_cast<std::uint32_t>(std::clamp<std::int64_t>((now-previous)/1000, 0, 50)));
       previous = now;
       ++frames;
-      if (const char* line = stats.end_frame(slow_frame_us)) hui::sys::log("[PS5-REACT] %s", line);
+      if (const char* line = stats.end_frame(slow_frame_us)) async_log::write("[PS5-REACT] %s", line);
       if (ps5_react_exit_requested()) break;
     }
-    hui::sys::log("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
+    async_log::write("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
   }
-  if (!ok && runtime) hui::sys::log("[PS5-REACT] error=%s", er_runtime_last_error());
+  if (!ok && runtime) async_log::write("[PS5-REACT] error=%s", er_runtime_last_error());
   if (runtime) er_runtime_shutdown();
   if (software) er_software_backend_destroy();
   host_platform_set_pad(nullptr);
@@ -277,7 +278,9 @@ bool run_proof() {
 
 void* render_thread(void*) {
   hui::sys::log("[PS5-REACT] render thread started, 8 MiB stack");
+  if (!async_log::start()) hui::sys::log("[PS5-REACT] log writer thread failed; logging synchronously");
   const bool ok = run_proof();
+  async_log::stop();
   hui::sys::log("[PS5-REACT] cleanup complete, result=%d; requesting title closure", ok);
   hui::sys::quit();
   return nullptr;
