@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <pthread.h>
 #include <sys/stat.h>
 
@@ -130,6 +131,13 @@ constexpr hui::Action kButtonActions[] = {
   hui::Action::l3, hui::Action::r3, hui::Action::menu, hui::Action::touch,
 };
 static_assert(std::size(kButtonActions) == std::size(kButtonNames));
+
+// Buttons delivered to the app as actions beyond the D-pad, Cross and Circle.
+constexpr std::pair<hui::Action, const char*> kExtraActions[] = {
+  {hui::Action::page_prev, "l1"}, {hui::Action::page_next, "r1"},
+  {hui::Action::jump_prev, "l2"}, {hui::Action::jump_next, "r2"},
+  {hui::Action::north, "triangle"}, {hui::Action::west, "square"},
+};
 
 GamepadState gamepad_state(const hui::InputFrame& input) {
   GamepadState state;
@@ -248,6 +256,9 @@ bool run_proof() {
       if (const char* direction = nav_action(input.nav)) ok = dispatch(direction);
       if (ok && input.is_pressed(hui::Action::confirm)) ok = dispatch("confirm");
       if (ok && input.is_pressed(hui::Action::back)) ok = dispatch("back");
+      for (const auto& [button, name] : kExtraActions) {
+        if (ok && input.is_pressed(button)) ok = dispatch(name);
+      }
       commands.poll(now, script);
       if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
         async_log::write("[PS5-REACT] script: %s", action);

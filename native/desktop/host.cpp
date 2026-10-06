@@ -104,6 +104,7 @@ struct Host {
   Uint32 slow_frame_us = 33000;
   SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
+  bool l2_down = false, r2_down = false;
 
   ~Host() {
     ps5_react_stop_images();
@@ -229,6 +230,12 @@ struct Host {
           case SDLK_RIGHT: action = hold("right", key); break;
           case SDLK_RETURN: case SDLK_SPACE: action = "confirm"; break;
           case SDLK_BACKSPACE: action = "back"; break;
+          case SDLK_q: action = "l1"; break;
+          case SDLK_e: action = "r1"; break;
+          case SDLK_z: action = "l2"; break;
+          case SDLK_c: action = "r2"; break;
+          case SDLK_t: action = "triangle"; break;
+          case SDLK_f: action = "square"; break;
           case SDLK_ESCAPE: running = false; break;
         }
       } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
@@ -240,8 +247,20 @@ struct Host {
           case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: action = hold("right", SDL_SCANCODE_UNKNOWN, button); break;
           case SDL_CONTROLLER_BUTTON_A: action = "confirm"; break;
           case SDL_CONTROLLER_BUTTON_B: action = "back"; break;
+          case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: action = "l1"; break;
+          case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: action = "r1"; break;
+          case SDL_CONTROLLER_BUTTON_Y: action = "triangle"; break;
+          case SDL_CONTROLLER_BUTTON_X: action = "square"; break;
           default: break;
         }
+      } else if (event.type == SDL_CONTROLLERAXISMOTION) {
+        // Triggers are analog: an action on crossing half travel, re-armed below a quarter.
+        const auto trigger = [&](bool& down, const char* name) {
+          if (!down && event.caxis.value > 16384) { down = true; action = name; }
+          else if (down && event.caxis.value < 8192) down = false;
+        };
+        if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) trigger(l2_down, "l2");
+        else if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) trigger(r2_down, "r2");
       }
       if (action && !dispatch(action)) return false;
     }

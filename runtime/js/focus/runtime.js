@@ -22,5 +22,7 @@ subscribeInput(action => {
     if (!manager.back()) dispatchBackPress();
   } else if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
     manager.move(action);
+  } else {
+    manager.action(action);
   }
 });

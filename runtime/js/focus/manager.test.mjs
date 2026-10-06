@@ -292,3 +292,17 @@ test('a scope that becomes inert hands focus back once the commit settles', () =
   t.flush();
   assert.equal(t.key(), 'play', 'a screen that took focus in the same commit keeps it');
 });
+
+test('shoulder and face buttons bubble through enclosing onAction handlers', () => {
+  const t = setup();
+  const calls = [];
+  const outer = t.scope(t.focus.root, {onAction: action => { calls.push(`outer:${action}`); return action === 'r1'; }});
+  const inner = t.scope(outer, {onAction: action => { calls.push(`inner:${action}`); return action === 'l1'; }});
+  assert.equal(t.focus.action('l1'), false);
+  t.node('button', 0, 0, inner, {autoFocus: true});
+  assert.equal(t.focus.action('l1'), true);
+  assert.equal(t.focus.action('r1'), true);
+  assert.equal(t.focus.action('triangle'), false);
+  assert.deepEqual(calls, ['inner:l1', 'inner:r1', 'outer:r1', 'inner:triangle', 'outer:triangle']);
+  assert.equal(t.key(), 'button');
+});

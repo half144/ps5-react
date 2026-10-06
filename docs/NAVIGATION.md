@@ -60,13 +60,18 @@ AppRegistry.registerComponent('menu', () => Menu);
 `npm run create` scaffolds this menu; `apps/starter`, `apps/tailwind-gallery`,
 `apps/system-explorer`, and `apps/motion-lab` use the patterns below.
 
-## Host input (ABI v2)
+## Host input (ABI v3)
 
 `globalThis.__ps5ReactDispatch(action)` receives `up`, `down`, `left`, `right`
 (the D-pad and the left stick, with the platform's hold-to-repeat), `confirm`,
-and `back`. For ABI v1 compatibility the runtime also delivers `previous` (after
-`up`/`left`) and `next` (after `down`/`right`) to `useController` handlers only.
-Desktop: arrow keys, Enter, Backspace. Options/Escape still exit.
+`back`, and, since ABI v3, `l1`, `r1`, `l2`, `r2`, `triangle`, and `square`
+(one action per press, no repeat). For ABI v1 compatibility the runtime also
+delivers `previous` (after `up`/`left`) and `next` (after `down`/`right`) to
+`useController` handlers only. Options/Escape still exit.
+
+The focus manager does not move on the ABI v3 buttons: they go to the enclosing
+`FocusScope.onAction` handlers (tabs on L1/R1, a filter on Triangle) and to
+`useController`.
 
 Once per frame, after the pump and before the commit, hosts also call
 `globalThis.__ps5ReactFrame(elapsedMs)` with the time the frame advances (on the
@@ -79,6 +84,9 @@ frames.
 | `up`, `down`, `left`, `right` | Arrow keys | D-pad, left stick |
 | `confirm` | Enter | Cross (X) |
 | `back` | Backspace | Circle |
+| `l1`, `r1` | Q, E | L1, R1 |
+| `l2`, `r2` | Z, C | L2, R2 (past half travel on the desktop) |
+| `triangle`, `square` | T, F | Triangle, Square |
 | Exit (handled by the host) | Escape | Options |
 
 ## Focusable elements
@@ -132,6 +140,7 @@ express the order you want, and use `nextFocus*` only for exceptions.
 | `wrap` | Moving past the last element in a direction wraps to the first in that row/column; with nothing in that row/column (Down from a tab row), focus leaves the scope as usual unless it traps |
 | `restoreFocus` | Re-entering the scope focuses the element focused when it was left (default `true`) |
 | `onBack` | Handles Circle while focus is inside; return `true` to consume |
+| `onAction` | `(action) => boolean`: handles `l1`, `r1`, `l2`, `r2`, `triangle`, and `square` while focus is inside, innermost scope first; return `true` to consume |
 | `focusKey` | Name for `focus(key)` on the scope (focuses its remembered element) |
 | `inert` | Takes the scope's subtree out of navigation while true: no candidates, no `autoFocus`, no `focus(key)`; focus inside moves out after the commit |
 

@@ -14,8 +14,10 @@ import {findClosest, findNearest, findWrap} from './geometry.js';
  *   autoFocus?: boolean, disabled?: boolean, nextFocusUp?: string, nextFocusDown?: string,
  *   nextFocusLeft?: string, nextFocusRight?: string}} NodeProps
  * @typedef {{focusKey?: string, autoFocus?: boolean, trap?: boolean, wrap?: boolean,
- *   restoreFocus?: boolean, inert?: boolean, onBack?: () => boolean | void}} ScopeProps
+ *   restoreFocus?: boolean, inert?: boolean, onBack?: () => boolean | void,
+ *   onAction?: (action: Action) => boolean | void}} ScopeProps
  *   `inert` takes the scope's subtree out of navigation (a hidden layer that stays mounted).
+ * @typedef {'l1' | 'r1' | 'l2' | 'r2' | 'triangle' | 'square'} Action a button beyond D-pad, Cross and Circle
  * @typedef {{kind: 'scope', parent: Scope | null, props: ScopeProps, remembered: Node | null,
  *   returnTo: Node | null, dead: boolean}} Scope
  * @typedef {{kind: 'node', scope: Scope, frame: Frame | null, props: NodeProps, rect: Rect | null,
@@ -194,6 +196,17 @@ export class FocusManager {
   back() {
     for (let scope = this.focused?.scope ?? this.root; scope; scope = scope.parent) {
       if (scope.props.onBack?.() === true) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Shoulders, triggers, Triangle and Square: each enclosing scope's `onAction`, innermost first,
+   * until one consumes it. @param {Action} action @returns {boolean}
+   */
+  action(action) {
+    for (let scope = this.focused?.scope ?? this.root; scope; scope = scope.parent) {
+      if (scope.props.onAction?.(action) === true) return true;
     }
     return false;
   }

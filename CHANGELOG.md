@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Deliver L1, R1, L2, R2, Triangle and Square as the `l1`, `r1`, `l2`, `r2`,
+  `triangle` and `square` actions (host input ABI v3): to `useController`, to
+  the new `FocusScope.onAction` handler (innermost first, until one returns
+  `true`), and to input scripts. Desktop: Q, E, Z, C, T, F and the
+  controller's shoulders, triggers, Y and X. See docs/NAVIGATION.md.
+
 - Add `VirtualList` for long lists and grids inside a `ScrollView`: it mounts
   the rows on screen, around focus and a little ahead of the scroll, filling
   rows ahead an item per frame, with spacers for the rest, `onEndReached` for

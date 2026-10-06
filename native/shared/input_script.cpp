@@ -9,7 +9,8 @@
 #include <string>
 
 namespace {
-constexpr const char* kActions[] = {"up", "down", "left", "right", "confirm", "back", "quit"};
+constexpr const char* kActions[] = {"up", "down", "left", "right", "confirm", "back", "l1", "r1", "l2", "r2",
+                                     "triangle", "square", "quit"};
 constexpr std::uint32_t kRepeatMs = 110; // The desktop host's held-key repeat interval.
 } // namespace
 
@@ -56,8 +57,9 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
     for (const char* known : kActions)
       if (token == known) action = known;
     if (!action) {
-      std::snprintf(error, size, "unknown action '%s' (use up, down, left, right, confirm, back, quit, wait:MS, shot:NAME)",
-                    token.c_str());
+      std::snprintf(error, size,
+                    "unknown action '%s' (use up, down, left, right, confirm, back, l1, r1, l2, r2, "
+                    "triangle, square, quit, wait:MS, shot:NAME)", token.c_str());
       return false;
     }
     for (long i = 0; i < count; ++i) {
