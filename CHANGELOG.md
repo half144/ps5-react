@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Size a `Text` by the lines it actually wraps into: an auto-height text was one
+  line tall (cutting wrapped text to its first line) or exactly `numberOfLines`
+  lines whether or not it needed them. It now wraps at the width it gets, at
+  most `numberOfLines`, also as a `flex-1` child of a row, which grows to hold
+  it. Layouts that relied on `line-clamp-N` reserving N lines need a height.
+  Fixed by an engine patch.
+
 - Fix pieces of a sliding element left on screen, such as a header's section
   pill sliding while the screen under it changes: when an opaque element
   covered a repaint elsewhere, a translated element inside a clipping
