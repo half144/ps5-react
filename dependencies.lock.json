@@ -12,7 +12,8 @@
       "patches/embeddedReact-scroll-copy.patch",
       "patches/embeddedReact-damage-split.patch",
       "patches/embeddedReact-scroll-copy-paint-free.patch",
-      "patches/embeddedReact-software-avx2.patch"
+      "patches/embeddedReact-software-avx2.patch",
+      "patches/zz-diag-motion.patch"
     ]
   },
   "platform": {

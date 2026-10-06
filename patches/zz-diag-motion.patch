@@ -1,0 +1,25 @@
+--- a/engine/scene/compositor.c	2026-10-06 09:46:35
++++ b/engine/scene/compositor.c	2026-10-06 09:46:35
+@@ -5168,6 +5168,7 @@
+  * @param[in,out] dmg                      The commit's damage set.
+  * @param[in]     rb_x0,rb_y0,rb_x1,rb_y1  Root bounds the damage and the reported rects are clamped to.
+  */
++void (*er_motion_trace)(int tag, int fx, int fy, int tx, int ty, int copied) = 0;
+ static void resolve_scroll_moves(bool tracking, ERDamageSet* dmg, int rb_x0, int rb_y0, int rb_x1, int rb_y1)
+ {
+     for (uint8_t i = 0U; i < s_scroll_pending_count; i++)
+@@ -5175,8 +5176,13 @@
+         ERNode* sv = er_get_node(s_scroll_pending[i]);
+         if (!sv || !sv->scroll_pending)
+             continue; /* destroyed (and possibly reused) since the offset changed */
+-        if (tracking && !scroll_by_copy(sv, dmg, rb_x0, rb_y0, rb_x1, rb_y1))
++        const int diag_from = sv->scroll_painted_y, diag_fromx = sv->scroll_painted_x;
++        const bool diag_copied = tracking && scroll_by_copy(sv, dmg, rb_x0, rb_y0, rb_x1, rb_y1);
++        if (tracking && !diag_copied)
+             er_mark_dirty_upward(sv);
++        if (er_motion_trace)
++            er_motion_trace((int)sv->tag, diag_fromx, diag_from, (int)sv->scroll_offset_x, (int)sv->scroll_offset_y,
++                            diag_copied);
+         sv->scroll_pending = false;
+         sv->scroll_painted_x = (int16_t)sv->scroll_offset_x;
+         sv->scroll_painted_y = (int16_t)sv->scroll_offset_y;

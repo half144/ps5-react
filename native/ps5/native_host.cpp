@@ -4,6 +4,7 @@
 // Independent React proof: PS5 lifecycle/display/input, software UI and GL texture.
 
 #include "app_config.hpp"
+#include <GL/glcorearb.h>
 #include "async_log.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/pad.hpp"
@@ -41,6 +42,42 @@ extern const unsigned long proof_bundle_length;
 namespace {
 constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
 constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT) * 1000000;
+
+// DIAG motion: per-frame scroll moves and swap timing.
+extern "C" void (*er_motion_trace)(int tag, int fx, int fy, int tx, int ty, int copied);
+char motion_events[256]; int motion_len = 0;
+void motion_trace(int tag, int fx, int fy, int tx, int ty, int copied) {
+  if (motion_len < 220)
+    motion_len += std::snprintf(motion_events + motion_len, sizeof motion_events - motion_len, " %d:%d,%d%s", tag,
+                                tx - fx, ty - fy, copied ? "" : "!");
+}
+
+// DIAG: "shot" script steps save the presented frame, halved, as /app0/dev/shotN.bmp.
+void save_shot(int number) {
+  static unsigned char rgba[1920 * 1080 * 4];
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadPixels(0, 0, 1920, 1080, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+  char path[64];
+  std::snprintf(path, sizeof path, "/app0/dev/shot%d.bmp", number);
+  FILE* file = std::fopen(path, "wb");
+  if (!file) { async_log::write("[PS5-REACT] shot: cannot open %s", path); return; }
+  const int w = 960, h = 540, row = w * 3, size = 54 + row * h;
+  unsigned char header[54] = {'B', 'M'};
+  auto put32 = [&](int at, int v) { for (int i = 0; i < 4; ++i) header[at + i] = (v >> (8 * i)) & 255; };
+  put32(2, size); put32(10, 54); put32(14, 40); put32(18, w); put32(22, h);
+  header[26] = 1; header[28] = 24;
+  std::fwrite(header, 1, 54, file);
+  static unsigned char line[960 * 3];
+  for (int y = 0; y < h; ++y) {
+    const unsigned char* src = rgba + (y * 2) * 1920 * 4;
+    for (int x = 0; x < w; ++x) {
+      line[x * 3] = src[x * 8 + 2]; line[x * 3 + 1] = src[x * 8 + 1]; line[x * 3 + 2] = src[x * 8];
+    }
+    std::fwrite(line, 1, row, file);
+  }
+  std::fclose(file);
+  async_log::write("[PS5-REACT] shot: saved %s", path);
+}
 
 void react_log(const char* line) { async_log::write("[REACT] %s", line); }
 
@@ -213,6 +250,7 @@ bool run_proof() {
     std::uint64_t frames = 0;
     InputScript script;
     load_input_script(script);
+    int shot_pending = 0, shot_count = 0;
     LiveCommands commands;
     commands.start();
     // A test deploy may lower the slow-frame threshold (milliseconds) with dev/slow-frame-ms.txt.
@@ -224,6 +262,8 @@ bool run_proof() {
     }
     tsc_per_us = std::max<std::uint64_t>(sceKernelGetTscFrequency() / 1000000, 1);
     er_perf_set_clock(perf_clock);
+    er_motion_trace = motion_trace;
+    std::int64_t last_swap = 0;
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
@@ -240,7 +280,8 @@ bool run_proof() {
       if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
         async_log::write("[PS5-REACT] script: %s", action);
         if (!std::strcmp(action, "quit")) break;
-        ok = dispatch(action);
+        if (!std::strcmp(action, "shot")) shot_pending = ++shot_count;
+        else ok = dispatch(action);
       }
       if (!ok) break;
       stats.lap(FrameStats::input, hui::sys::monotonic_us());
@@ -263,9 +304,18 @@ bool run_proof() {
                           display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       damage_tracker_clear();
+      if (shot_pending) { save_shot(shot_pending); shot_pending = 0; }
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
+      const std::int64_t before_swap = hui::sys::monotonic_us();
       ok = ok && display.swap();
-      stats.lap(FrameStats::swap, hui::sys::monotonic_us());
+      const std::int64_t after_swap = hui::sys::monotonic_us();
+      stats.lap(FrameStats::swap, after_swap);
+      if (motion_len)
+        async_log::write("[PS5-REACT] M t=%lld start=%lld present=%lld swapgap=%lld mv%s", (long long)(after_swap % 100000000),
+                         (long long)(before_swap - now), (long long)(after_swap - before_swap),
+                         (long long)(after_swap - last_swap), motion_events);
+      motion_len = 0;
+      last_swap = after_swap;
       if (!ok) break;
       if (!first_present) {
         first_present = hui::sys::monotonic_us();

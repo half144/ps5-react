@@ -9,7 +9,7 @@
 #include <string>
 
 namespace {
-constexpr const char* kActions[] = {"up", "down", "left", "right", "confirm", "back", "quit"};
+constexpr const char* kActions[] = {"up", "down", "left", "right", "confirm", "back", "quit", "shot"};
 constexpr std::uint32_t kRepeatMs = 110; // The desktop host's held-key repeat interval.
 } // namespace
 
