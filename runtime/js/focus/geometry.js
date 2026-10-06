@@ -147,6 +147,17 @@ export function anchorOffset(offset, start, size, anchor, viewport, max, margin)
 }
 
 /**
+ * The speed cap for a scroll `distance` from its target: `maxSpeed`, raised once the target is more
+ * than a third of the viewport away by a quarter of the excess, so a held key that moves focus faster
+ * than the cap does not leave the screen ever further behind (rows a VirtualList has not mounted).
+ * @param {number} distance px to the target @param {number} viewport px @param {number} maxSpeed
+ */
+export function catchUpSpeed(distance, viewport, maxSpeed) {
+  const excess = Math.abs(distance) - viewport / 3;
+  return excess > 0 ? Math.max(maxSpeed, Math.round(excess / 4)) : maxSpeed;
+}
+
+/**
  * One frame of a scroll toward `target`, in whole pixels: the speed rises by up to `accel` px per frame,
  * cruises at `maxSpeed`, and falls by `brake` px per frame to stop exactly on the target, with no slow
  * tail. At cruise every frame moves the same distance, and a new target keeps the current speed, so a
