@@ -3,74 +3,113 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // Synthesizes the framework's interface sounds as 16-bit 48 kHz mono WAVs:
 //   node tools/ui_sounds.mjs <directory>
-// Everything is generated here (sine partials, a seeded noise burst), so the files carry no
-// third-party material. Each entry is [seconds, peak dBFS, render]; peaks stay at -12 dBFS or below
-// so the sounds sit under whatever else plays, and the focus tick, heard most, is the quietest.
+// Everything is generated here (FM and additive voices, filtered seeded noise), so the files carry
+// no third-party material. Each sound is [seconds, peak dBFS, render]: the focus tick, heard most,
+// sits near -22 dBFS and the rest near -14, under whatever else plays.
 import {mkdirSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 
 const RATE = 48000;
+const TAU = 2 * Math.PI;
 
-/** A struck tone: partials [ratio, gain], an attack and an exponential decay; pitch glides by `glide`. */
-function note(out, {at = 0, hz, partials = [[1, 1]], attack = 0.002, decay, gain = 1, glide = 1}) {
-  const start = Math.round(at * RATE);
-  let phase = 0;
-  for (let i = start; i < out.length; ++i) {
-    const t = (i - start) / RATE;
-    const envelope = Math.min(1, t / attack) * Math.exp(-t / decay);
-    if (envelope < 1e-4 && t > attack) break;
-    phase += hz * (1 + (glide - 1) * Math.min(1, t / (decay * 3))) / RATE;
-    let sample = 0;
-    for (const [ratio, level] of partials) sample += Math.sin(2 * Math.PI * phase * ratio) * level;
-    out[i] += sample * envelope * gain;
+/** RBJ biquad, run in place; `frequency` may be a function of time for sweeps. */
+function biquad(samples, type, frequency, q = 0.707) {
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < samples.length; ++i) {
+    const f = typeof frequency === 'function' ? frequency(i / RATE) : frequency;
+    const w = TAU * f / RATE, cos = Math.cos(w), alpha = Math.sin(w) / (2 * q);
+    const [b0, b1, b2] = type === 'lowpass' ? [(1 - cos) / 2, 1 - cos, (1 - cos) / 2]
+      : type === 'highpass' ? [(1 + cos) / 2, -(1 + cos), (1 + cos) / 2]
+      : [alpha, 0, -alpha]; // band-pass, 0 dB at the centre
+    const a0 = 1 + alpha, a1 = -2 * cos, a2 = 1 - alpha;
+    const x = samples[i];
+    const y = (b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+    x2 = x1; x1 = x; y2 = y1; y1 = y;
+    samples[i] = y;
   }
+  return samples;
 }
 
-/** Band-limited noise (one-pole high- then low-pass) under a short envelope, for the page swish. */
-function swish(out, {decay, low, high, gain}) {
-  let seed = 0x2545f491, lp = 0, hp = 0, previous = 0;
-  const a = 1 - Math.exp(-2 * Math.PI * high / RATE);
-  const b = Math.exp(-2 * Math.PI * low / RATE);
-  for (let i = 0; i < out.length; ++i) {
+/** Seeded white noise under an attack and an exponential decay, starting at `at` seconds. */
+function noise(length, {at = 0, attack = 0.0005, decay, seed = 0x2545f491}) {
+  const out = new Float64Array(length);
+  for (let i = Math.round(at * RATE); i < length; ++i) {
     seed = (seed * 1664525 + 1013904223) >>> 0;
-    const white = seed / 2 ** 31 - 1;
-    lp += a * (white - lp);
-    hp = b * (hp + lp - previous);
-    previous = lp;
-    const t = i / RATE;
-    out[i] += hp * Math.min(1, t / 0.012) * Math.exp(-t / decay) * gain;
+    const t = i / RATE - at;
+    out[i] = (seed / 2 ** 31 - 1) * Math.min(1, t / attack) * Math.exp(-t / decay);
   }
+  return out;
 }
 
-const bell = [[1, 1], [2, 0.28], [3, 0.08]];
+/**
+ * A struck voice: additive partials [ratio, gain] (higher partials die faster), optionally
+ * phase-modulated by a sine whose index decays (a bright strike that settles into a round tone),
+ * and a pitch that settles from `bend` times the note.
+ */
+function voice(length, {at = 0, hz, partials = [[1, 1]], fm = null, attack = 0.002, decay, bend = 1, gain = 1}) {
+  const out = new Float64Array(length);
+  const phases = partials.map(() => 0);
+  let modPhase = 0;
+  for (let i = Math.round(at * RATE); i < length; ++i) {
+    const t = i / RATE - at;
+    const pitch = hz * (1 + (bend - 1) * Math.exp(-t / 0.012));
+    modPhase += pitch * (fm?.ratio ?? 0) / RATE;
+    const modulation = fm ? fm.index * Math.exp(-t / fm.decay) * Math.sin(TAU * modPhase) : 0;
+    const shape = 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, t / attack));
+    let sample = 0;
+    partials.forEach(([ratio, level], p) => {
+      phases[p] += pitch * ratio / RATE;
+      sample += Math.sin(TAU * phases[p] + modulation) * level * Math.exp(-t * (ratio - 1) / (decay * 4));
+    });
+    out[i] = sample * shape * Math.exp(-t / decay) * gain;
+  }
+  return out;
+}
+
+const mix = (...layers) => layers[0].map((_, i) => layers.reduce((sum, layer) => sum + layer[i], 0));
+const scale = (samples, gain) => samples.map(sample => sample * gain);
+
+const MALLET = [[1, 1], [3.93, 0.18]];
 
 const SOUNDS = {
-  // The highlight moved: short and dry, so it can tick on every held-key repeat.
-  focus: [0.045, -18, out => note(out, {hz: 1750, partials: [[1, 1], [2.01, 0.2]], attack: 0.001, decay: 0.009, glide: 0.88})],
-  // Cross: a rising fifth.
-  confirm: [0.24, -12, out => {
-    note(out, {hz: 880, partials: bell, decay: 0.035, gain: 0.8});
-    note(out, {at: 0.055, hz: 1318.5, partials: bell, decay: 0.05});
-  }],
-  // Circle: the same pair, falling and softer.
-  back: [0.22, -14, out => {
-    note(out, {hz: 1174.7, partials: bell, decay: 0.03, gain: 0.7});
-    note(out, {at: 0.05, hz: 784, partials: bell, decay: 0.045, gain: 0.8});
-  }],
-  // No target in that direction, or the element is disabled: a low, muted knock.
-  error: [0.14, -14, out => {
-    note(out, {hz: 196, partials: [[1, 1], [2.7, 0.25]], attack: 0.003, decay: 0.03, glide: 0.8});
-    note(out, {at: 0.045, hz: 165, partials: [[1, 1], [2.7, 0.2]], attack: 0.003, decay: 0.03, gain: 0.8, glide: 0.8});
-  }],
-  // L1/R1 changed the page or tab: an airy swish under a light tick.
-  page: [0.12, -16, out => {
-    swish(out, {decay: 0.03, low: 1800, high: 7000, gain: 1.6});
-    note(out, {at: 0.012, hz: 2093, partials: [[1, 1]], attack: 0.001, decay: 0.014, gain: 0.5});
-  }],
-  // A toast or notification: three rising bell notes.
-  notify: [0.6, -12, out => {
-    [1046.5, 1318.5, 1568].forEach((hz, i) => note(out, {at: i * 0.07, hz, partials: bell, decay: 0.12, gain: 0.8}));
-  }],
+  // The highlight moved: a filtered click, mostly air, gone in about 20 ms.
+  focus: [0.028, -22, n => mix(
+    biquad(biquad(noise(n, {attack: 0.0003, decay: 0.0025}), 'bandpass', 4200, 1.8), 'highpass', 1800),
+    voice(n, {hz: 2600, attack: 0.0005, decay: 0.005, gain: 0.35}),
+  )],
+  // Cross: a soft mallet dyad (D5 and A5, strummed) with a warm FM strike, a marimba-like overtone
+  // that dies first (so it reads as a struck object, not a beep) and a low body.
+  confirm: [0.26, -14, n => biquad(mix(
+    voice(n, {hz: 587.33, partials: MALLET, fm: {ratio: 1, index: 1.6, decay: 0.025}, attack: 0.003, decay: 0.06,
+      bend: 1.02}),
+    voice(n, {at: 0.018, hz: 880, partials: MALLET, fm: {ratio: 1, index: 1.2, decay: 0.02}, attack: 0.003,
+      decay: 0.05, gain: 0.55}),
+    voice(n, {hz: 293.66, attack: 0.004, decay: 0.05, gain: 0.25}),
+    scale(biquad(noise(n, {decay: 0.0015}), 'bandpass', 2500, 1), 0.15),
+  ), 'lowpass', 4500)],
+  // Circle: lower, shorter and falling (A4 then E4).
+  back: [0.17, -15, n => biquad(mix(
+    voice(n, {hz: 440, partials: MALLET, fm: {ratio: 1, index: 1.2, decay: 0.02}, attack: 0.003, decay: 0.035,
+      gain: 0.7}),
+    voice(n, {at: 0.02, hz: 329.63, partials: MALLET, fm: {ratio: 1, index: 1.2, decay: 0.02}, attack: 0.003,
+      decay: 0.04}),
+    scale(biquad(noise(n, {decay: 0.0012}), 'bandpass', 1800, 1), 0.1),
+  ), 'lowpass', 3000)],
+  // Refused (an edge, a disabled element): two muffled taps, felt more than heard.
+  error: [0.15, -16, n => biquad(mix(
+    ...[0, 0.055].map((at, hit) => voice(n, {at, hz: 155 - hit * 12, partials: [[1, 1], [2, 0.3]],
+      attack: 0.0015, decay: 0.022, bend: 1.3, gain: 1 - hit * 0.25})),
+    ...[0, 0.055].map(at => scale(biquad(noise(n, {at, decay: 0.008}), 'lowpass', 500), 0.3)),
+  ), 'lowpass', 900)],
+  // L1/R1 changed the page: a light whoosh, band-passed noise sweeping upward.
+  page: [0.17, -17, n => biquad(biquad(noise(n, {attack: 0.045, decay: 0.04}), 'bandpass',
+    t => 700 * 5 ** Math.min(1, t / 0.14), 0.9), 'highpass', 300)],
+  // A toast or notification: an elegant two-note bell (G5 then D6).
+  notify: [1.0, -14, n => biquad(mix(
+    ...[[783.99, 0, 1], [1174.66, 0.11, 0.85]].map(([hz, at, gain]) => voice(n, {at, hz, gain,
+      partials: [[1, 1], [2, 0.22], [3.01, 0.07]], fm: {ratio: 2, index: 0.6, decay: 0.06},
+      attack: 0.002, decay: 0.24})),
+  ), 'lowpass', 7000)],
 };
 
 function wav(samples) {
@@ -99,11 +138,10 @@ if (!directory) {
 }
 mkdirSync(directory, {recursive: true});
 for (const [name, [seconds, peakDb, render]] of Object.entries(SOUNDS)) {
-  const samples = new Float64Array(Math.round(seconds * RATE));
-  render(samples);
-  const peak = samples.reduce((max, sample) => Math.max(max, Math.abs(sample)), 0);
-  const fade = Math.round(0.004 * RATE); // no click if a decay is cut by the length
+  const samples = biquad(render(Math.round(seconds * RATE)), 'highpass', 40); // no DC or rumble
+  const fade = Math.round(0.004 * RATE); // no click where the length cuts a decay
   for (let i = 0; i < fade; ++i) samples[samples.length - 1 - i] *= i / fade;
+  const peak = samples.reduce((max, sample) => Math.max(max, Math.abs(sample)), 0);
   const path = join(directory, `${name}.wav`);
   writeFileSync(path, wav(Array.from(samples, sample => sample * 10 ** (peakDb / 20) / peak)));
   console.log(`${resolve(path)} ${seconds * 1000} ms`);

@@ -240,7 +240,7 @@ useNavigationEvents(event => { if (event.type === 'move') Sound.play(tick); });
 `apps/starter/sounds.js` wires the framework's sound set (`focus`, `confirm`,
 `back`, `error`, `page`, `notify`) this way, and `npm run create` copies it.
 `node tools/ui_sounds.mjs <directory>` regenerates that set: every sound is
-synthesized from sine partials and seeded noise, so it carries no third-party
+synthesized (FM and additive voices, filtered seeded noise), so it carries no third-party
 audio.
 
 ## Linking
