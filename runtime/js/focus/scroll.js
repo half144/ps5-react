@@ -6,18 +6,20 @@
 // focus manager subtracts each enclosing frame's offset.
 import {createElement, forwardRef, useContext, useLayoutEffect, useState} from 'react';
 import {ScrollView as HostScrollView} from 'embedded-react';
-import {approach, revealOffset} from './geometry.js';
+import {onFrame} from '../frame.js';
+import {revealOffset, scrollStep} from './geometry.js';
 import {FrameContext} from './runtime.js';
 
 // 32 logical px of a 1280-wide layout, in screen px like the layout rectangles.
 const MARGIN = 32 / 1280;
-// The engine cannot animate a scroll offset, so JavaScript steps it once per frame. Each step closes a
-// share of the distance (95% within ~200 ms for a single move) and never more than 40 logical px per
-// 60 Hz frame: a held key keeps scrolling at that speed instead of restarting a fast ease each repeat,
-// which bounds the strip the engine has to rasterize per frame.
-const STEP_MS = 16;
-const TAU_MS = 65;
+// The engine cannot animate a scroll offset, so JavaScript steps it on every presented frame (the
+// host's frame callback, not a timer that drifts against the display), in whole pixels: up to 40
+// logical px per 60 Hz frame, reached in four frames, then braking to stop on the target. A held
+// key scrolls at that one steady speed, which also bounds the strip the engine rasterizes per frame.
 const MAX_LOGICAL_PX_PER_FRAME = 40;
+const ACCEL_LOGICAL_PX = 12;
+const BRAKE_LOGICAL_PX = 4;
+const FRAME_MS = 1000 / 60;
 
 function assignRef(ref, value) {
   if (typeof ref === 'function') ref(value);
@@ -28,6 +30,7 @@ function assignRef(ref, value) {
 function createFrame(parent) {
   const frame = {
     parent, x: 0, y: 0, props: {}, forwardedRef: null, handle: null, viewport: null, timer: null, target: null,
+    speed: [0, 0],
     /** @param {import('./geometry.js').Rect} rect pre-scroll, like `viewport` */
     reveal(rect) {
       const {viewport, handle} = frame;
@@ -41,33 +44,36 @@ function createFrame(parent) {
       frame.y = y;
       frame.animate(fromX, fromY, x, y);
     },
-    // A new target while scrolling only moves the target; the running steps carry on from where they are.
+    // A new target while scrolling only moves the target; the steps carry on at the current speed.
     animate(fromX, fromY, toX, toY) {
-      frame.target = [toX, toY];
+      frame.target = [Math.round(toX), Math.round(toY)];
       if (frame.timer !== null) return;
-      const maxPerMs = MAX_LOGICAL_PX_PER_FRAME * screen.width / 1280 / (1000 / 60);
-      let x = fromX, y = fromY, last = Date.now();
-      frame.timer = setInterval(() => {
-        const now = Date.now();
-        // A late tick advances one frame's worth, not the whole gap: catching up would expose a tall strip,
-        // make that frame slower still, and snowball.
-        const dt = Math.min(STEP_MS * 1.25, Math.max(1, now - last));
-        last = now;
-        const wantX = approach(x, frame.target[0], dt, TAU_MS, maxPerMs);
-        const wantY = approach(y, frame.target[1], dt, TAU_MS, maxPerMs);
-        [x, y] = NativeUI.scrollTo(frame.handle, wantX, wantY);
+      const scale = screen.width / 1280;
+      const [maxSpeed, accel, brake] = [MAX_LOGICAL_PX_PER_FRAME, ACCEL_LOGICAL_PX, BRAKE_LOGICAL_PX]
+        .map(logical => Math.max(1, Math.round(logical * scale)));
+      let x = Math.round(fromX), y = Math.round(fromY);
+      frame.speed = [0, 0];
+      frame.timer = onFrame(elapsedMs => {
+        // A late frame advances the vblanks it covered, at most two, so a hitch is not followed by a jump.
+        for (let n = Math.min(2, Math.max(1, Math.round(elapsedMs / FRAME_MS))); n > 0; n--) {
+          let speedX, speedY;
+          [x, speedX] = scrollStep(x, frame.speed[0], frame.target[0], maxSpeed, accel, brake);
+          [y, speedY] = scrollStep(y, frame.speed[1], frame.target[1], maxSpeed, accel, brake);
+          frame.speed = [speedX, speedY];
+        }
+        const [atX, atY] = NativeUI.scrollTo(frame.handle, x, y);
         // The engine stores offsets as floats. Far from the request means clamped by a content size that
         // changed since the target was chosen: settle where it stopped.
-        if (Math.abs(x - wantX) > 0.5) frame.target[0] = x;
-        if (Math.abs(y - wantY) > 0.5) frame.target[1] = y;
-        if (Math.abs(x - frame.target[0]) > 0.5 || Math.abs(y - frame.target[1]) > 0.5) return;
+        if (Math.abs(atX - x) > 0.5) frame.target[0] = x = Math.round(atX);
+        if (Math.abs(atY - y) > 0.5) frame.target[1] = y = Math.round(atY);
+        if (x !== frame.target[0] || y !== frame.target[1]) return;
         frame.stop();
         frame.x = x;
         frame.y = y;
-      }, STEP_MS);
+      });
     },
     stop() {
-      clearInterval(frame.timer);
+      frame.timer?.();
       frame.timer = null;
     },
     onLayout(event) {

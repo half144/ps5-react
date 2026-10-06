@@ -246,7 +246,15 @@ bool run_proof() {
       stats.lap(FrameStats::input, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_JS);
       er_runtime_pump();
+      // The display shows a new frame every vblank, so motion advances by whole vblanks, not by the
+      // loop's jittery wall-clock interval.
+      const std::int64_t vblanks = std::max<std::int64_t>(1, (now - previous + 8333) / 16667);
+      ok = ps5_react_frame(er_runtime_context(), vblanks * 1000.0 / 60.0);
       er_perf_phase_end(ER_PERF_PHASE_JS);
+      if (!ok) {
+        async_log::write("[PS5-REACT] frame callback exception");
+        break;
+      }
       er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
       stats.lap(FrameStats::update, hui::sys::monotonic_us());

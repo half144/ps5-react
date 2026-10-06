@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Focus scrolling steps once per presented frame, through a new host frame
+  callback (`globalThis.__ps5ReactFrame`), in whole pixels: it speeds up over
+  four frames, cruises at 40 logical px per frame and brakes to the target.
+  It used to step from a 16 ms timer with an exponential ease: on the PS5,
+  frames with no timer tick presented no motion (about 45 per 330 scrolling
+  frames in five Overdrive runs) and every scroll ended in a crawl of 1-3 px
+  steps (about 110 frames). Now there are none of either, and a held key
+  scrolls at a constant 60 px per frame.
 - The PS5 frame log's engine split (`ERUI_PERF_STATS`) reads the time-stamp
   counter (`sceKernelReadTsc`, about 11 ns) instead of `clock_gettime` (about
   0.88 µs). The engine reads that clock around every blit and bridge call, so a

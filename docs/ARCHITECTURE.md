@@ -36,7 +36,8 @@ literal style objects; class names and CSS never reach QuickJS or the engine.
 See [TAILWIND.md](TAILWIND.md).
 
 Hosts send directional actions (`up`, `down`, `left`, `right`, `confirm`,
-`back`) through `globalThis.__ps5ReactDispatch`. `runtime/js/focus/` moves focus
+`back`) through `globalThis.__ps5ReactDispatch`, and call `globalThis.__ps5ReactFrame`
+once per frame for per-frame motion. `runtime/js/focus/` moves focus
 between focusable elements from their laid-out rectangles, in JavaScript on the
 render thread; hosts know nothing about focus. See [NAVIGATION.md](NAVIGATION.md).
 
