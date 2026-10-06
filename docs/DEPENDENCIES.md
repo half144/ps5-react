@@ -70,6 +70,9 @@ lines it wraps into, capped by `numberOfLines`, including in flexed rows.
 proposed upstream) clips an `Image` to its `borderRadius`.
 `embeddedReact-bold-wrap.patch` (Apache-2.0 text, layout and test files; not
 yet proposed upstream) breaks bold text at the width it is drawn with.
+`embeddedReact-paint-free-move.patch` (Apache-2.0 engine and test files; not
+yet proposed upstream) stops a container that paints nothing from damaging its
+whole box when it only moves or resizes.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
