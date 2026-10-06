@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // <Image>: bundled assets by name, and http(s) URLs loaded natively at the size they are drawn.
-import {createElement, forwardRef, useLayoutEffect, useRef, useState} from 'react';
+import {createElement, forwardRef, useLayoutEffect, useReducer, useRef} from 'react';
 import {acquireImage} from '../native.js';
-import {createFocusable, resolveStyle} from './focusable.js';
+import {createFocusable, isFocusable, resolveStyle} from './focusable.js';
 
 const HostImage = createFocusable('Image');
 const FITS = {cover: 0, contain: 1, stretch: 2, center: 3, repeat: 3};
@@ -18,7 +18,8 @@ function remoteUri(source) {
 /** Width and height when the style fixes both in pixels, so loading need not wait for layout. */
 function fixedBox(style) {
   let width, height;
-  for (const part of [resolveStyle(style, false, false)].flat(Infinity)) {
+  const resolved = resolveStyle(style, false, false);
+  for (const part of Array.isArray(resolved) ? resolved.flat(Infinity) : [resolved]) {
     if (!part) continue;
     if (part.width !== undefined) width = part.width;
     if (part.height !== undefined) height = part.height;
@@ -27,43 +28,64 @@ function fixedBox(style) {
     ? {width: Math.round(width), height: Math.round(height)} : null;
 }
 
-function RemoteImage({uri, resizeMode = 'cover', onLoad, onError, onLayout, forwardedRef, ...props}) {
-  const fixed = fixedBox(props.style);
-  const [laidOut, setLaidOut] = useState(null);
-  const [name, setName] = useState('');
-  const box = fixed ?? laidOut;
-  const fit = FITS[resizeMode] ?? 0;
-  const events = useRef(null);
-  events.current = {onLoad, onError};
+const OWN_PROPS = ['source', 'resizeMode', 'onLoad', 'onError', 'onLayout'];
+
+// A store page or grid draws dozens of remote images, so each keeps one object across renders (its
+// laid-out box, the engine image name, and stable layout and load callbacks), one hook to re-render
+// with and one effect, in the Image component itself; the host element is rendered directly unless
+// focus needs the focusable wrapper. A bundled image runs the same hooks and renders the asset.
+function useImageElement(props, uri, forwardedRef) {
+  const [, rerender] = useReducer(count => count + 1, 0);
+  const self = useRef(null);
+  if (!self.current) {
+    const image = {
+      props, laidOut: null, name: '',
+      layout(event) {
+        const {width, height} = event.layout;
+        if (width >= 1 && height >= 1 && (image.laidOut?.width !== width || image.laidOut?.height !== height)) {
+          image.laidOut = {width, height};
+          rerender();
+        }
+        image.props.onLayout?.(event);
+      },
+      loaded(result) {
+        if (result.name !== image.name) {
+          image.name = result.name;
+          rerender();
+        }
+        const {onLoad, onError, source} = image.props;
+        if (result.state === 'ready') {
+          onLoad?.({nativeEvent: {source: {uri: remoteUri(source), width: result.width, height: result.height}}});
+        }
+        if (result.state === 'failed') {
+          if (onError) onError({nativeEvent: {error: result.error}});
+          else console.warn(result.error);
+        }
+      },
+    };
+    self.current = image;
+  }
+  const image = self.current;
+  image.props = props;
+  const box = uri ? fixedBox(props.style) ?? image.laidOut : null;
+  const fit = FITS[props.resizeMode ?? 'cover'] ?? 0;
 
   useLayoutEffect(() => {
-    if (!box) return undefined;
-    let release = null;
-    const handle = result => {
-      setName(result.name);
-      const {onLoad: loaded, onError: failed} = events.current;
-      if (result.state === 'ready') loaded?.({nativeEvent: {source: {uri, width: result.width, height: result.height}}});
-      if (result.state === 'failed') {
-        if (failed) failed({nativeEvent: {error: result.error}});
-        else console.warn(result.error);
-      }
-    };
+    if (!uri || !box) return undefined;
     try {
-      release = acquireImage(uri, box.width, box.height, fit, false, handle);
+      return acquireImage(uri, box.width, box.height, fit, false, image.loaded);
     } catch (error) {
-      handle({state: 'failed', name: '', error: error.message});
+      image.loaded({state: 'failed', name: '', error: error.message});
+      return undefined;
     }
-    return () => release?.();
   }, [uri, box?.width, box?.height, fit]);
 
-  const layout = event => {
-    const {width, height} = event.layout;
-    if (width >= 1 && height >= 1) {
-      setLaidOut(previous => (previous?.width === width && previous?.height === height ? previous : {width, height}));
-    }
-    onLayout?.(event);
-  };
-  return createElement(HostImage, {...props, ref: forwardedRef, resizeMode, imageName: name, onLayout: layout});
+  if (!uri) return createElement(HostImage, {...props, ref: forwardedRef});
+  const rest = {ref: forwardedRef, resizeMode: props.resizeMode ?? 'cover', imageName: image.name,
+    onLayout: image.layout};
+  for (const key in props) if (!OWN_PROPS.includes(key)) rest[key] = props[key];
+  const plain = !isFocusable(rest) && !('focusable' in rest) && !rest.scrollAnchor && typeof rest.style !== 'function';
+  return createElement(plain ? 'Image' : HostImage, rest);
 }
 
 /**
@@ -71,12 +93,7 @@ function RemoteImage({uri, resizeMode = 'cover', onLoad, onError, onLayout, forw
  * URL, which is fetched and decoded off the render thread at the size the image is drawn; the
  * element draws only its own style (such as backgroundColor) until the image arrives.
  */
-export const Image = forwardRef((props, ref) => {
-  const uri = remoteUri(props.source);
-  if (!uri) return createElement(HostImage, {...props, ref});
-  const {source, ...rest} = props;
-  return createElement(RemoteImage, {...rest, uri, forwardedRef: ref});
-});
+export const Image = forwardRef((props, ref) => useImageElement(props, remoteUri(props.source), ref));
 Image.displayName = 'Image';
 
 /**
