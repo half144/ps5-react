@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {acquireImage, Downloads, Http, Power} from './native.js';
+import {acquireImage, Downloads, Http, Power, Sound} from './native.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
   let tick;
@@ -94,6 +94,24 @@ test('Power.keepAwake passes a boolean to the host', () => {
     Power.keepAwake(true);
     Power.keepAwake(0);
     assert.deepEqual(calls, [true, false]);
+  } finally {
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
+test('Sound passes the name, volume and pan to the host and returns whether it started', () => {
+  const calls = [];
+  globalThis.__ps5ReactNative = {sound: {
+    play: (name, volume, pan) => { calls.push(['play', name, volume, pan]); return name === 'tick'; },
+    setVolume: volume => calls.push(['setVolume', volume]),
+  }};
+  try {
+    assert.equal(Sound.play('tick'), true);
+    assert.equal(Sound.play('page', {pan: -0.4}), false);
+    Sound.play('tick', {volume: 0.5});
+    Sound.setVolume(0);
+    assert.deepEqual(calls, [['play', 'tick', 1, 0], ['play', 'page', 1, -0.4], ['play', 'tick', 0.5, 0],
+      ['setVolume', 0]]);
   } finally {
     delete globalThis.__ps5ReactNative;
   }

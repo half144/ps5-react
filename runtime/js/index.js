@@ -12,7 +12,7 @@ export {DownloadFormats} from './download-formats.js';
 export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useGamepad, Linking, Power, BackHandler,
   Http, Downloads, Sound} from './native.js';
 
-// ABI v1 compatibility: each direction is followed by its legacy action.
+// Input protocol v1 compatibility: each direction is followed by its legacy action.
 const legacyActions = {up: 'previous', left: 'previous', down: 'next', right: 'next'};
 
 /**

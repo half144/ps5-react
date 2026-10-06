@@ -70,7 +70,7 @@ other live-device operations require explicit task authorization.
 
 ## Native API contract
 
-`native/shared/host_api.hpp` defines `globalThis.__ps5ReactNative` (ABI v1);
+`native/shared/host_api.hpp` defines `globalThis.__ps5ReactNative` (its header names the ABI version);
 `runtime/js/native.js` is its only consumer and `docs/NATIVE-API.md` its public
 reference. Change all three together, implement every function on both hosts,
 keep calls synchronous, cheap, and on the render thread, and throw errors that
