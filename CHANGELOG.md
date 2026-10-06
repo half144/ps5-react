@@ -50,7 +50,7 @@
   docs/NAVIGATION.md.
 
 - Deliver L1, R1, L2, R2, Triangle and Square as the `l1`, `r1`, `l2`, `r2`,
-  `triangle` and `square` actions (host input ABI v3): to `useController`, to
+  `triangle` and `square` actions (host input protocol v3, versioned apart from the native API ABI): to `useController`, to
   the new `FocusScope.onAction` handler (innermost first, until one returns
   `true`), and to input scripts. Desktop: Q, E, Z, C, T, F and the
   controller's shoulders, triggers, Y and X. See docs/NAVIGATION.md.

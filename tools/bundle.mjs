@@ -38,6 +38,7 @@ const {resolveFontJobs} = await import(pathToFileURL(resolve(here, 'assets/font-
 const {analyzeFontSizes} = await import(pathToFileURL(resolve(here, 'assets/font-sizes.mjs')).href);
 const {registerSvgVectorLoader} = await import(pathToFileURL(resolve(here, 'assets/svg-loader.mjs')).href);
 const {tailwindEsbuildPlugin} = await import('./tailwind/esbuild-plugin.mjs');
+const {readWav} = await import('./wav.mjs');
 
 // Adapted for per-app outputs by PS5 React; asset baking remains upstream.
 const repoRoot = resolve(here, '../../..');
@@ -72,33 +73,16 @@ const sounds = new Map(); // name -> {rate, channels, samples} (added by PS5 Rea
 
 // 16-bit PCM WAV, mono or stereo: decoded here so the hosts only copy samples (added by PS5 React).
 function decodeWav(path) {
-  const file = readFileSync(path);
-  if (file.toString('ascii', 0, 4) !== 'RIFF' || file.toString('ascii', 8, 12) !== 'WAVE') {
-    throw new Error('not a RIFF/WAVE file');
+  const {rate, channels, bits, samples} = readWav(path);
+  if (bits !== 16 || channels > 2 || rate < 8000 || rate > 96000) {
+    throw new Error(`expected 16-bit PCM, mono or stereo, 8-96 kHz; got ${bits}-bit, ${channels} channels, ${rate} Hz`);
   }
-  let format = null;
-  for (let at = 12; at + 8 <= file.length; at += 8 + file.readUInt32LE(at + 4) + (file.readUInt32LE(at + 4) & 1)) {
-    const id = file.toString('ascii', at, at + 4);
-    const size = file.readUInt32LE(at + 4);
-    if (id === 'fmt ') {
-      format = {code: file.readUInt16LE(at + 8), channels: file.readUInt16LE(at + 10),
-        rate: file.readUInt32LE(at + 12), bits: file.readUInt16LE(at + 22)};
-    } else if (id === 'data' && format) {
-      const {code, channels, rate, bits} = format;
-      if ((code !== 1 && code !== 0xfffe) || bits !== 16 || channels < 1 || channels > 2 || rate < 8000 || rate > 96000) {
-        throw new Error(`expected 16-bit PCM, mono or stereo, 8-96 kHz; got format ${code}, ${bits}-bit, `
-          + `${channels} channels, ${rate} Hz`);
-      }
-      const data = file.subarray(at + 8, at + 8 + size);
-      const samples = Array.from({length: data.length >> 1}, (_, i) => data.readInt16LE(i * 2));
-      if (samples.length < channels * 2 || samples.length > 10 * rate * channels) {
-        throw new Error('expected between 2 frames and 10 seconds of audio');
-      }
-      return {rate, channels, samples};
-    }
+  if (samples.length < channels * 2 || samples.length > 10 * rate * channels) {
+    throw new Error('expected between 2 frames and 10 seconds of audio');
   }
-  throw new Error('no fmt and data chunks');
+  return {rate, channels, samples};
 }
+
 const assetPlugin = {
   name: 'embedded-react-assets',
   setup(build) {

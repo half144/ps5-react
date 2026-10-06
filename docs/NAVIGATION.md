@@ -60,16 +60,18 @@ AppRegistry.registerComponent('menu', () => Menu);
 `npm run create` scaffolds this menu; `apps/starter`, `apps/tailwind-gallery`,
 `apps/system-explorer`, and `apps/motion-lab` use the patterns below.
 
-## Host input (ABI v3)
+## Host input (input protocol v3)
 
+The input protocol is versioned on its own; it is not the native API's ABI
+version ([NATIVE-API.md](NATIVE-API.md#contract)).
 `globalThis.__ps5ReactDispatch(action)` receives `up`, `down`, `left`, `right`
 (the D-pad and the left stick, with the platform's hold-to-repeat), `confirm`,
-`back`, and, since ABI v3, `l1`, `r1`, `l2`, `r2`, `triangle`, and `square`
-(one action per press, no repeat). For ABI v1 compatibility the runtime also
+`back`, and, since input protocol v3, `l1`, `r1`, `l2`, `r2`, `triangle`, and `square`
+(one action per press, no repeat). For input protocol v1 compatibility the runtime also
 delivers `previous` (after `up`/`left`) and `next` (after `down`/`right`) to
 `useController` handlers only. Options/Escape still exit.
 
-The focus manager does not move on the ABI v3 buttons: they go to the enclosing
+The focus manager does not move on the input protocol v3 buttons: they go to the enclosing
 `FocusScope.onAction` handlers (tabs on L1/R1, a filter on Triangle) and to
 `useController`.
 

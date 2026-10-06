@@ -19,6 +19,7 @@ extern "C" {
 #include "software_backend.h"
 void er_register_assets(void);
 }
+#include "baked_sounds.h"
 #include "damage_tracker.hpp"
 #include "frame_stats.hpp"
 #include "gl_presenter.hpp"
@@ -448,11 +449,13 @@ bool storage_test() {
       try { invalid(); return false; }
       catch (error) { if (!error.message.includes("network.")) return false; }
     }
-    // The starter imports these WAVs; a second play while the first still sounds is skipped.
+    // With any sound baked, a second play while the first still sounds is skipped.
     const sound = globalThis.__ps5ReactNative.sound;
-    if (sound.play('focus', 0, 0) !== true || sound.play('focus', 0, 0) !== false) return false;
-    try { sound.play('missing', 1, 0); return false; }
-    catch (error) { if (!error.message.includes('sound.play missing')) return false; }
+    const baked = globalThis.__ps5ReactTestSound;
+    if (baked && (sound.play(baked, 0, 0) !== true || sound.play(baked, 0, 0) !== false)) return false;
+    // Baked names drop the extension, so no import is named this.
+    try { sound.play('not-baked.wav', 1, 0); return false; }
+    catch (error) { if (!error.message.includes('sound.play not-baked.wav')) return false; }
     const fs = globalThis.__ps5ReactNative.fs;
     const testName = `listing-test-${Date.now()}.txt`;
     const testPath = `/download0/${testName}`;
@@ -483,6 +486,11 @@ bool storage_test() {
     }
   })())JS";
   JSContext* ctx = er_runtime_context();
+  // The first sound the app baked, whatever it is named; none leaves only the unknown-name check.
+  JSValue global = JS_GetGlobalObject(ctx);
+  JS_SetPropertyStr(ctx, global, "__ps5ReactTestSound",
+                    ps5_react_sound_count ? JS_NewString(ctx, ps5_react_sounds[0].name) : JS_NULL);
+  JS_FreeValue(ctx, global);
   JSValue result = JS_Eval(ctx, script, sizeof script - 1, "storage-test.js", JS_EVAL_TYPE_GLOBAL);
   const bool ok = !JS_IsException(result) && JS_ToBool(ctx, result) == 1;
   if (JS_IsException(result)) {
