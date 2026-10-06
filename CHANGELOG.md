@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Make a remote `<Image>` lighter: one component with one state object, one
+  hook to re-render with and one effect, stable layout and load callbacks, and
+  the host element rendered directly unless the image is focusable. Mounting
+  and loading one takes about a quarter less JavaScript heap.
+
 - Collect JavaScript garbage in idle frames: hosts count the QuickJS heap and
   run its collector half a second after the last input once a third of the
   room before its threshold is garbage, so a collection (40–70 ms on the PS5)
