@@ -238,10 +238,11 @@ useNavigationEvents(event => { if (event.type === 'move') Sound.play(tick); });
   hook at the root gives every screen its sounds.
 
 `apps/starter/sounds.js` wires the framework's sound set (`focus`, `confirm`,
-`back`, `error`, `page`, `notify`) this way, and `npm run create` copies it.
-`node tools/ui_sounds.mjs <directory>` regenerates that set: every sound is
-synthesized (FM and additive voices, filtered seeded noise), so it carries no third-party
-audio.
+`back`, `error`, `page`, `notify`) this way, and `npm run create` copies it. The
+set is derived from Google's Material Design sound resources (CC BY 4.0): keep
+`licenses/material-sounds-NOTICE.txt` with an app that ships it. `node
+tools/ui_sounds.mjs <material wav directory> <output directory>` rebuilds it from
+the pack's WAV files.
 
 ## Linking
 

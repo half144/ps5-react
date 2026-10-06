@@ -9,8 +9,9 @@
   `Sound.setVolume` sets the master volume. Add `useNavigationEvents`, which
   reports each focus move, blocked direction, press, back and button action
   with whether something handled it; `FocusManager.move` and `press` now
-  return those outcomes. The starter and `npm run create` apps play a
-  synthesized PS5-style set (`tools/ui_sounds.mjs`, no third-party audio)
+  return those outcomes. The starter and `npm run create` apps play a set
+  derived from Google's Material Design sound resources (CC BY 4.0, prepared
+  by `tools/ui_sounds.mjs`; attribution in `licenses/material-sounds-NOTICE.txt`)
   through `sounds.js`. Not yet validated on hardware. See docs/NATIVE-API.md.
 
 - Entering a `ScrollView` from outside it with the D-pad reaches only elements

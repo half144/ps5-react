@@ -217,6 +217,7 @@ def main():
         "embedded-react-engine-LICENSE": er / "engine/LICENSE",
         "QuickJS-LICENSE": quickjs / "LICENSE",
         "Inter-LICENSE": hui / "assets/fonts/Inter-LICENSE.txt",
+        "material-sounds-NOTICE.txt": ROOT / "licenses/material-sounds-NOTICE.txt",
         "ps5-opengl-LICENSE": gl.parent / "LICENSE",
         "ps5-opengl-NOTICES.md": gl.parent / "THIRD_PARTY_NOTICES.md",
     }.items():
