@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add `Sound` (native ABI v4): import a 16-bit PCM WAV and the build bakes it
+- Add `Sound` (native ABI v5): import a 16-bit PCM WAV and the build bakes it
   into the app; `Sound.play(name, {volume, pan})` posts it to the
   ps5-homebrew-ui mixer, which renders on an audio thread (PS5: sceAudioOut;
   desktop: SDL), one voice per sound so a held D-pad does not stack ticks.
@@ -13,6 +13,17 @@
   derived from Google's Material Design sound resources (CC BY 4.0, prepared
   by `tools/ui_sounds.mjs`; attribution in `licenses/material-sounds-NOTICE.txt`)
   through `sounds.js`. Not yet validated on hardware. See docs/NATIVE-API.md.
+
+- Add `Power.keepAwake(enabled)` (native API ABI v4) to keep the console out
+  of rest mode during long downloads: the PS5 host ticks the system power
+  timer every 30 s while it is on, the desktop preview toggles the screen
+  saver. Not yet validated on hardware. See docs/NATIVE-API.md.
+
+- Fix a translated element leaving its children behind: a `y` or `x`
+  translate without scale or rotation moved only the element's own paint, so a
+  header slid past the top edge stayed frozen on screen as its items, and a
+  partial lift left a ghost strip. An engine patch moves the subtree and
+  repaints the area it leaves. Sliding a bar off screen no longer needs a fade.
 
 - Entering a `ScrollView` from outside it with the D-pad reaches only elements
   it shows at least in part: Right from the last header item no longer jumps

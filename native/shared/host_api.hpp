@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v4) between the hosts and `@ps5-react/core`.
+// Native API contract (ABI v5) between the hosts and `@ps5-react/core`.
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
 // ErRuntimeConfig.install_host_globals and implements the filesystem with POSIX
@@ -32,6 +32,8 @@
 //   pad.resetLightBar()
 //   pad.vibrate(strength, seconds) strength 0..1
 //   pad.state()                    {connected, leftX, leftY, rightX, rightY, l2, r2, buttons}
+//   power.keepAwake(enabled)       ABI v4; while true, the console does not enter rest mode
+//                                  for inactivity (the desktop display does not sleep)
 //   network.download(url, path, options) task ID; queues native binary file I/O
 //     options: expectedBytes, storageRoot, pieces[{url, offset, size, sha1}],
 //              sha256, connections, adaptive, rangeBytes, resume, recoverCompleted, headers
@@ -45,8 +47,8 @@
 //                                  'ready' | 'failed'; name is the engine image name when ready
 //   image.release(id)              drops a reference; cancels unfinished work without references
 //   image.poll()                   [{id, state, name, width, height, error}] finished since last poll
-//   sound.play(name, volume, pan)  boolean; posts an imported WAV to the mixer (volume 0..1, pan
-//                                  -1..1); false without audio or while that sound still plays
+//   sound.play(name, volume, pan)  ABI v5; boolean; posts an imported WAV to the mixer (volume
+//                                  0..1, pan -1..1); false without audio or while it still plays
 //   sound.setVolume(volume)        master gain 0..1 for every sound
 //   exit()                         asks the host to close after this frame
 // Failures throw a JS Error whose message names the call, the path, and strerror.
@@ -131,6 +133,8 @@ bool open_url(const char* url);
 void set_light_bar(std::uint8_t r, std::uint8_t g, std::uint8_t b);
 void reset_light_bar();
 void vibrate(float strength, float seconds);
+// While enabled, keeps the system from sleeping for inactivity; the app's last call wins.
+void keep_awake(bool enabled);
 
 // Renders the mixer on an audio thread (PS5: sceAudioOut, desktop: SDL); false leaves the app silent.
 bool start_audio(hui::audio::Mixer& mixer);
@@ -145,7 +149,7 @@ JSValue ps5_react_image_api(JSContext* ctx);
 bool ps5_react_start_images();
 // Unregisters every remote image from the engine, then stops the image workers and frees them.
 void ps5_react_stop_images();
-// ABI v4: sounds the app imports (baked by tools/bundle.mjs), mixed on an audio thread.
+// ABI v5: sounds the app imports (baked by tools/bundle.mjs), mixed on an audio thread.
 JSValue ps5_react_sound_api(JSContext* ctx);
 // Decodes the baked sounds and opens the audio output; false (silent) when the app has no sounds or
 // the output fails. Start before the bundle runs, stop after the runtime shuts down.

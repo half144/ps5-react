@@ -14,7 +14,8 @@
       "patches/embeddedReact-scroll-copy-paint-free.patch",
       "patches/embeddedReact-software-avx2.patch",
       "patches/embeddedReact-image-unload.patch",
-      "patches/embeddedReact-aspect-main-size.patch"
+      "patches/embeddedReact-aspect-main-size.patch",
+      "patches/embeddedReact-translate-subtree.patch"
     ]
   },
   "platform": {

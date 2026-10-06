@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {acquireImage, Downloads, Http} from './native.js';
+import {acquireImage, Downloads, Http, Power} from './native.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
   let tick;
@@ -85,4 +85,16 @@ test('remote images poll only while loads are pending and release every referenc
   globalThis.__ps5ReactFrame(16);
   assert.equal(polls, 3, 'a release polls once more so eviction can run');
   delete globalThis.__ps5ReactNative;
+});
+
+test('Power.keepAwake passes a boolean to the host', () => {
+  const calls = [];
+  globalThis.__ps5ReactNative = {power: {keepAwake: enabled => calls.push(enabled)}};
+  try {
+    Power.keepAwake(true);
+    Power.keepAwake(0);
+    assert.deepEqual(calls, [true, false]);
+  } finally {
+    delete globalThis.__ps5ReactNative;
+  }
 });

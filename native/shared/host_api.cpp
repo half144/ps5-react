@@ -326,6 +326,11 @@ JSValue pad_vibrate(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   return JS_UNDEFINED;
 }
 
+JSValue power_keep_awake(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  host::keep_awake(JS_ToBool(ctx, argv[0]) > 0);
+  return JS_UNDEFINED;
+}
+
 JSValue pad_state(JSContext* ctx, JSValueConst, int, JSValueConst*) {
   JSValue state = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, state, "connected", JS_NewBool(ctx, gamepad.connected));
@@ -399,6 +404,7 @@ constexpr Function kPad[] = {
   {"setLightBar", pad_set_light_bar, 3}, {"resetLightBar", pad_reset_light_bar, 0},
   {"vibrate", pad_vibrate, 2}, {"state", pad_state, 0},
 };
+constexpr Function kPower[] = {{"keepAwake", power_keep_awake, 1}};
 constexpr Function kRoot[] = {{"notify", notify, 2}, {"openURL", open_url, 1}, {"exit", request_exit, 0}};
 } // namespace
 
@@ -413,6 +419,7 @@ void ps5_react_install_host_api(JSContext* ctx) {
   JS_SetPropertyStr(ctx, api, "device", namespace_object(ctx, "device", kDevice));
   JS_SetPropertyStr(ctx, api, "users", namespace_object(ctx, "users", kUsers));
   JS_SetPropertyStr(ctx, api, "pad", namespace_object(ctx, "pad", kPad));
+  JS_SetPropertyStr(ctx, api, "power", namespace_object(ctx, "power", kPower));
   JS_SetPropertyStr(ctx, api, "network", ps5_react_network_api(ctx));
   JS_SetPropertyStr(ctx, api, "image", ps5_react_image_api(ctx));
   JS_SetPropertyStr(ctx, api, "sound", ps5_react_sound_api(ctx));
