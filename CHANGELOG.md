@@ -9,7 +9,7 @@
   scroll to 60 fps.
 - The PS5 host writes klog lines from a writer thread. A synchronous
   `sceKernelDebugOutText` on the render thread took 0.1-1 ms per line and
-  stalled a frame by about 10 ms roughly once a minute (once by 1.45 s).
+  stalled a frame by about 9 ms one to two times a minute (once by 1.45 s).
 
 - `--app-dir <path>` previews, watches, and builds an app outside `apps/`;
   `create --dir <parent>` scaffolds one. Build receipts record app sources as
