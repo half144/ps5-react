@@ -1,0 +1,43 @@
+// Copyright (C) 2026 half144 and PS5 React contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Additional attribution term: see LICENSE-ATTRIBUTION.
+#pragma once
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace network {
+struct Piece {
+  std::string url, sha1;
+  std::uint64_t offset = 0, size = 0;
+};
+struct Request {
+  std::string url, destination, storage_root, method = "GET", body, sha256;
+  std::vector<std::string> headers;
+  std::vector<Piece> pieces;
+  std::uint64_t expected_bytes = 0;
+  std::uint64_t max_bytes = 1024 * 1024, range_bytes = 32 * 1024 * 1024;
+  unsigned connections = 8;
+  bool resume = true, adaptive = true, recover_completed = false;
+};
+struct Snapshot {
+  std::uint32_t id = 0;
+  std::string state = "queued", error, body, destination;
+  std::uint64_t received = 0, written = 0, total = 0, buffered = 0;
+  double bytes_per_second = 0;
+  unsigned connections = 0, retries = 0;
+  int status = 0;
+  bool total_known = false;
+};
+// No JavaScript is accessed by either native worker. Only the caller polls JS.
+bool start();
+void stop();
+std::uint32_t enqueue(Request request, std::string& error);
+void cancel(std::uint32_t id);
+std::vector<Snapshot> poll();
+const char* version();
+// Platform owns libSceNet lifecycle and the trust-store path; desktop uses defaults.
+bool platform_start(std::string& error);
+void platform_stop();
+const char* ca_path();
+} // namespace network

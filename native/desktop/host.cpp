@@ -1,6 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
+#include "network.hpp"
 #include "app_config.hpp"
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -102,6 +103,7 @@ struct Host {
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
 
   ~Host() {
+    network::stop();
     if (runtime_started) er_runtime_shutdown();
     if (backend_started) er_software_backend_destroy();
     presenter.release(); // GL objects must be deleted before their context.
@@ -138,6 +140,7 @@ struct Host {
   bool boot(const char* path) {
     backend_started = er_software_backend_init(width, height);
     if (!backend_started || !damage_tracker_install(width, height)) return false;
+    network::start();
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
     cfg.memory_limit = 32 * 1024 * 1024;
@@ -395,6 +398,20 @@ bool storage_test() {
   if (host::visit_directory_records(bytes + 13, 12, collect, &names) || !names.empty()) return false;
   // Exercise actual host bindings, sandbox path resolution, and error propagation.
   constexpr char script[] = R"JS((() => {
+    const network = globalThis.__ps5ReactNative.network;
+    if (!network || !network.version().includes("libcurl") ||
+        !Array.isArray(network.poll())) return false;
+    for (const invalid of [
+      () => network.request("file:///tmp/example", {}),
+      () => network.request("https://example.com", {maxBytes: 0}),
+      () => network.request("https://example.com", {headers: {Range: "bytes=0-1"}}),
+      () => network.download("https://example.com", "/download0/a", {connections: 17}),
+      () => network.download("https://example.com", "/download0/a", {recoverCompleted: 'yes'}),
+      () => network.cancel(),
+    ]) {
+      try { invalid(); return false; }
+      catch (error) { if (!error.message.includes("network.")) return false; }
+    }
     const fs = globalThis.__ps5ReactNative.fs;
     const testName = `listing-test-${Date.now()}.txt`;
     const testPath = `/download0/${testName}`;
@@ -404,6 +421,10 @@ bool storage_test() {
       const item = listing.find(entry => entry.name === testName);
       if (!item || !item.isFile || item.isDirectory || item.size !== 12 ||
           !Number.isFinite(item.modified)) return false;
+      const info = fs.stat(testPath);
+      if (!/^\d+$/.test(info.device) || !/^\d+$/.test(info.inode) ||
+          typeof info.device !== 'string' || typeof info.inode !== 'string' ||
+          info.device !== item.device || info.inode !== item.inode) return false;
       try { fs.readDir(testPath); return false; }
       catch (error) { if (!error.message.includes('fs.readDir')) return false; }
     } finally { fs.remove(testPath); }

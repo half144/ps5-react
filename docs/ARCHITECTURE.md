@@ -21,7 +21,11 @@ reach platform services only through the `@ps5-react/core` native modules
 fixed by `native/shared/host_api.hpp`: `native/shared/host_api.cpp` installs it
 and implements the filesystem with POSIX, while `native/ps5/` and
 `native/desktop/` implement the platform functions. Calls are synchronous on the
-render thread. See [NATIVE-API.md](NATIVE-API.md). When the surface matches the
+render thread. Networking calls submit/cancel/poll bounded native tasks; two
+workers perform network and disk I/O without touching QuickJS or the engine.
+Hosts cancel and join those workers before runtime shutdown. See
+[NETWORKING.md](NETWORKING.md) for the buffer, heap, stack and queue contract,
+and [NATIVE-API.md](NATIVE-API.md) for the bridge. When the surface matches the
 render size (the PS5), the presenter copies changed framebuffer rows into two
 buffer textures (the PS5 allows 1048576 texels per buffer texture) that its
 shader reads with `texelFetch`: there `glBufferSubData` of 1920×540 takes about
@@ -84,7 +88,8 @@ build stage retains its full log.
 - Hardware validation of focus navigation, including modal, reconnect, and repeat tests.
 - Restart only the JS runtime while preserving the desktop graphics context.
 - Measure PS5 frame time and memory, then consider damaged-region uploads.
-- Add networking, audio, text input, save data, caching, and virtualization behind explicit APIs.
+- Extend native networking as measured on hardware; add audio, text input, save data,
+  caching, and virtualization behind explicit APIs.
 - Ship an installable CLI and a pinned CI matrix.
 
 The software renderer still owns the pixels. A future GPU backend can preserve

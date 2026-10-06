@@ -17,13 +17,14 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v1) is
+each host installs before the bundle runs. Its exact shape (ABI v2) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
 
-- **Synchronous.** Every call blocks and returns its result directly; there are
-  no promises.
+- **Synchronous bridge.** Each native call returns directly. Networking calls
+  only submit/cancel/poll bounded tasks; `Http.request` and `task.done` expose
+  promises in the JavaScript wrapper while native workers perform I/O.
 - **Render thread.** Calls run on the same thread as React and the rasterizer.
   Keep them cheap: avoid listing large directories or reading files every
   frame. Call them from event handlers, effects, or state initializers rather
@@ -94,8 +95,12 @@ inside it can be read by path. Paths containing `..` components are rejected.
 | `mounts()` | `{device, path, type}[]` | Up to 64 mounted filesystems visible to this process, as host paths; see [Hardware status](#hardware-status) |
 | `diskUsage(path)` | `{total, free}` | Bytes for the filesystem holding `path`; `free` is available to the app, clamped to `0..total` |
 
-`FileStat` is `{name, isDirectory, isFile, size, modified}`, where `size` is in
-bytes and `modified` is milliseconds since the Unix epoch.
+`FileStat` is `{name, isDirectory, isFile, size, modified, device, inode}`, where
+`size` is in bytes and `modified` is milliseconds since the Unix epoch.
+`device` and `inode` are decimal strings that preserve native 64-bit identities.
+Use both to detect replacement of a directory or file, including another drive
+mounted at the same path; these identities are filesystem-local, not universal
+drive serial numbers.
 
 Files are text only; there is no binary read or write.
 
@@ -118,6 +123,24 @@ need their own files. The opt-in helper requires resident Lapy or a local ELF
 loader; see [access requirements](#hardware-status). On failure, filesystem
 calls retain their normal permission errors rather than returning fake values.
 
+
+## Http and Downloads
+
+`Http.request(url, options)` provides bounded text/JSON HTTP responses.
+`Downloads.enqueue({url, destination, ...options})` returns a cancellable task
+with progress subscriptions and a completion promise. Binary downloads stay
+native, use parallel validated ranges when eligible, and resume durable ranges.
+`Downloads.enqueueManifest({manifest, destination, ...options})` supports split
+byte manifests with per-piece SHA-1 and whole-file SHA-256 verification.
+`DownloadFormats` validates manifests and routes image, package, archive and
+binary filenames to their appropriate destinations. Native download options
+include exact `expectedBytes`, `storageRoot` identity checks, `recoverCompleted`
+for receipt-backed SHA-256 verification of published files, and normalized
+`pieces: [{url, offset, size, sha1}]`. These options share ABI v2 on both hosts;
+there are no additional global native functions.
+PS5 builds require `networking: true` and `filesystemAccess: "console"`; desktop
+networking is available by default. See [NETWORKING.md](NETWORKING.md) for
+options, resource limits, errors, lifecycle and the hardware-validation gap.
 
 ## Notifications
 
@@ -256,7 +279,7 @@ directory or select **Refresh** to query again; focus changes do not query stora
 
 ## Not yet available
 
-- Networking (`fetch`, sockets, WebSocket).
+- Global `fetch`, raw sockets and WebSocket.
 - Audio playback.
 - The system on-screen keyboard (IME) for text input.
 - System save data; use `FileSystem.dataDir` for now.

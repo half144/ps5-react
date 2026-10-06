@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v1) between the hosts and `@ps5-react/core`.
+// Native API contract (ABI v2) between the hosts and `@ps5-react/core`.
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
 // ErRuntimeConfig.install_host_globals and implements the filesystem with POSIX
@@ -11,8 +11,9 @@
 //
 // JavaScript shape (runtime/js/native.js wraps it):
 //   platform                       'ps5' | 'desktop'
-//   fs.readDir(path)               [{name, isDirectory, isFile, size, modified}]
-//   fs.stat(path)                  {name, isDirectory, isFile, size, modified} | null
+//   fs.readDir(path)               [{name, isDirectory, isFile, size, modified, device, inode}]
+//   fs.stat(path)                  {name, isDirectory, isFile, size, modified, device, inode} | null
+//                                  device/inode are decimal strings, preserving 64-bit IDs
 //   fs.readFile(path)              string (UTF-8; at most kMaxReadBytes)
 //   fs.writeFile(path, text, append)
 //   fs.mkdir(path, recursive)
@@ -31,6 +32,13 @@
 //   pad.resetLightBar()
 //   pad.vibrate(strength, seconds) strength 0..1
 //   pad.state()                    {connected, leftX, leftY, rightX, rightY, l2, r2, buttons}
+//   network.download(url, path, options) task ID; queues native binary file I/O
+//     options: expectedBytes, storageRoot, pieces[{url, offset, size, sha1}],
+//              sha256, connections, adaptive, rangeBytes, resume, recoverCompleted, headers
+//   network.request(url, options)  task ID; queues bounded HTTP text I/O
+//   network.cancel(id)             requests cancellation
+//   network.poll()                 progress/results; consumes terminal snapshots
+//   network.version()              transport version string
 //   exit()                         asks the host to close after this frame
 // Failures throw a JS Error whose message names the call, the path, and strerror.
 #pragma once
@@ -107,3 +115,6 @@ void set_light_bar(std::uint8_t r, std::uint8_t g, std::uint8_t b);
 void reset_light_bar();
 void vibrate(float strength, float seconds);
 } // namespace host
+
+// ABI v2: synchronous native task submission/polling; I/O runs off-thread.
+JSValue ps5_react_network_api(JSContext* ctx);

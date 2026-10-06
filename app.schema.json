@@ -87,7 +87,36 @@
       ],
       "default": "sandbox",
       "description": "console packages the pinned Lapy helper and requests filesystem access at startup; requires local elfldr on port 9021 or resident Lapy."
+    },
+    "networking": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable native HTTP and large-file downloads; PS5 requires filesystemAccess: console. Desktop networking is available independently."
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "networking"
+        ],
+        "properties": {
+          "networking": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "filesystemAccess"
+        ],
+        "properties": {
+          "filesystemAccess": {
+            "const": "console"
+          }
+        }
+      }
+    }
+  ]
 }

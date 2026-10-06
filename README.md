@@ -56,6 +56,14 @@ Use `npm run preview` for a single preview run.
 Escape closes the preview. Ctrl+C stops the watcher. Development commands do
 not connect to the console.
 
+## HTTP and large downloads
+
+`Http.request` loads bounded JSON/text responses; `Downloads.enqueue` streams
+large files directly to disk with progress, cancellation and eligible range
+resume. Enable `"networking": true` and `"filesystemAccess": "console"` in
+`app.json` for PS5. See [NETWORKING.md](docs/NETWORKING.md) for usage and limits.
+Networking still needs validation on PS5 hardware.
+
 ## Build for PS5
 
 ```sh
@@ -244,8 +252,9 @@ const pad = useGamepad(); // sticks, triggers, held buttons
 
 React Native-style modules reach platform services through the host:
 `Platform`, `DeviceInfo`, `FileSystem`, `Notifications`, `Users`, `Controller`
-with `useGamepad`, `Linking`, and `BackHandler`. Calls are synchronous and run on the
-render thread. The macOS preview implements the same API against a sandbox in
+with `useGamepad`, `Linking`, `BackHandler`, `Http`, and `Downloads`. Native
+bridge calls run synchronously on the render thread; networking submits tasks
+to workers and exposes promises in JavaScript. The macOS preview implements the same API against a sandbox in
 `.build/<app>/sandbox/`. The filesystem integration was user-confirmed on
 firmware 13.60 with kstuff and ShadowMount; other native modules still require
 validation.
@@ -264,7 +273,8 @@ Logs and test screenshots are under `.build/<app>/`.
 
 - The PS5 framework starter has not yet been independently hardware-tested.
 - Rasterization runs on the CPU; there is no direct GPU UI backend or measured FPS claim.
-- DOM, browser APIs, Node.js APIs, networking, audio, and text input are not implemented.
+- DOM, general browser APIs, Node.js APIs, audio, and text input are not implemented.
+  Native HTTP and downloads expose a bounded subset; global `fetch` is unavailable.
 - Spatial focus is not yet tested on hardware; there are no pointer, touch, or text-input focus modes.
 - Dependencies are pinned, but cross-machine bit-identical builds are not guaranteed.
 
@@ -274,6 +284,7 @@ Logs and test screenshots are under `.build/<app>/`.
 - [Navigation](docs/NAVIGATION.md)
 - [Styling with className](docs/TAILWIND.md)
 - [Native modules](docs/NATIVE-API.md)
+- [HTTP and large downloads](docs/NETWORKING.md)
 - [Animation](docs/ANIMATION.md)
 - [Hardware evidence](docs/HARDWARE.md)
 - [Dependencies and licenses](docs/DEPENDENCIES.md)

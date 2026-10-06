@@ -9,6 +9,7 @@ No proprietary Sony modules are redistributed.
 | Embedded React | C engine, QuickJS bridge, reconciler, software compositor. Apache-2.0; revision `cf5dfe4fae966fe21a265acc3dd3b054d245f981`. |
 | ps5-homebrew-ui | EGL, controller, system, InputTracker, heap, CRT, shims, native tools. GPL-3.0-or-later; revision `4bd942579dd981b3df9c740438489ca6a614ddc0`. |
 | ProsperoStore elevation client | Optional cooperative filesystem-access client and pinned helper build. GPL-3.0-or-later; revision `22dca63607cf5f1f95006eda6ffb802607bed699`. |
+| PacBrew networking ports | Optional SHA-256-pinned v0.40.2 archive: curl 8.18.0 (curl license), OpenSSL 3.5.2 (Apache-2.0), zlib, zstd and libpsl; individual notices and source links follow the pinned ProsperoStore `third_party/PACBREW_LICENSES.json`. Native-title `compat.c` and `netdb.c` reuse that pinned reference under GPL-3.0-or-later. |
 | Lapy helper | Optional exact-title one-shot helper: mpereiraesaa/PS5-Lapy-JB-Daemon `54a095c0f19161825e845daa760a03b446e654fa`, MIT; protocol LGPL-2.1-or-later, ps5log GPL-3.0-or-later. The helper uses the app SDK v0.42 with `patches/lapy-sdk-042-attributes.patch`; source revision and ps5log hash are pinned in the lock file. |
 | ps5-opengl | SDK 1.0.0; GPL and per-component/Mesa licenses. The release includes sources and notices. |
 | React / QuickJS-ng | React 18.3.1, reconciler 0.29.2, QuickJS-ng 0.15.0; MIT. npm lockfile and QuickJS commit are pinned. |
@@ -67,3 +68,13 @@ are useful build output, not a substitute for this source-distribution step.
 The Lapy SDK compatibility patch should be proposed upstream once hardware
 qualification confirms this integration. It preserves all 32 attribute bytes
 required by the current SDK. No upstream contribution has been submitted.
+
+## Optional networking ports
+
+`tools/network_ports.py` selectively extracts the pinned networking archive
+without replacing the payload SDK. Network-enabled builds copy verified
+component license texts and source metadata to `notices/networking/`, plus the
+compatibility reference license. Build receipts record the archive and selected
+static library hashes. Preserve these notices and provide corresponding source
+for linked GPL components when distributing binaries; an archive of libraries
+and license texts alone does not satisfy source-distribution requirements.

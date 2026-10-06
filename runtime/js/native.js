@@ -4,6 +4,7 @@
 // React Native-style modules over the host contract in native/shared/host_api.hpp.
 // Every call is synchronous and runs on the render thread; see docs/NATIVE-API.md.
 import {useEffect, useState} from 'react';
+import {normalizeDownloadManifest} from './download-formats.js';
 
 function host() {
   const api = globalThis.__ps5ReactNative;
@@ -57,6 +58,7 @@ export const FileSystem = {
   /** @param {string} path @returns {FileStat[]} */
   readDir: path => host().fs.readDir(path),
   /** @param {string} path @returns {FileStat | null} */
+  // device/inode remain strings to preserve native 64-bit filesystem identities.
   stat: path => host().fs.stat(path),
   /** @param {string} path @returns {boolean} */
   exists: path => host().fs.stat(path) !== null,
@@ -172,3 +174,113 @@ export function dispatchBackPress() {
   for (const listener of [...backListeners].reverse()) if (listener() === true) return true;
   return false;
 }
+
+const networkTasks = new Map();
+let networkTimer = null;
+
+function stopNetworkTimer() {
+  if (networkTasks.size === 0 && networkTimer !== null) {
+    clearInterval(networkTimer);
+    networkTimer = null;
+  }
+}
+
+function taskError(task, snapshot) {
+  const error = new Error(`${task.call}${task.destination ? ` ${task.destination}` : ''}: `
+    + (snapshot.error || snapshot.state));
+  if (snapshot.state === 'cancelled') error.name = 'AbortError';
+  return error;
+}
+
+function pollNetwork() {
+  let snapshots;
+  try {
+    snapshots = host().network.poll();
+  } catch (error) {
+    for (const [id, task] of networkTasks) {
+      try { host().network.cancel(id); } catch {}
+      task.listeners.clear();
+      task.reject(error);
+    }
+    networkTasks.clear();
+    stopNetworkTimer();
+    return;
+  }
+  for (const snapshot of snapshots) {
+    const task = networkTasks.get(snapshot.id);
+    if (!task) continue;
+    const {body, ...progress} = snapshot;
+    task.snapshot = Object.freeze({...progress, destination: task.destination});
+    for (const listener of [...task.listeners]) {
+      try { listener(task.snapshot); }
+      catch (error) { console.error('Download progress listener failed:', error); }
+    }
+    if (snapshot.state === 'completed' || snapshot.state === 'failed' || snapshot.state === 'cancelled') {
+      networkTasks.delete(snapshot.id);
+      task.listeners.clear();
+      if (snapshot.state === 'completed') task.resolve({...snapshot, destination: task.destination});
+      else task.reject(taskError(task, snapshot));
+    }
+  }
+  stopNetworkTimer();
+}
+
+function networkTask(id, call, destination = '') {
+  const task = {call, destination, listeners: new Set(),
+    snapshot: Object.freeze({id, destination, state: 'queued', received: 0, written: 0, total: null,
+      bytesPerSecond: 0, connections: 0, retries: 0, bufferedBytes: 0})};
+  const done = new Promise((resolve, reject) => { task.resolve = resolve; task.reject = reject; });
+  // A task can be observed through subscriptions without awaiting its completion.
+  done.catch(() => {});
+  networkTasks.set(id, task);
+  if (networkTimer === null) networkTimer = setInterval(pollNetwork, 250);
+  return Object.freeze({
+    id, done,
+    cancel() { if (networkTasks.has(id)) host().network.cancel(id); },
+    get snapshot() { return task.snapshot; },
+    subscribe(listener) {
+      if (typeof listener !== 'function') throw new TypeError('Downloads.subscribe: expected a function');
+      listener(task.snapshot);
+      if (networkTasks.has(id)) task.listeners.add(listener);
+      return () => task.listeners.delete(listener);
+    },
+  });
+}
+
+/** Native HTTP subset for bounded text/JSON responses; does not require a browser. */
+export const Http = {
+  async request(url, options = {}) {
+    const signal = options.signal;
+    if (signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
+      throw new TypeError('Http.request: signal must support abort event listeners');
+    }
+    const id = host().network.request(url, options);
+    const task = networkTask(id, 'Http.request');
+    const abort = () => task.cancel();
+    if (signal) {
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, {once: true});
+    }
+    try {
+      const response = await task.done;
+      return Object.freeze({status: response.status, ok: response.status >= 200 && response.status < 300,
+        text: async () => response.body, json: async () => JSON.parse(response.body)});
+    } finally {
+      if (signal) signal.removeEventListener('abort', abort);
+    }
+  },
+};
+
+/** Large binary files stay native; only progress and the completion result reach JavaScript. */
+export const Downloads = {
+  // recoverCompleted verifies a native completion receipt and the final file's SHA-256.
+  // It never accepts an existing destination based on size or filename alone.
+  enqueue({url, destination, ...options}) {
+    const id = host().network.download(url ?? options.pieces?.[0]?.url, destination, options);
+    return networkTask(id, 'Downloads.enqueue', destination);
+  },
+  enqueueManifest({manifest, destination, ...options}) {
+    return Downloads.enqueue({...options, ...normalizeDownloadManifest(manifest), destination});
+  },
+  get transportVersion() { return host().network.version(); },
+};

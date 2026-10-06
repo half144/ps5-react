@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // QuickJS expects POSIX _r variants; the native libc exposes the C variants.
 #include <pthread.h>
+#include "app_config.hpp"
 #include <time.h>
 
 static pthread_mutex_t date_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -15,6 +16,7 @@ struct tm *localtime_r(const time_t *time, struct tm *output) {
     return result ? output : 0;
 }
 
+#if !PS5_REACT_NETWORKING
 struct tm *gmtime_r(const time_t *time, struct tm *output) {
     pthread_mutex_lock(&date_mutex);
     const struct tm *result = gmtime(time);
@@ -22,3 +24,5 @@ struct tm *gmtime_r(const time_t *time, struct tm *output) {
     pthread_mutex_unlock(&date_mutex);
     return result ? output : 0;
 }
+
+#endif

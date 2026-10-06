@@ -44,10 +44,12 @@ def desktop(app, test=False):
     if test:
         run(["node", "--test", *sorted((ROOT / "tools/tailwind").glob("*.test.mjs")),
                 *sorted((ROOT / "runtime/js/motion").glob("*.test.mjs")),
-                *sorted((ROOT / "runtime/js/focus").glob("*.test.mjs"))], env={**os.environ, "PS5_REACT_ER": str(er)},
+                *sorted((ROOT / "runtime/js/focus").glob("*.test.mjs")),
+                *sorted((ROOT / "runtime/js").glob("*.test.mjs"))], env={**os.environ, "PS5_REACT_ER": str(er)},
             log=ROOT / ".build/tailwind-test.log")
         if app != ROOT / "apps/starter":
             raise ValueError("The scripted UI test belongs to starter; use preview for other apps")
+        run(["python3", ROOT / "tools/test_network.py"], log=ROOT / ".build/network-test.log")
         command.append("--self-test")
     return command, build
 

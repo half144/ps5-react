@@ -132,6 +132,10 @@ def app_config(app, config=None):
         raise ValueError("name must contain 1..80 characters")
     if config.get("filesystemAccess", "sandbox") not in ("sandbox", "console"):
         raise ValueError("filesystemAccess must be sandbox or console")
+    if type(config.get("networking", False)) is not bool:
+        raise ValueError("networking must be a boolean")
+    if config.get("networking") and config.get("filesystemAccess", "sandbox") != "console":
+        raise ValueError('networking requires filesystemAccess: "console" for the PS5 native transport')
     for other in (ROOT / "apps").glob("*/app.json"):
         if other.parent.resolve() != app.resolve() and json.loads(other.read_text())["titleId"] == title:
             raise ValueError(f"titleId already belongs to {other.parent.name}")
@@ -143,7 +147,8 @@ def generated_config(config, directory):
     definitions = {"WIDTH": config["render"]["width"], "HEIGHT": config["render"]["height"],
                    "SURFACE_WIDTH": config["surface"]["width"], "SURFACE_HEIGHT": config["surface"]["height"],
                    "TIMEOUT": config["timeoutSeconds"], "NAME": config["name"], "TITLE": config["titleId"],
-                   "CONSOLE_FILESYSTEM": int(config.get("filesystemAccess", "sandbox") == "console")}
+                   "CONSOLE_FILESYSTEM": int(config.get("filesystemAccess", "sandbox") == "console"),
+                   "NETWORKING": int(config.get("networking", False))}
     (directory / "app_config.hpp").write_text("#pragma once\n" + "".join(
         f"#define PS5_REACT_{key} {json.dumps(value)}\n" for key, value in definitions.items()))
 

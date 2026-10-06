@@ -16,6 +16,7 @@ import urllib.request
 import zipfile
 
 from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency
+from network_ports import ports, copy_notices
 
 BUILD = ROOT / ".build/starter/ps5"
 TITLE = "PPSA99053"
@@ -94,6 +95,7 @@ def main():
             log=BUILD / "filesystem-access-tests.log")
         run(["python3", ROOT / "tools/build_filesystem_helper.py", TITLE, helper, "--sdk", sdk],
             env=env, log=BUILD / "filesystem-helper.log")
+    network_ports = ports() if config.get("networking") else None
     native = hui / "tooling/native"
     host_tool = BUILD / "host/ps5-native-tool"
     run(["clang++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -127,7 +129,9 @@ def main():
     sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/async_log.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/time_compat.c",
                ROOT / "native/ps5/filesystem_access.cpp",
                ROOT / "native/ps5/elevation_transport.cpp",
-               ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/gl_presenter.cpp",
+               ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/network.cpp",
+               ROOT / "native/shared/network_api.cpp", ROOT / "native/ps5/network_platform.cpp",
+               ROOT / "native/shared/gl_presenter.cpp",
                ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/input_script.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system")],
                hui / "src/core/input.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
@@ -137,6 +141,9 @@ def main():
     if access_client:
         sources.append(access_client / "examples/sandbox-elevation/src/elevation.cpp")
         includes.append(access_client / "examples/sandbox-elevation")
+    if network_ports:
+        sources.extend(access_client / "examples/pacbrew-curl" / name for name in ("compat.c", "netdb.c"))
+        includes.append(network_ports / "include")
     objects = []
     for i, source in enumerate(sources):
         obj = BUILD / "obj" / f"{i}-{source.name}.o"
@@ -149,6 +156,7 @@ def main():
         objects.append(obj)
     libs = sdk / "target/lib"
     agc_stubs = [gl / "lib/libSceAgc.so", gl / "lib/libSceAgcDriver.so"]
+    network_libs = [network_ports / "lib" / name for name in ("libcurl.a", "libssl.a", "libcrypto.a", "libz.a", "libzstd.a", "libpsl.a")] if network_ports else []
     pie = BUILD / "llvm-pie.elf"
     wraps = ["malloc", "calloc", "realloc", "free", "posix_memalign", "malloc_usable_size",
              "sceSystemServiceHideSplashScreen"]
@@ -160,7 +168,7 @@ def main():
          "--start-group", cross / "liber-software.a", cross / "bridge/liber-bridge-quickjs.a",
          cross / "bridge/engine/libembedded-react.a", cross / "_deps/quickjs-build/libqjs.a",
          gl / "lib/libPS5OpenGL.a", libs / "libunwind.a", libs / "libc++abi.a", libs / "libc++.a",
-         builtins, "--end-group", "--as-needed", *agc_stubs, *sorted(libs.glob("*.so"))],
+         *network_libs, builtins, "--end-group", "--as-needed", *agc_stubs, *sorted(libs.glob("*.so"))],
         env=env, log=BUILD / "link.log")
     elf = BUILD / "eboot.elf"
     run([host_tool, "link", "--in", pie, "--out", elf, "--stub-dir", libs,
@@ -193,6 +201,9 @@ def main():
     else:
         for name in ("lapy.elf", "lapy-manifest.json"):
             (app / name).unlink(missing_ok=True)
+    if network_ports:
+        copy_notices(access_client, notices / "networking")
+        shutil.copy2(access_client / "LICENSE", notices / "networking-compat-LICENSE")
     for name, source in {
         "ps5-react-LICENSE": ROOT / "LICENSE",
         "ps5-react-LICENSE-ATTRIBUTION": ROOT / "LICENSE-ATTRIBUTION",
@@ -216,6 +227,7 @@ def main():
                 "config": config, "bundle_sha256": digest(generated / "app.bundle.js"),
                 "llvm_version": subprocess.check_output([llvm / "clang", "--version"], text=True).splitlines()[0],
                 "sdk_root": str(sdk),
+                "network_libraries": {p.name: digest(p) for p in network_libs},
                 "sdk_libraries": {p.name: digest(p) for p in sorted(libs.iterdir()) if p.suffix in (".a", ".so")},
                 "ui_reference": HUI_REV, "embedded_react": ER_REV,
                 "opengl_version": "1.0.0", "opengl_archive_sha256": GL_HASH,

@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // Independent React proof: PS5 lifecycle/display/input, software UI and GL texture.
 
+#include "network.hpp"
 #include "app_config.hpp"
 #include "async_log.hpp"
 #include "platform/ps5/display_egl.hpp"
@@ -185,6 +186,7 @@ bool run_proof() {
     host_platform_set_pad(&pad);
   }
   if (ok) {
+    network::start();
     ErRuntimeConfig config = {};
     config.screen_width = width; config.screen_height = height;
     config.screen_scale = 2;
@@ -267,6 +269,7 @@ bool run_proof() {
     async_log::write("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
   }
   if (!ok && runtime) async_log::write("[PS5-REACT] error=%s", er_runtime_last_error());
+  network::stop();
   if (runtime) er_runtime_shutdown();
   if (software) er_software_backend_destroy();
   host_platform_set_pad(nullptr);

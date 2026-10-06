@@ -16,6 +16,7 @@ extern "C" {
 #include <cstring>
 #include <ctime>
 #include <iterator>
+#include <string>
 
 namespace {
 bool exit_requested = false;
@@ -70,6 +71,8 @@ JSValue entry(JSContext* ctx, const char* name, const struct stat& st) {
   JS_SetPropertyStr(ctx, object, "isFile", JS_NewBool(ctx, S_ISREG(st.st_mode)));
   JS_SetPropertyStr(ctx, object, "size", JS_NewInt64(ctx, st.st_size));
   JS_SetPropertyStr(ctx, object, "modified", JS_NewFloat64(ctx, modified_ms(st)));
+  JS_SetPropertyStr(ctx, object, "device", JS_NewString(ctx, std::to_string(st.st_dev).c_str()));
+  JS_SetPropertyStr(ctx, object, "inode", JS_NewString(ctx, std::to_string(st.st_ino).c_str()));
   return object;
 }
 
@@ -410,6 +413,7 @@ void ps5_react_install_host_api(JSContext* ctx) {
   JS_SetPropertyStr(ctx, api, "device", namespace_object(ctx, "device", kDevice));
   JS_SetPropertyStr(ctx, api, "users", namespace_object(ctx, "users", kUsers));
   JS_SetPropertyStr(ctx, api, "pad", namespace_object(ctx, "pad", kPad));
+  JS_SetPropertyStr(ctx, api, "network", ps5_react_network_api(ctx));
   JSValue global = JS_GetGlobalObject(ctx);
   JS_SetPropertyStr(ctx, global, "__ps5ReactNative", api);
   JS_FreeValue(ctx, global);

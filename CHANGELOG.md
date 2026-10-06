@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Add opt-in receipt-backed recovery of published downloads after app interruption.
+  Verify the full SHA-256 and original request/storage/file identity without
+  contacting the provider; preserve unowned or damaged existing destinations.
+  Expose filesystem device/inode IDs as lossless strings for app storage guards.
+
+- Add split-manifest downloads with source-relative HTTP ranges and direct
+  output-offset writes, SHA-1 piece and SHA-256 file verification in one read,
+  exact expected sizes, storage-root identity guards, and exclusive publication.
+  Export `DownloadFormats` for image, package, archive and binary destinations.
+  Package installation and archive extraction remain external operations.
+
+- Add native `Http.request` and `Downloads.enqueue` with validated parallel
+  ranges, bounded 8 MiB file buffers, an independent disk writer, cancellation,
+  durable range checkpoints and optional SHA-256 verification. PS5 networking
+  is opt-in with pinned PacBrew ports and native-title compatibility; hardware
+  operation and throughput remain unverified. Add localhost native and JS
+  lifecycle coverage to `npm test`.
+
 - When the surface matches the render size, the presenter keeps the frame in
   two buffer textures (`texelFetch`) and uploads changed rows with
   `glBufferSubData`. On the PS5 that costs about 0.46 ms for 1920×540 rows

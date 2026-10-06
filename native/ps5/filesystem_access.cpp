@@ -111,3 +111,5 @@ bool resolve_filesystem_path(const char* path, char* out, std::size_t size) {
   const int length = std::snprintf(out, size, "%s%s", base, suffix);
   return length >= 0 && static_cast<std::size_t>(length) < size;
 }
+
+bool console_filesystem_accessible() { return console_access; }
