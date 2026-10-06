@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix pieces of a sliding element left on screen, such as a header's section
+  pill sliding while the screen under it changes: when an opaque element
+  covered a repaint elsewhere, a translated element inside a clipping
+  container recorded its untranslated position, so its next move erased the
+  wrong area. Fixed by an engine patch.
+
 - Add `Power.keepAwake(enabled)` (native API ABI v4) to keep the console out
   of rest mode during long downloads: the PS5 host ticks the system power
   timer every 30 s while it is on, the desktop preview toggles the screen

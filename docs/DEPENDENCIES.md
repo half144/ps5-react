@@ -57,6 +57,9 @@ and `aspectRatio`, as CSS and React Native do.
 `embeddedReact-translate-subtree.patch` (Apache-2.0 engine and test files; not
 yet proposed upstream) moves a node translated without scale or rotation
 together with its descendants, which kept painting at their layout boxes.
+`embeddedReact-occluded-translate.patch` (Apache-2.0 engine and test files; not
+yet proposed upstream) keeps a translated node's paint record translated while
+an opaque node above covers it, so its next move erases what it painted.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
