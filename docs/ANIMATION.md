@@ -102,6 +102,12 @@ next child only after the previous one left.
   elements whose laid-out size fits the transform scratch buffer (512×512
   physical px in the default profile). Translate and opacity have no size limit;
   full-screen opacity is expensive.
+- On the PS5 each pixel that changes in a frame costs about 15 ns to upload
+  (`glTexSubImage2D` of 1920×540 measured 14.9 ms in any pixel format) on top
+  of its raster, so a 60 fps frame fits about 0.4-0.5 Mpx of change at 1080p.
+  A 1920×860 block rising in ran at 26 ms frames for its whole duration, and a
+  scroll started meanwhile stuttered. Animate small elements; let large blocks
+  appear without an entrance.
 - Animated opacity applies to View-family nodes; `motion.Text`/`motion.Image`
   wrap themselves in a View to fade.
 - Values are allocated lazily per animated key and released on unmount.
