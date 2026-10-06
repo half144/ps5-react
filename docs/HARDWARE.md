@@ -101,3 +101,24 @@ trace or a measurement of every mount. It does not qualify unrelated native
 modules, every filesystem operation, other firmware, or later rebuilt hashes.
 Generated build receipts continue to default to `hardware_tested: false`; use
 this record to identify the qualified artifacts.
+
+## Remote images — 2026-10-06
+
+Overdrive (`PPSA99058`, game-store `65a3e58`) on the same PS5 Slim Digital,
+firmware 13.60, kstuff, console filesystem elevation through the bundled
+helper. A development build of ps5-react `b6047eb` with an uncommitted
+per-frame motion log, screenshot command and heap log loaded every cover,
+hero, logo and screenshot from the Steam and Spectrum CDNs; console
+screenshots show them on browse and game pages.
+
+- Held-key scroll on browse (14 down, 14 up) while covers streamed in: 225
+  motion frames, none motionless, longest frame 17.7 ms, none over 20 ms.
+- One-second windows: 59.9–60.0 fps, p95 17.3 ms. Game page mount 25 ms
+  (cached art); user-driven mounts of uncached pages 43–88 ms, all JavaScript.
+- 128 MiB heap: live 64–71 MiB on browse, about 80 MiB with a game page, peak
+  98 MiB, no allocation failures.
+
+The release artifact without diagnostics (eboot SHA-256
+`4592332f53eaa597116faee4ecf98d1edb3d512a896b9cd426c4c35a7d0c7606`) was
+installed and launched: first frame and 60 fps windows, not re-measured in
+detail. Downloads were not exercised.
