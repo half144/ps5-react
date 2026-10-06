@@ -122,3 +122,23 @@ The release artifact without diagnostics (eboot SHA-256
 `4592332f53eaa597116faee4ecf98d1edb3d512a896b9cd426c4c35a7d0c7606`) was
 installed and launched: first frame and 60 fps windows, not re-measured in
 detail. Downloads were not exercised.
+
+### Image loading latency — 2026-10-06
+
+Same console, Overdrive game-store `ee3d2a4`, ps5-react `6bfdbec` (official
+eboot SHA-256 `9f6486d9ddf6037762dfd3a579038b40622efb95afa795634d2fa57e0f943569`).
+Per-image timings came from a temporary log in a development build; the 76
+images a cold launch mounts before its first screenshot:
+
+| Launch | Median to visible | Slowest |
+| --- | --- | --- |
+| Network, 4 connections | 4.2 s | 5.7 s (queued up to 5.2 s) |
+| Network, 12 connections | 1.8 s | 2.5 s |
+| Disk cache (relaunch) | 0.15 s | network only for art not cached |
+
+A Steam CDN request takes about 250 ms (750 ms for the first, with DNS and
+TLS); decode and resample take 1–30 ms on the decode worker. Opening a game
+page whose card had focus for 300 ms showed hero, cover, logo and first shot
+in the first screenshot 300 ms later; without the settle the hero arrived
+after 0.7 s and the first shot after 1.1 s. Scroll windows stayed at
+59.9–60.2 fps with frames under 20 ms while images arrived.
