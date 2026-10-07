@@ -78,6 +78,7 @@ task during cleanup if its lifetime belongs to that component.
 | `adaptive` | `true` | Starts at up to 4; adjusts concurrency every 3 seconds using disk progress and buffer pressure |
 | `rangeBytes` | 32 MiB | Integer 1–256 MiB; at most 65,536 ranges |
 | `resume` | `true` | Reuses matching durable completed ranges; `false` refuses existing partial files |
+| `rejectHtml` | `false` | Rejects HTML content types and initial HTML signatures before a file can be published; provider pages are not binary downloads |
 | `recoverCompleted` | `false` | Writes a durable `.complete` receipt before publication; a later identical request verifies an owned final file instead of downloading it again |
 | `sha256` | omitted | Trusted 64-digit SHA-256; verifies the complete file in the writer thread before publication |
 | `expectedBytes` | omitted | Exact positive safe-integer file size; rejects mismatched server sizes before downloading |
@@ -189,9 +190,12 @@ const catalog = await response.json();
 `method` supports uppercase GET, HEAD, POST, PUT, PATCH and DELETE. `body` is a
 UTF-8 string up to 1 MiB. `maxBytes` defaults to 1 MiB and accepts 1 byte–4 MiB.
 Requests have a 30-second total timeout. The result exposes `status`, `ok`,
-async `text()` and async `json()`. Non-2xx responses resolve normally;
-transport and response-size failures reject. Response headers and binary request
-or response bodies are not exposed. A compatible `signal` with `aborted`,
+the effective `url`, a frozen `headers` object with lowercase names, async
+`text()` and async `json()`. Non-2xx responses resolve normally;
+transport and response-size failures reject. Only content-type, content-length, content-disposition, content-range, location,
+hx-redirect, etag and retry-after are exposed. Redirect response headers are
+cleared before collecting the final response. Cookies and authentication headers
+are not exposed; binary request or response bodies are not exposed. A compatible `signal` with `aborted`,
 `addEventListener` and `removeEventListener` can cancel requests; the framework
 does not install an AbortController or global `fetch`.
 
@@ -199,7 +203,9 @@ URLs must use HTTP or HTTPS and be at most 8192 bytes. Headers have token names
 up to 128 bytes and string values up to 2048 bytes, without CR/LF. Range,
 If-Range, Accept-Encoding, Content-Length, Connection and Host are owned by the
 transport and cannot be overridden. Custom headers disable automatic redirects;
-use the final URL for authenticated requests. Otherwise redirects are limited
+use the final URL for authenticated requests. `followRedirects: false` also disables redirect following, making the
+allowlisted Location/HX-Redirect metadata available for provider adapters.
+Otherwise redirects are limited
 to five, and HTTPS cannot downgrade to HTTP. TLS peer and hostname verification
 are always enabled. Responses use identity encoding.
 

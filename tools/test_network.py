@@ -50,8 +50,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/file")
+            self.send_header("HX-Redirect", "/old-page")
+            self.send_header("Set-Cookie", "secret=never-expose")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if path in ("/html", "/html-no-type", "/html-fragmented"):
+            body = b"<!DOCTYPE html><html>Verify</html>"
+            self.send_response(200)
+            if path == "/html": self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if not head:
+                if path == "/html-fragmented":
+                    self.wfile.write(body[:1]); self.wfile.flush(); time.sleep(0.03)
+                    self.wfile.write(body[1:])
+                else: self.wfile.write(body)
             return
         if path in ("/json", "/not-found", "/large-json"):
             body = b'{"value":42}' if path != "/large-json" else b"x" * 4096
@@ -126,9 +140,12 @@ def main():
         directory = Path(temporary)
         binary = compile_client(directory)
 
-        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False):
+        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, reject_html=False, no_redirect=False):
             environment = dict(os.environ)
-            environment.pop("NETWORK_TEST_RECOVER", None)
+            for name in ("NETWORK_TEST_RECOVER", "NETWORK_TEST_REJECT_HTML", "NETWORK_TEST_NO_REDIRECT"):
+                environment.pop(name, None)
+            if reject_html: environment["NETWORK_TEST_REJECT_HTML"] = "1"
+            if no_redirect: environment["NETWORK_TEST_NO_REDIRECT"] = "1"
             if recover:
                 environment["NETWORK_TEST_RECOVER"] = "1"
             result = subprocess.run([str(binary), (endpoint if endpoint.startswith("https:") else origin+endpoint), str(path), str(connections), str(max_bytes),
@@ -144,6 +161,19 @@ def main():
         assert json.loads(run("/json")["body"]) == {"value": 42}
         assert run("/not-found")["status"] == 404
         assert run("/json", method="HEAD")["body"] == ""
+        metadata = run("/redirect", method="HEAD")
+        assert metadata["url"] == origin + "/file", metadata
+        assert "content-length" in metadata["headers"]
+        assert "hx-redirect" not in metadata["headers"] and "set-cookie" not in metadata["headers"]
+        redirect = run("/redirect", method="HEAD", no_redirect=True)
+        assert redirect["status"] == 302 and redirect["headers"]["location"] == "/file", redirect
+        for endpoint in ("/html", "/html-no-type", "/html-fragmented"):
+            html_path = directory / endpoint.removeprefix("/")
+            rejected = run(endpoint, html_path, reject_html=True)
+            assert rejected["state"] == "failed" and "browser verification required" in rejected["error"], rejected
+            assert not html_path.exists()
+        missing = run("/not-found", directory / "missing", reject_html=True)
+        assert missing["state"] == "failed" and "HTTP 404" in missing["error"], missing
         # A published file can be recovered after queue-state loss without contacting its provider.
         path = directory / "published-recovery"
         assert run("/file", path, recover=True)["state"] == "completed"

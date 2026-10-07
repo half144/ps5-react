@@ -47,3 +47,13 @@ to match the location of your framework checkout. For a layout with
 Run the framework's dependency setup and first preview before expecting
 dependency-backed editor paths to exist. The editor mappings are for source
 navigation and IntelliSense; the framework bundler supplies runtime resolution.
+
+## Read-only package data
+
+Add `"resources": ["data/releases"]` to app.json to copy an app-relative data
+file or directory into the application folder. Read it with
+`FileSystem.readFile('/app0/data/releases/example.json')` on either host.
+Resources stay outside the JavaScript bundle until your application reads them;
+readFile's 8 MiB per-file limit still applies. Generate resources before preview
+or build. Symlinks, traversal and package infrastructure paths are rejected.
+Files are hashed in the build receipt. Data is read-only through `/app0`.

@@ -35,6 +35,8 @@ int main(int argc, char** argv) {
   request.url = argv[1];
   if (std::string(argv[2]) != "-") request.destination = argv[2];
   request.adaptive = false;
+  request.reject_html = std::getenv("NETWORK_TEST_REJECT_HTML") != nullptr;
+  request.follow_redirects = std::getenv("NETWORK_TEST_NO_REDIRECT") == nullptr;
   request.recover_completed = std::getenv("NETWORK_TEST_RECOVER") != nullptr;
   request.connections = argc > 3 ? static_cast<unsigned>(std::atoi(argv[3])) : 4;
   request.range_bytes = 1024*1024;
@@ -72,7 +74,13 @@ int main(int argc, char** argv) {
       if (result.state == "completed" || result.state == "failed" || result.state == "cancelled") {
         std::cout << "{\"state\":" << escaped(result.state) << ",\"error\":" << escaped(result.error)
           << ",\"body\":" << escaped(result.body) << ",\"written\":" << result.written
-          << ",\"retries\":" << result.retries
+          << ",\"url\":" << escaped(result.url) << ",\"headers\":{";
+        bool first = true;
+        for (const auto& [name, value] : result.headers) {
+          if (!first) std::cout << ",";
+          first = false; std::cout << escaped(name) << ":" << escaped(value);
+        }
+        std::cout << "},\"retries\":" << result.retries
           << ",\"received\":" << result.received << ",\"status\":" << result.status
           << ",\"peakBuffer\":" << peak_buffer << ",\"peakConnections\":" << peak_connections
           << ",\"milliseconds\":" << elapsed << "}" << '\n';

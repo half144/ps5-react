@@ -15,7 +15,7 @@ import tarfile
 import urllib.request
 import zipfile
 
-from common import ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
+from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
 from network_ports import ports, copy_notices
 
 BUILD = ROOT / ".build/starter/ps5"
@@ -193,6 +193,10 @@ def main():
     draw.text((48, 140), "PS5", font=font, fill="#45d4de")
     draw.text((48, 225), "React", font=font, fill="white")
     image.save(app / "sce_sys/icon0.png")
+    for relative, source in resource_files(app_dir, config).items():
+        target = app / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     notices = app / "notices"
     notices.mkdir(exist_ok=True)
     if access_client:

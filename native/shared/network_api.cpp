@@ -139,6 +139,7 @@ JSValue begin(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, bool d
         !number_option(ctx, options, "rangeBytes", request.range_bytes, 1024*1024, 256*1024*1024) ||
         !boolean_option(ctx, options, "resume", request.resume) || !boolean_option(ctx, options, "adaptive", request.adaptive) ||
         !boolean_option(ctx, options, "recoverCompleted", request.recover_completed) ||
+        !boolean_option(ctx, options, "rejectHtml", request.reject_html) ||
         !string_option(ctx, options, "sha256", request.sha256, 64) || !digest(request.sha256, 64) ||
         !number_option(ctx, options, "expectedBytes", request.expected_bytes, 1, 9007199254740991ULL) ||
         !pieces(ctx, options, request))
@@ -147,7 +148,8 @@ JSValue begin(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, bool d
   } else {
     if (!string_option(ctx, options, "method", request.method, 16) ||
         !string_option(ctx, options, "body", request.body, 1024*1024) ||
-        !number_option(ctx, options, "maxBytes", request.max_bytes, 1, 4*1024*1024))
+        !number_option(ctx, options, "maxBytes", request.max_bytes, 1, 4*1024*1024) ||
+        !boolean_option(ctx, options, "followRedirects", request.follow_redirects))
       return JS_ThrowTypeError(ctx, "%s: invalid method/body/maxBytes", call);
     if (request.method != "GET" && request.method != "HEAD" && request.method != "POST" && request.method != "PUT" &&
         request.method != "PATCH" && request.method != "DELETE")
@@ -177,6 +179,11 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const auto num = [&](const char* key, double value) { JS_SetPropertyStr(ctx, item, key, JS_NewFloat64(ctx, value)); };
     num("id", snapshot.id); str("state", snapshot.state); str("error", snapshot.error);
     str("body", snapshot.body); str("destination", snapshot.destination);
+    str("url", snapshot.url);
+    JSValue response_headers = JS_NewObject(ctx);
+    for (const auto& [name, value] : snapshot.headers)
+      JS_SetPropertyStr(ctx, response_headers, name.c_str(), JS_NewStringLen(ctx, value.data(), value.size()));
+    JS_SetPropertyStr(ctx, item, "headers", response_headers);
     num("received", snapshot.received); num("written", snapshot.written);
     JS_SetPropertyStr(ctx, item, "total", snapshot.total_known ? JS_NewFloat64(ctx, snapshot.total) : JS_NULL);
     num("bytesPerSecond", snapshot.bytes_per_second); num("bufferedBytes", snapshot.buffered);

@@ -41,11 +41,14 @@ test('native network tasks deliver progress, release listeners and stop polling'
     await assert.rejects(aborted.done, error => error.name === 'AbortError' && error.message.includes('/download0/file'));
     assert.deepEqual(cancelled, [1]);
     const response = Http.request('https://example.com/json');
-    snapshots = [{id: 2, state: 'completed', status: 404, body: '{"value":42}'}];
+    snapshots = [{id: 2, state: 'completed', status: 404, url: 'https://example.com/final', headers: {'content-type': 'application/json'}, body: '{"value":42}'}];
     tick();
     const result = await response;
     assert.equal(result.ok, false);
     assert.equal(result.status, 404);
+    assert.equal(result.url, 'https://example.com/final');
+    assert.equal(result.headers['content-type'], 'application/json');
+    assert.equal(Object.isFrozen(result.headers), true);
     assert.deepEqual(await result.json(), {value: 42});
     assert.equal(await result.text(), '{"value":42}');
     assert.equal(clears, 3);
