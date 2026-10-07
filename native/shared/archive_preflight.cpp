@@ -18,10 +18,11 @@
 namespace archives {
 namespace {
 // libarchive sizes its decoder windows from the archive and has no memory limit option, while the title
-// shares one fixed 128 MiB heap that downloads and the image cache already take past 100 MiB, and a
-// failed allocation aborts the app. Only archive-declared windows count; fixed decoder state (bzip2's
-// 3.6 MiB, LZMA's 30 KiB) does not.
-constexpr std::uint64_t max_decoder_memory = 32ULL * 1024 * 1024;
+// shares one fixed 128 MiB heap and a failed allocation aborts the app. 64 MiB fits because an app's
+// queue never downloads while it extracts (downloads alone peak past 100 MiB), and it admits 7-Zip ultra
+// and WinRAR 7's default 32 MB dictionary, which libarchive doubles. Only archive-declared windows count;
+// fixed decoder state (bzip2's 3.6 MiB, LZMA's 30 KiB) does not.
+constexpr std::uint64_t max_decoder_memory = 64ULL * 1024 * 1024;
 constexpr std::uint64_t mib = 1024 * 1024;
 constexpr std::uint64_t unbounded = UINT64_MAX;
 constexpr unsigned max_coders = 64;

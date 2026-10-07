@@ -73,24 +73,27 @@ def main():
   # Decoder windows above the console budget are refused before libarchive allocates them.
   big=root/"big.7z"
   subprocess.run([prefix+"/bin/bsdtar","--format=7zip","--options=7zip:compression=lzma2,7zip:compression-level=9","-cf",str(big),"-C",str(root),"payload.bin"],check=True)
-  assert run("big-7zip",[big])[1:]==["0",TOO_BIG]
-  assert not (root/"big-7zip").exists() and not (root/"big-7zip.extracting").exists()
+  # 7-Zip ultra's 64 MiB dictionary is the budget itself.
+  assert run("big-7zip",[big])[0]=="completed"
   encoded=root/"encoded.7z";encoded.write_bytes(encode_7z_header(seven.read_bytes()))
   result=run("encoded-7zip",[encoded])
   assert result[0]=="completed",result
   assert (root/"encoded-7zip/payload.bin").read_bytes()==DATA
   encoded_big=root/"encoded-big.7z";encoded_big.write_bytes(encode_7z_header(big.read_bytes()))
-  assert run("encoded-big-7zip",[encoded_big])[1:]==["0",TOO_BIG]
-  for preset,state in [(6,"completed"),(9,"failed")]:
-   p=root/f"preset{preset}.tar.xz";p.write_bytes(lzma.compress(tar.read_bytes(),preset=preset))
-   assert run(f"xz{preset}",[p])[0]==state
-  assert run("xz9",[root/"preset9.tar.xz"])[2]==TOO_BIG
+  assert run("encoded-big-7zip",[encoded_big])[0]=="completed"
+  p=root/"preset9.tar.xz";p.write_bytes(lzma.compress(tar.read_bytes(),preset=9))
+  assert run("xz9",[p])[0]=="completed"
+  p=root/"huge.tar.xz"
+  p.write_bytes(lzma.compress(tar.read_bytes(),format=lzma.FORMAT_XZ,filters=[{"id":lzma.FILTER_LZMA2,"dict_size":128<<20}]))
+  assert run("xz-huge",[p])[1:]==["0",TOO_BIG]
+  assert not (root/"xz-huge").exists() and not (root/"xz-huge.extracting").exists()
   p=root/"lzma.zip"
   with zipfile.ZipFile(p,"w",compression=zipfile.ZIP_LZMA) as z:z.writestr("file.bin",DATA)
   assert run("zip-lzma",[p])[0]=="completed"
   p=root/"window.rar";p.write_bytes(rar5_with_window(9))
   assert run("rar5-window",[p])[1:]==["0",TOO_BIG]
-  p=root/"small-window.rar";p.write_bytes(rar5_with_window(5))
+  # WinRAR 7's default 32 MB dictionary, which libarchive doubles to the 64 MiB budget.
+  p=root/"small-window.rar";p.write_bytes(rar5_with_window(8))
   assert run("rar5-small-window",[p])[2]!=TOO_BIG
   # A sparse member arrives out of order, so its digest comes from reading the file back.
   sparse=root/"sparse.bin"
