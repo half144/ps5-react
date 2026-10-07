@@ -48,6 +48,8 @@ BODIES = {
     "/photo.jpg": ("image/jpeg", encoded(photo(1600, 1200), "JPEG", quality=95)),
     "/logo.png": ("image/png", encoded(logo(), "PNG")),
     "/huge.png": ("image/png", encoded(Image.new("RGB", (3000, 2000)), "PNG")),
+    "/red.png": ("image/png", encoded(Image.new("RGB", (60, 90), (160, 20, 30)), "PNG")),
+    "/grey.png": ("image/png", encoded(Image.new("RGB", (60, 90), (120, 120, 124)), "PNG")),
     "/text": ("text/plain", b"not an image"),
 }
 
@@ -160,6 +162,11 @@ def main():
         result, image = load("/logo.png", 200, 100, CONTAIN)
         assert (result["width"], result["height"], result["opaque"]) == (200, 100, False), result
         assert image.getpixel((0, 0))[3] == 0 and image.getpixel((100, 50)) == (250, 250, 250, 255)
+        # The vivid colour is the dominant saturated hue at full brightness; grey art has none.
+        result, _ = load("/red.png", 48, 72, COVER)
+        assert result["color"] == 0xFF2030, hex(result["color"])
+        result, _ = load("/grey.png", 48, 72, COVER)
+        assert result["color"] == -1, result
         # Errors name the call and the URL.
         for path, reason in (("/missing.jpg", "HTTP 404"), ("/text", "not a decodable JPEG or PNG"),
                              ("/huge.png", "5-megapixel"), ("/large", "exceeds 8 MiB")):

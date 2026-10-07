@@ -40,6 +40,9 @@ JSValue state(JSContext* ctx, const images::Result& result) {
   JS_SetPropertyStr(ctx, out, "width", JS_NewInt32(ctx, result.width));
   JS_SetPropertyStr(ctx, out, "height", JS_NewInt32(ctx, result.height));
   JS_SetPropertyStr(ctx, out, "error", JS_NewStringLen(ctx, result.error.data(), result.error.size()));
+  char color[8];
+  std::snprintf(color, sizeof color, "#%06x", static_cast<unsigned>(result.color));
+  JS_SetPropertyStr(ctx, out, "color", result.color < 0 ? JS_NULL : JS_NewString(ctx, color));
   return out;
 }
 

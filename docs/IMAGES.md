@@ -49,6 +49,12 @@ decoded. It holds no reference: the image waits in the cache until it is drawn
 or the cache needs the room. Use it for the next slide of a carousel or the
 other shots of a gallery.
 
+`Image.getColor(uri)` resolves to the image's most prominent vivid colour as
+`'#rrggbb'`, raised to full brightness, or `null` when the art is grey or dark.
+It decodes a 48 × 72 cover copy off the render thread (a cached URL is not
+fetched again) and samples at most about 16k pixels: use it for an accent or
+`Controller.setLightBar`.
+
 ## Formats and limits
 
 | Limit | Value |

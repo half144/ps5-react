@@ -338,7 +338,7 @@ function pollImagesSoon() {
  * @param {string} uri @param {number} width @param {number} height box in render pixels
  * @param {number} fit 0 cover, 1 contain, 2 stretch, 3 none
  * @param {boolean} prefetch loads after images that elements draw
- * @param {(result: {state: string, name: string, width: number, height: number, error: string}) => void} listener
+ * @param {(result: {state: string, name: string, width: number, height: number, error: string, color: string | null}) => void} listener
  * @returns {() => void}
  */
 export function acquireImage(uri, width, height, fit, prefetch, listener) {

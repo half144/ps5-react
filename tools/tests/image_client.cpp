@@ -28,9 +28,9 @@ std::vector<images::Result> wait(std::size_t count, int timeout_ms) {
 }
 
 void print(const images::Result& r) {
-  std::printf("{\"id\":%u,\"ready\":%s,\"failed\":%s,\"width\":%d,\"height\":%d,\"opaque\":%s,\"error\":\"%s\"}\n",
+  std::printf("{\"id\":%u,\"ready\":%s,\"failed\":%s,\"width\":%d,\"height\":%d,\"opaque\":%s,\"color\":%d,\"error\":\"%s\"}\n",
               r.id, r.ready ? "true" : "false", r.failed ? "true" : "false", r.width, r.height,
-              r.opaque ? "true" : "false", r.error.c_str());
+              r.opaque ? "true" : "false", r.color, r.error.c_str());
 }
 
 std::uint32_t load(const std::string& url, int w, int h, int fit, images::Result& result) {

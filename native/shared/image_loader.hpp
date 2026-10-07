@@ -31,6 +31,7 @@ struct Result {
   int width = 0, height = 0;
   bool opaque = true;
   const std::uint32_t* pixels = nullptr; // premultiplied ARGB8888; valid until evicted
+  std::int32_t color = -1;               // most prominent vivid colour as 0xRRGGBB, -1 when none
   std::string error;
 };
 

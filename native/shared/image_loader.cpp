@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "image_loader.hpp"
+#include "thread_name.hpp"
 #include "network.hpp"
 #ifdef PROSPERO
 #include "app_config.hpp"
@@ -66,6 +67,7 @@ struct Entry {
   std::uint32_t* pixels = nullptr;
   int width = 0, height = 0;
   bool opaque = true;
+  std::int32_t color = -1;
   std::string error;
   unsigned attempts = 0;
   Clock::time_point retry_at{};
@@ -178,6 +180,41 @@ bool resample(const unsigned char* source, int width, int channels, const Plan& 
   return true;
 }
 
+// The most prominent saturated hue, raised to full brightness and to at least 85% saturation: what a
+// light bar or accent can show of the art (an LED shows a pale tint as a washed-out colour). -1 when
+// the art has no vivid colour. Samples at most about 16k pixels.
+std::int32_t vivid_color(const std::uint32_t* pixels, int width, int height) {
+  constexpr int bins = 24;
+  float weight[bins] = {}, red[bins] = {}, green[bins] = {}, blue[bins] = {};
+  const int count = width * height, step = std::max(1, count / 16384);
+  int sampled = 0;
+  for (int i = 0; i < count; i += step) {
+    ++sampled;
+    const std::uint32_t pixel = pixels[i];
+    const float alpha = static_cast<float>(pixel >> 24);
+    if (alpha < 128) continue;
+    const float r = ((pixel >> 16) & 255) / alpha, g = ((pixel >> 8) & 255) / alpha, b = (pixel & 255) / alpha;
+    const float high = std::max({r, g, b}), low = std::min({r, g, b}), range = high - low;
+    if (high < 0.25f || range < 0.25f * high) continue;
+    float hue = high == r ? (g - b) / range : high == g ? 2 + (b - r) / range : 4 + (r - g) / range;
+    if (hue < 0) hue += 6;
+    const int bin = std::min(bins - 1, static_cast<int>(hue / 6 * bins));
+    weight[bin] += range;
+    // Weighted by saturation, so the purest pixels of a hue set its colour rather than its pale edges.
+    red[bin] += r * range; green[bin] += g * range; blue[bin] += b * range;
+  }
+  const int best = static_cast<int>(std::max_element(weight, weight + bins) - weight);
+  if (weight[best] < 0.01f * sampled) return -1;
+  const float peak = std::max({red[best], green[best], blue[best]});
+  const float floor = std::min({red[best], green[best], blue[best]}), saturation = (peak - floor) / peak;
+  // Scaling each channel's distance below the peak keeps the hue while raising the saturation.
+  const float boost = std::max(1.0f, 0.85f / saturation);
+  const auto channel = [&](float value) {
+    return static_cast<std::int32_t>(std::lround(std::max(0.0f, peak - (peak - value) * boost) / peak * 255));
+  };
+  return channel(red[best]) << 16 | channel(green[best]) << 8 | channel(blue[best]);
+}
+
 void decode(Entry& entry) {
   const auto* bytes = reinterpret_cast<const stbi_uc*>(entry.body->data());
   const int size = static_cast<int>(entry.body->size());
@@ -195,6 +232,7 @@ void decode(Entry& entry) {
   if (!source) { entry.error = message(entry, std::string("decode failed (") + stbi_failure_reason() + ")"); return; }
   const Plan p = plan(width, height, entry.box_width, entry.box_height, entry.fit);
   if (!resample(source, width, channels, p, entry)) entry.error = message(entry, "out of memory for decoded pixels");
+  else entry.color = vivid_color(entry.pixels, entry.width, entry.height);
   stbi_image_free(source);
 }
 
@@ -414,6 +452,7 @@ private:
     if (!entry.reported) return r;
     r.failed = !entry.pixels; r.ready = !r.failed; r.error = entry.error;
     r.width = entry.width; r.height = entry.height; r.opaque = entry.opaque; r.pixels = entry.pixels;
+    r.color = entry.color;
     return r;
   }
 
@@ -546,6 +585,7 @@ private:
   }
 
   void fetch_loop() {
+    name_thread("img-fetch");
     disk_.open(cache_directory_);
     unsigned active = 0;
     while (true) {
@@ -582,6 +622,7 @@ private:
   }
 
   void decode_loop() {
+    name_thread("img-decode");
     while (true) {
       EntryPtr entry;
       {

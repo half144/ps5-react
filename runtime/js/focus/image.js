@@ -103,6 +103,25 @@ Image.displayName = 'Image';
  * @param {string} uri @param {{width: number, height: number, resizeMode?: string}} box
  * @returns {Promise<void>}
  */
+/**
+ * The most prominent vivid colour of an image as '#rrggbb', at full brightness, or null when the art
+ * is grey or dark: for tinting an accent or the controller light bar. Decodes a small copy off the
+ * render thread; a URL already fetched is not downloaded again. Rejects with the load error.
+ * @param {string} uri
+ * @returns {Promise<string | null>}
+ */
+Image.getColor = uri => new Promise((resolve, reject) => {
+  let release = null, settled = false;
+  release = acquireImage(uri, 48, 72, FITS.cover, true, result => {
+    if (result.state === 'loading') return;
+    settled = true;
+    release?.();
+    if (result.state === 'ready') resolve(result.color);
+    else reject(new Error(result.error));
+  });
+  if (settled) release();
+});
+
 Image.prefetch = (uri, {width, height, resizeMode = 'cover'}) => new Promise((resolve, reject) => {
   let release = null, settled = false;
   release = acquireImage(uri, Math.round(width), Math.round(height), FITS[resizeMode] ?? 0, true, result => {

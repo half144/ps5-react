@@ -42,12 +42,13 @@
 //   network.cancel(id)             requests cancellation
 //   network.poll()                 progress/results; consumes terminal snapshots
 //   network.version()              transport version string
-//   image.load(url, width, height, fit, prefetch) {id, state, name, width, height, error}; takes a
+//   image.load(url, width, height, fit, prefetch) {id, state, name, width, height, error, color}; takes a
 //                                  reference; fit: 0 cover, 1 contain, 2 stretch, 3 none; prefetch
 //                                  (optional) loads after drawn images; state 'loading' |
-//                                  'ready' | 'failed'; name is the engine image name when ready
+//                                  'ready' | 'failed'; name is the engine image name when ready;
+//                                  color is '#rrggbb', the art's most prominent vivid hue, or null
 //   image.release(id)              drops a reference; cancels unfinished work without references
-//   image.poll()                   [{id, state, name, width, height, error}] finished since last poll
+//   image.poll()                   [{id, state, name, width, height, error, color}] finished since last poll
 //   sound.play(name, volume, pan)  ABI v5; boolean; posts an imported WAV to the mixer (volume
 //                                  0..1, pan -1..1); false without audio or while it still plays
 //   sound.setVolume(volume)        master gain 0..1 for every sound

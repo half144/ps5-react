@@ -147,14 +147,18 @@ options, resource limits, errors, lifecycle and the hardware-validation gap.
 `<Image source={{uri}}>` loads `http://` and `https://` URLs natively: fetched
 and decoded by two workers off the render thread, at the size the element is
 drawn, into a bounded LRU cache. `Image.prefetch(uri, {width, height,
-resizeMode})` warms that cache. The bridge (`image.load`, `image.release`,
-`image.poll`, ABI v3) is internal to the `Image` component. See
+resizeMode})` warms that cache. `Image.getColor(uri)` resolves to the art's most
+prominent vivid colour as `'#rrggbb'`, or `null` for grey or dark art, computed
+while decoding a small copy. The bridge (`image.load`, `image.release`,
+`image.poll`, ABI v3; results carry that `color`) is internal to the `Image` component. See
 [IMAGES.md](IMAGES.md) for sizing, formats, memory budgets and errors.
 
 ## Notifications
 
 `Notifications.show(message, subMessage?)` shows a system notification and
 returns `true` when the host accepted it.
+On PS5 it uses libkernel's `sceKernelSendNotificationRequest`: a plain toast whose
+subMessage follows the message on a second line.
 
 ## Users
 
@@ -328,9 +332,13 @@ The console must provide resident Lapy or an ELF loader on localhost port 9021.
 Startup can take several seconds; no access requests run during React renders.
 
 After success, `/app0`, `/download0`, and `/temp0` remain logical app paths mapped
-to their accessible sandbox mounts. If writable mounts disappeared after the
-root change, data falls back to `/data/ps5-react/<TITLE_ID>` and temporary files
-to its `tmp` directory. That fallback persists until explicitly removed.
+to their accessible sandbox mounts. Data and temporary roots must pass an
+exclusive file creation, write, read and removal proof; opening a directory
+for reading alone does not establish write access. If the original roots fail
+that proof after the root change, data falls back to
+`/data/ps5-react/<TITLE_ID>` and temporary files to its `tmp` directory. Directory
+creation and fallback proofs are checked and failures log the path and errno.
+That fallback persists until explicitly removed.
 Failure leaves console path mapping disabled and logs the upstream status.
 Optional native API modules are resolved before requesting the root change.
 Desktop behavior is unchanged. The opt-in integration was user-confirmed on

@@ -35,10 +35,16 @@ struct LoginUserIdList {
 };
 
 constexpr int kInvalidUserId = -1;
-constexpr int kNotificationSystemUser = 0xFE;
 }
 
+// libkernel's toast request, the one Spectrum and Orbit use; it needs no dlopen'd module.
+struct NotifyRequest {
+  char reserved[45];
+  char message[3075];
+};
+
 extern "C" {
+int sceKernelSendNotificationRequest(int device, NotifyRequest* request, std::size_t size, int blocking);
 int sceKernelGetSystemSwVersion(SystemSwVersion* version);
 int sceKernelGetCpuTemperature(int* temperature);
 int sceKernelGetSocSensorTemperature(int sensor, int* temperature);
@@ -91,43 +97,7 @@ private:
   Function function_ = nullptr;
 };
 
-OptionalSymbol<int (*)(int, bool, const char*)> notification_send{"libSceNotification.sprx", "sceNotificationSend"};
 OptionalSymbol<int (*)(char*)> hw_model_name{"libkernel_sys.sprx", "sceKernelGetHwModelName"};
-
-// Writes text as the body of a JSON string. False if it does not fit.
-bool json_escape(const char* text, char* out, std::size_t size) {
-  std::size_t used = 0;
-  for (const unsigned char* c = reinterpret_cast<const unsigned char*>(text); *c; ++c) {
-    char escaped[8];
-    int length;
-    if (*c == '"' || *c == '\\') length = std::snprintf(escaped, sizeof escaped, "\\%c", *c);
-    else if (*c < 0x20) length = std::snprintf(escaped, sizeof escaped, "\\u%04x", *c);
-    else { escaped[0] = static_cast<char>(*c); length = 1; }
-    if (used + static_cast<std::size_t>(length) >= size) return false;
-    std::memcpy(out + used, escaped, static_cast<std::size_t>(length));
-    used += static_cast<std::size_t>(length);
-  }
-  out[used] = '\0';
-  return true;
-}
-
-// ISO 8601 UTC from CLOCK_REALTIME without gmtime, which the app libc may lack
-// (days-to-civil conversion from Howard Hinnant's date algorithms).
-void utc_timestamp(char* out, std::size_t size) {
-  timespec now{};
-  clock_gettime(CLOCK_REALTIME, &now);
-  const std::int64_t seconds = now.tv_sec;
-  const std::int64_t days = seconds / 86400, rest = seconds % 86400;
-  const std::int64_t z = days + 719468, era = z / 146097, doe = z - era * 146097;
-  const std::int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
-  const std::int64_t day = doy - (153 * mp + 2) / 5 + 1, month = mp < 10 ? mp + 3 : mp - 9;
-  const std::int64_t year = yoe + era * 400 + (month <= 2);
-  std::snprintf(out, size, "%04lld-%02lld-%02lldT%02lld:%02lld:%02lld.%03ldZ",
-                static_cast<long long>(year), static_cast<long long>(month), static_cast<long long>(day),
-                static_cast<long long>(rest / 3600), static_cast<long long>(rest / 60 % 60),
-                static_cast<long long>(rest % 60), now.tv_nsec / 1000000);
-}
 
 bool user_name(int id, char* name, std::size_t size) {
   const int result = sceUserServiceGetUserName(id, name, size);
@@ -141,7 +111,6 @@ bool user_name(int id, char* name, std::size_t size) {
 
 void host_platform_set_pad(hui::ps5::Pad* pad) { active_pad = pad; }
 void host_platform_prepare_filesystem_access() {
-  notification_send.get();
   hw_model_name.get();
 }
 
@@ -327,21 +296,10 @@ int logged_in_users(User* users, int max) {
 }
 
 bool notify(const char* message, const char* sub_message) {
-  char body[512], sub_body[512], created[32], payload[2048];
-  if (!json_escape(message, body, sizeof body) || !json_escape(sub_message, sub_body, sizeof sub_body))
-    return false;
-  utc_timestamp(created, sizeof created);
-  const int length = std::snprintf(payload, sizeof payload,
-    "{\"rawData\":{\"viewTemplateType\":\"InteractiveToastTemplateB\",\"channelType\":\"Downloads\","
-    "\"useCaseId\":\"IDC\",\"toastOverwriteType\":\"No\",\"isImmediate\":true,\"priority\":100,"
-    "\"viewData\":{\"icon\":{\"type\":\"Predefined\",\"parameters\":{\"icon\":\"download\"}},"
-    "\"message\":{\"body\":\"%s\"},\"subMessage\":{\"body\":\"%s\"}}},"
-    "\"createdDateTime\":\"%s\",\"localNotificationId\":\"%lld\"}",
-    body, sub_body, created, static_cast<long long>(hui::sys::monotonic_us() % 1000000000));
-  const auto send = notification_send.get();
-  if (!send || length < 0 || static_cast<std::size_t>(length) >= sizeof payload) return false;
-  const int result = send(kNotificationSystemUser, true, payload);
-  if (result != 0) async_log::write("[PS5-REACT] sceNotificationSend=0x%08x", static_cast<unsigned>(result));
+  NotifyRequest request{};
+  std::snprintf(request.message, sizeof request.message, *sub_message ? "%s\n%s" : "%s", message, sub_message);
+  const int result = sceKernelSendNotificationRequest(0, &request, sizeof request, 0);
+  if (result != 0) async_log::write("[PS5-REACT] sceKernelSendNotificationRequest=0x%08x", static_cast<unsigned>(result));
   return result == 0;
 }
 
