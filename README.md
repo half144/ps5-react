@@ -54,11 +54,12 @@ The supported development environment is **macOS on Apple Silicon**.
 | Git, CMake, SDL2 and a C++ compiler | Dependency bootstrap and native desktop preview |
 | LLVM 18 | PS5 cross-compilation |
 | libcurl 7.85+ development files | Native desktop HTTP and image transport |
+| libarchive 3.7+ development files | Streaming ZIP, TAR, 7z and RAR extraction |
 
 1. Install native tools:
 
    ```sh
-   brew install python node git cmake sdl2 llvm@18 curl
+   brew install python node git cmake sdl2 llvm@18 curl libarchive
    ```
 
 2. Clone the project and install dependencies:

@@ -221,10 +221,12 @@ function taskError(task, snapshot) {
 function pollNetwork() {
   let snapshots;
   try {
-    snapshots = host().network.poll();
+    snapshots = [];
+    for (const backend of new Set([...networkTasks.values()].map(task => task.backend)))
+      snapshots.push(...host()[backend].poll().map(snapshot => ({...snapshot, backend})));
   } catch (error) {
-    for (const [id, task] of networkTasks) {
-      try { host().network.cancel(id); } catch {}
+    for (const task of networkTasks.values()) {
+      try { host()[task.backend].cancel(task.id); } catch {}
       task.listeners.clear();
       task.reject(error);
     }
@@ -233,16 +235,17 @@ function pollNetwork() {
     return;
   }
   for (const snapshot of snapshots) {
-    const task = networkTasks.get(snapshot.id);
+    const key = `${snapshot.backend}:${snapshot.id}`;
+    const task = networkTasks.get(key);
     if (!task) continue;
-    const {body, ...progress} = snapshot;
+    const {body, backend, ...progress} = snapshot;
     task.snapshot = Object.freeze({...progress, destination: task.destination});
     for (const listener of [...task.listeners]) {
       try { listener(task.snapshot); }
       catch (error) { console.error('Download progress listener failed:', error); }
     }
     if (snapshot.state === 'completed' || snapshot.state === 'failed' || snapshot.state === 'cancelled') {
-      networkTasks.delete(snapshot.id);
+      networkTasks.delete(key);
       task.listeners.clear();
       if (snapshot.state === 'completed') task.resolve({...snapshot, destination: task.destination});
       else task.reject(taskError(task, snapshot));
@@ -251,23 +254,24 @@ function pollNetwork() {
   stopNetworkTimer();
 }
 
-function networkTask(id, call, destination = '') {
-  const task = {call, destination, listeners: new Set(),
+function networkTask(id, call, destination = '', backend = 'network') {
+  const key = `${backend}:${id}`;
+  const task = {id, backend, call, destination, listeners: new Set(),
     snapshot: Object.freeze({id, destination, state: 'queued', received: 0, written: 0, total: null,
       bytesPerSecond: 0, connections: 0, retries: 0, bufferedBytes: 0})};
   const done = new Promise((resolve, reject) => { task.resolve = resolve; task.reject = reject; });
   // A task can be observed through subscriptions without awaiting its completion.
   done.catch(() => {});
-  networkTasks.set(id, task);
+  networkTasks.set(key, task);
   if (networkTimer === null) networkTimer = setInterval(pollNetwork, 250);
   return Object.freeze({
     id, done,
-    cancel() { if (networkTasks.has(id)) host().network.cancel(id); },
+    cancel() { if (networkTasks.has(key)) host()[backend].cancel(id); },
     get snapshot() { return task.snapshot; },
     subscribe(listener) {
       if (typeof listener !== 'function') throw new TypeError('Downloads.subscribe: expected a function');
       listener(task.snapshot);
-      if (networkTasks.has(id)) task.listeners.add(listener);
+      if (networkTasks.has(key)) task.listeners.add(listener);
       return () => task.listeners.delete(listener);
     },
   });
@@ -311,6 +315,14 @@ export const Downloads = {
   },
   get transportVersion() { return host().network.version(); },
 };
+
+/** Streaming archive extraction off-thread; source volumes are preserved on failure/cancel. */
+export const Archives = Object.freeze({
+  extract({sources, destination, maxBytes = 1024**4}) {
+    const id = host().archives.extract(sources, destination, maxBytes);
+    return networkTask(id, 'Archives.extract', destination, 'archives');
+  },
+});
 
 const pendingImages = new Map();
 let stopImagePolling = null;

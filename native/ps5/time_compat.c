@@ -15,14 +15,3 @@ struct tm *localtime_r(const time_t *time, struct tm *output) {
     pthread_mutex_unlock(&date_mutex);
     return result ? output : 0;
 }
-
-#if !PS5_REACT_NETWORKING
-struct tm *gmtime_r(const time_t *time, struct tm *output) {
-    pthread_mutex_lock(&date_mutex);
-    const struct tm *result = gmtime(time);
-    if (result) *output = *result;
-    pthread_mutex_unlock(&date_mutex);
-    return result ? output : 0;
-}
-
-#endif

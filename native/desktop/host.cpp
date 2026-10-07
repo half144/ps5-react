@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "network.hpp"
+#include "archives.hpp"
 #include "app_config.hpp"
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -128,7 +129,8 @@ struct Host {
 
   ~Host() {
     ps5_react_stop_images();
-    network::stop();
+    archives::stop();
+  network::stop();
     if (runtime_started) er_runtime_shutdown();
     ps5_react_stop_sound();
     if (backend_started) er_software_backend_destroy();

@@ -352,3 +352,31 @@ directory or select **Refresh** to query again; focus changes do not query stora
 - Music, streamed or long audio, and decoding compressed formats at run time.
 - The system on-screen keyboard (IME) for text input.
 - System save data; use `FileSystem.dataDir` for now.
+
+## Archive extraction
+
+```js
+import {Archives} from '@ps5-react/core';
+const task = Archives.extract({
+  sources: ['/data/downloads/part-1.bin', '/data/downloads/part-2.bin'],
+  destination: '/data/downloads/extracted/my-release',
+  maxBytes: 100 * 1024 ** 3,
+});
+const unsubscribe = task.subscribe(({state, written}) => console.log(state, written));
+try { const {artifacts} = await task.done; console.log(artifacts); }
+finally { unsubscribe(); }
+```
+
+`cancel()` requests cancellation. ZIP, TAR, 7z and RAR/RAR5 use libarchive in a
+worker thread. Supply ordered archive volumes; no full joined copy enters JS or
+RAM. One extraction may run at a time. Source files are preserved. Output paths,
+links, entry counts and byte budgets are validated. Extraction publishes a staged
+directory only after successful reading and SHA-256 output receipts. A matching
+published directory is reverified; matching interrupted staging is restarted.
+Unowned destinations/staging are preserved. Image artifacts are flattened to the
+output root for ShadowMount scan depth; duplicate filenames fail without overwrite.
+
+Encrypted archives, unsupported compression methods and RAR5 dictionaries above
+libarchive's supported limit fail explicitly. This API does not install PKGs or
+register games. Desktop extraction and successful PS5 linking are not console
+execution evidence.

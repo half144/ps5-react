@@ -12,10 +12,10 @@ def ports():
     item = LOCK["networkPorts"]
     root = DEPS / "network-ports" / item["version"]
     marker = root / ".complete"
-    if not marker.exists() or marker.read_text().strip() != item["sha256"]:
+    if not marker.exists() or marker.read_text().strip() != item["sha256"] or not (root / "lib/libarchive.a").exists():
         archive = fetch(item["url"], DEPS / "network-ports.tar.gz", item["sha256"])
         prefix = "opt/ps5-payload-sdk/target/user/homebrew/"
-        libraries = {"libcurl.a", "libssl.a", "libcrypto.a", "libz.a", "libzstd.a", "libpsl.a"}
+        libraries = {"libcurl.a", "libssl.a", "libcrypto.a", "libz.a", "libzstd.a", "libpsl.a", "libarchive.a", "liblzma.a", "libbz2.a"}
         root.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive) as package:
             for member in package:
@@ -23,7 +23,7 @@ def ports():
                 if not name.startswith(prefix):
                     continue
                 relative = name[len(prefix):]
-                if relative.startswith(("include/curl/", "include/openssl/")) or relative in {
+                if relative in {"include/archive.h", "include/archive_entry.h"} or relative.startswith(("include/curl/", "include/openssl/")) or relative in {
                     "lib/" + name for name in libraries
                 }:
                     member.name = relative
