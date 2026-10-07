@@ -34,6 +34,7 @@ def main():
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--app", default="starter")
     source.add_argument("--app-dir", type=Path)
+    parser.add_argument("--compile-only", action="store_true", help="Validate the PS5 ELF without generating an application package")
     parser.add_argument("--ui-reference", type=Path, default=DEPS / "platform")
     parser.add_argument("--embedded-react", type=Path, default=DEPS / "embeddedReact")
     parser.add_argument("--payload-sdk", type=Path, default=DEPS / "sdk/ps5-payload-sdk")
@@ -95,7 +96,8 @@ def main():
             log=BUILD / "filesystem-access-tests.log")
         run(["python3", ROOT / "tools/build_filesystem_helper.py", TITLE, helper, "--sdk", sdk],
             env=env, log=BUILD / "filesystem-helper.log")
-    network_ports = ports() if config.get("networking") else None
+    archive_ports = ports()
+    network_ports = archive_ports if config.get("networking") else None
     native = hui / "tooling/native"
     host_tool = BUILD / "host/ps5-native-tool"
     run(["clang++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -126,11 +128,11 @@ def main():
     definitions = next(line.split("=", 1)[1] for line in
                        (cross / "bridge/engine/CMakeFiles/embedded-react.dir/flags.make").read_text().splitlines()
                        if line.startswith("C_DEFINES ="))
-    sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/async_log.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/time_compat.c",
+    sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/async_log.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/time_compat.c", ROOT / "native/ps5/archive_compat.c",
                ROOT / "native/ps5/filesystem_access.cpp",
                ROOT / "native/ps5/elevation_transport.cpp",
                ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/network.cpp",
-               ROOT / "native/shared/network_api.cpp", ROOT / "native/ps5/network_platform.cpp",
+               ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
                ROOT / "native/shared/gl_presenter.cpp",
@@ -139,12 +141,14 @@ def main():
                hui / "src/core/input.cpp", hui / "src/audio/mixer.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]
     includes = [hui / "src", ROOT / "native/shared", ROOT / "native/ps5", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
-                er / "backends/software", quickjs, stb_image()]
+                er / "backends/software", quickjs, stb_image(), archive_ports / "include"]
     if access_client:
         sources.append(access_client / "examples/sandbox-elevation/src/elevation.cpp")
         includes.append(access_client / "examples/sandbox-elevation")
+    compatibility_client = access_client or dependency("filesystemHelperClient")
+    sources.append(compatibility_client / "examples/pacbrew-curl/compat.c")
     if network_ports:
-        sources.extend(access_client / "examples/pacbrew-curl" / name for name in ("compat.c", "netdb.c"))
+        sources.extend(access_client / "examples/pacbrew-curl" / name for name in ("netdb.c",))
         includes.append(network_ports / "include")
     objects = []
     for i, source in enumerate(sources):
@@ -159,6 +163,7 @@ def main():
     libs = sdk / "target/lib"
     agc_stubs = [gl / "lib/libSceAgc.so", gl / "lib/libSceAgcDriver.so"]
     network_libs = [network_ports / "lib" / name for name in ("libcurl.a", "libssl.a", "libcrypto.a", "libz.a", "libzstd.a", "libpsl.a")] if network_ports else []
+    archive_libs = [archive_ports / "lib" / name for name in ("libarchive.a", "liblzma.a", "libbz2.a", "libzstd.a", "libz.a", "libcrypto.a")]
     pie = BUILD / "llvm-pie.elf"
     wraps = ["malloc", "calloc", "realloc", "free", "posix_memalign", "malloc_usable_size",
              "sceSystemServiceHideSplashScreen"]
@@ -170,12 +175,15 @@ def main():
          "--start-group", cross / "liber-software.a", cross / "bridge/liber-bridge-quickjs.a",
          cross / "bridge/engine/libembedded-react.a", cross / "_deps/quickjs-build/libqjs.a",
          gl / "lib/libPS5OpenGL.a", libs / "libunwind.a", libs / "libc++abi.a", libs / "libc++.a",
-         *network_libs, builtins, "--end-group", "--as-needed", *agc_stubs, *sorted(libs.glob("*.so"))],
+         *network_libs, *archive_libs, builtins, "--end-group", "--as-needed", *agc_stubs, *sorted(libs.glob("*.so"))],
         env=env, log=BUILD / "link.log")
     elf = BUILD / "eboot.elf"
     run([host_tool, "link", "--in", pie, "--out", elf, "--stub-dir", libs,
          *[flag for path in agc_stubs for flag in ("--stub", path)], "--module-sdk", "0x02000009",
          "--companion-sdk", "0x08050001", "--file-name", "eboot.elf"])
+    if args.compile_only:
+        print(f"PS5 ELF linked: {elf}; no application package generated")
+        return
     app = ROOT / "dist" / TITLE
     (app / "sce_sys").mkdir(parents=True, exist_ok=True)
     (app / "sce_module").mkdir(exist_ok=True)
@@ -214,9 +222,13 @@ def main():
             (app / name).unlink(missing_ok=True)
     stb = (stb_image() / "stb_image.h").read_text()
     (notices / "stb_image-LICENSE").write_text(stb[stb.index("This software is available under 2 licenses"):])
-    if network_ports:
-        copy_notices(access_client, notices / "networking")
-        shutil.copy2(access_client / "LICENSE", notices / "networking-compat-LICENSE")
+    copy_notices(compatibility_client, notices / "networking")
+    shutil.copy2(compatibility_client / "LICENSE", notices / "networking-compat-LICENSE")
+    for entry in json.loads((ROOT / "licenses/archives-SOURCES.json").read_text()):
+        source = ROOT / "licenses" / entry["file"]
+        verify(source, entry["sha256"])
+        shutil.copy2(source, notices / entry["file"])
+    shutil.copy2(ROOT / "licenses/archives-SOURCES.json", notices / "archives-SOURCES.json")
     for name, source in {
         "ps5-react-LICENSE": ROOT / "LICENSE",
         "ps5-react-LICENSE-ATTRIBUTION": ROOT / "LICENSE-ATTRIBUTION",

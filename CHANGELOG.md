@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — native archive extraction
+
+- Add cancellable `Archives.extract` with streaming ordered-volume extraction,
+  bounded output, safe paths, atomic staging and SHA-256 completion recovery.
+- Reuse native task polling and integrity hashing for HTTP and archive workers.
+- Link pinned PacBrew archive/compression ports into native PS5 titles; add
+  `tools/build_ps5.py --compile-only` for package-free linker validation.
+
 ## Unreleased
 
 - `Downloads.enqueue` takes `mirrors`: other URLs serving the same file. Verified ones share the

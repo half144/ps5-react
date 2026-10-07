@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {acquireImage, Downloads, Http, Power, Sound} from './native.js';
+import {acquireImage, Archives, Downloads, Http, Power, Sound} from './native.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
   let tick;
@@ -116,6 +116,31 @@ test('Sound passes the name, volume and pan to the host and returns whether it s
     assert.deepEqual(calls, [['play', 'tick', 1, 0], ['play', 'page', 1, -0.4], ['play', 'tick', 0.5, 0],
       ['setVolume', 0]]);
   } finally {
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
+test('archive and download task IDs are isolated while sharing the polling timer', async () => {
+  const originalInterval = globalThis.setInterval, originalClear = globalThis.clearInterval;
+  let tick, networkSnapshots = [], archiveSnapshots = [];
+  const cancelled = [];
+  globalThis.setInterval = callback => { tick = callback; return 1; };
+  globalThis.clearInterval = () => {};
+  globalThis.__ps5ReactNative = {
+    network: {download: () => 1, poll: () => networkSnapshots, cancel: id => cancelled.push(`network:${id}`)},
+    archives: {extract: () => 1, poll: () => archiveSnapshots, cancel: id => cancelled.push(`archives:${id}`)},
+  };
+  try {
+    const download = Downloads.enqueue({url: 'https://example.com/file', destination: '/download0/file'});
+    const archive = Archives.extract({sources: ['/download0/file'], destination: '/download0/out'});
+    archive.cancel(); assert.deepEqual(cancelled, ['archives:1']);
+    archiveSnapshots = [{id: 1, state: 'completed', written: 50, artifacts: ['game.ffpfsc']}]; tick();
+    assert.deepEqual((await archive.done).artifacts, ['game.ffpfsc']);
+    assert.equal(download.snapshot.state, 'queued');
+    networkSnapshots = [{id: 1, state: 'completed', written: 100}]; tick();
+    assert.equal((await download.done).written, 100);
+  } finally {
+    globalThis.setInterval = originalInterval; globalThis.clearInterval = originalClear;
     delete globalThis.__ps5ReactNative;
   }
 });

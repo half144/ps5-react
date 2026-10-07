@@ -43,6 +43,9 @@
 //     terminal snapshots: status, body, effective url, allowlisted lowercase headers
 //   network.cancel(id)             requests cancellation
 //   network.poll()                 progress/results; consumes terminal snapshots
+//   archives.extract(sources, destination, maxBytes) task ID; bounded native archive worker
+//   archives.cancel(id)            requests cancellation; source volumes remain intact
+//   archives.poll()                state/error/written/entries/artifacts; consumes terminal results
 //   network.version()              transport version string
 //   image.load(url, width, height, fit, prefetch) {id, state, name, width, height, error, color}; takes a
 //                                  reference; fit: 0 cover, 1 contain, 2 stretch, 3 none; prefetch
@@ -159,3 +162,6 @@ JSValue ps5_react_sound_api(JSContext* ctx);
 // the output fails. Start before the bundle runs, stop after the runtime shuts down.
 bool ps5_react_start_sound();
 void ps5_react_stop_sound();
+
+// ABI v5 additive archive tasks: extract(sources, destination, maxBytes), cancel(id), poll().
+JSValue ps5_react_archive_api(JSContext* ctx);
