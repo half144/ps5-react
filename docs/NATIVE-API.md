@@ -385,6 +385,10 @@ Unowned destinations/staging are preserved. Image artifacts are flattened to the
 output root for ShadowMount scan depth; duplicate filenames fail without overwrite.
 
 Encrypted archives, unsupported compression methods and RAR5 dictionaries above
-libarchive's supported limit fail explicitly. This API does not install PKGs or
+libarchive's supported limit fail explicitly. Before extracting, the headers are
+read to refuse archives whose declared decoder windows (7z LZMA/LZMA2/PPMd/zstd
+and BCJ2 buffers, RAR5 windows, RAR PPMd, ZIP LZMA/XZ/zstd/PPMd, and an outer
+xz/zstd/lzip/lzma layer) exceed 32 MiB, since libarchive has no memory limit
+and the title's heap is fixed. Self-extracting executables are refused. This API does not install PKGs or
 register games. Desktop extraction and successful PS5 linking are not console
 execution evidence.

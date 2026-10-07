@@ -1,14 +1,47 @@
 """Real local archive extraction with the same native worker used on PS5."""
 from pathlib import Path
-import binascii,hashlib,io,json,subprocess,tarfile,tempfile,zipfile
+import binascii,hashlib,io,json,lzma,struct,subprocess,tarfile,tempfile,zipfile
 ROOT=Path(__file__).resolve().parents[1]
 DATA=bytes(range(256))*1024
+TOO_BIG="This archive needs more memory to extract than the console app can use."
+
+def number7z(v):
+ for n in range(8):
+  if v<1<<(8*n+7-n):return bytes([(0xFF00>>n)&0xFF|v>>(8*n)])+(v&((1<<8*n)-1)).to_bytes(n,"little")
+ return b"\xff"+v.to_bytes(8,"little")
+
+def encode_7z_header(plain):
+ """Rewrites a bsdtar 7z with the LZMA-compressed header 7-Zip writes by default."""
+ offset,size=struct.unpack("<QQ",plain[12:28]);header=plain[32+offset:32+offset+size]
+ packed=lzma.compress(header,format=lzma.FORMAT_RAW,filters=[{"id":lzma.FILTER_LZMA1,"dict_size":1<<16}])
+ coder=b"\x23\x03\x01\x01"+number7z(5)+b"\x5d"+(1<<16).to_bytes(4,"little")
+ encoded=(b"\x17\x06"+number7z(offset)+number7z(1)+b"\x09"+number7z(len(packed))+b"\x00"
+  +b"\x07\x0b"+number7z(1)+b"\x00"+number7z(1)+coder+b"\x0c"+number7z(len(header))+b"\x00\x00")
+ start=struct.pack("<QQI",offset+len(packed),len(encoded),binascii.crc32(encoded))
+ return plain[:8]+struct.pack("<I",binascii.crc32(start))+start+plain[32:32+offset]+packed+encoded
+
+def vint(v):
+ out=b""
+ while v>=0x80:out+=bytes([v&0x7f|0x80]);v>>=7
+ return out+bytes([v])
+
+def rar5_block(header,data=b""):
+ size=bytes([len(header)])
+ return struct.pack("<I",binascii.crc32(size+header))+size+header+data
+
+def rar5_with_window(shift):
+ """A RAR5 archive whose only file declares a 128 KiB << shift dictionary."""
+ data=bytes(64)
+ file=bytes([2,2,len(data),0,len(data),0])+vint(3<<7|shift<<10)+bytes([0,1])+b"a"
+ return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+rar5_block(file,data)+rar5_block(bytes([5,0,0]))
 
 def main():
  with tempfile.TemporaryDirectory(prefix="ps5-react-archives-") as tmp:
   root=Path(tmp);binary=root/"archive-client"
   prefix=subprocess.check_output(["brew","--prefix","libarchive"],text=True).strip()
-  subprocess.run(["clang++","-std=c++20","-O2","-Wall","-Wextra","-Werror","-pthread","-I",str(ROOT/"native/shared"),"-I",prefix+"/include",str(ROOT/"tools/tests/archive_client.cpp"),str(ROOT/"native/shared/archives.cpp"),"-L",prefix+"/lib","-larchive","-o",str(binary)],check=True)
+  xz=subprocess.check_output(["brew","--prefix","xz"],text=True).strip()
+  sources=[ROOT/"tools/tests/archive_client.cpp",ROOT/"native/shared/archives.cpp",ROOT/"native/shared/archive_preflight.cpp"]
+  subprocess.run(["clang++","-std=c++20","-O2","-Wall","-Wextra","-Werror","-pthread","-I",str(ROOT/"native/shared"),"-I",prefix+"/include","-I",xz+"/include",*map(str,sources),"-L",prefix+"/lib","-L",xz+"/lib","-larchive","-llzma","-o",str(binary)],check=True)
   def run(name,parts,limit=1024*1024):
    out=subprocess.check_output([str(binary),str(root/name),str(limit),*map(str,parts)],text=True,timeout=20).splitlines()
    return out
@@ -37,6 +70,34 @@ def main():
   result=run("split-7zip",seven_parts)
   assert result[0]=="completed",result
   assert (root/"split-7zip/payload.bin").read_bytes()==DATA
+  # Decoder windows above the console budget are refused before libarchive allocates them.
+  big=root/"big.7z"
+  subprocess.run([prefix+"/bin/bsdtar","--format=7zip","--options=7zip:compression=lzma2,7zip:compression-level=9","-cf",str(big),"-C",str(root),"payload.bin"],check=True)
+  assert run("big-7zip",[big])[1:]==["0",TOO_BIG]
+  assert not (root/"big-7zip").exists() and not (root/"big-7zip.extracting").exists()
+  encoded=root/"encoded.7z";encoded.write_bytes(encode_7z_header(seven.read_bytes()))
+  result=run("encoded-7zip",[encoded])
+  assert result[0]=="completed",result
+  assert (root/"encoded-7zip/payload.bin").read_bytes()==DATA
+  encoded_big=root/"encoded-big.7z";encoded_big.write_bytes(encode_7z_header(big.read_bytes()))
+  assert run("encoded-big-7zip",[encoded_big])[1:]==["0",TOO_BIG]
+  for preset,state in [(6,"completed"),(9,"failed")]:
+   p=root/f"preset{preset}.tar.xz";p.write_bytes(lzma.compress(tar.read_bytes(),preset=preset))
+   assert run(f"xz{preset}",[p])[0]==state
+  assert run("xz9",[root/"preset9.tar.xz"])[2]==TOO_BIG
+  p=root/"lzma.zip"
+  with zipfile.ZipFile(p,"w",compression=zipfile.ZIP_LZMA) as z:z.writestr("file.bin",DATA)
+  assert run("zip-lzma",[p])[0]=="completed"
+  p=root/"window.rar";p.write_bytes(rar5_with_window(9))
+  assert run("rar5-window",[p])[1:]==["0",TOO_BIG]
+  p=root/"small-window.rar";p.write_bytes(rar5_with_window(5))
+  assert run("rar5-small-window",[p])[2]!=TOO_BIG
+  # A sparse member arrives out of order, so its digest comes from reading the file back.
+  sparse=root/"sparse.bin"
+  with sparse.open("wb") as f:f.write(b"head"*1000);f.seek(8*1024*1024);f.write(b"tail"*1000)
+  p=root/"sparse.tar";subprocess.run([prefix+"/bin/bsdtar","--read-sparse","-cf",str(p),"-C",str(root),"sparse.bin"],check=True)
+  assert run("sparse",[p],16*1024*1024)[0]=="completed"
+  assert (root/"sparse/.ps5-react-extraction").read_text().splitlines()[1]==hashlib.sha256(sparse.read_bytes()).hexdigest()+"|sparse.bin"
   assert run("missing-part",parts[:1])[0]=="failed"
   assert not (root/"missing-part").exists()
   rar_parts=[]
@@ -73,5 +134,5 @@ def main():
   assert (root/"zip/game.ffpfsc").read_bytes()==DATA
   (root/"zip/game.ffpfsc").write_bytes(b"corrupt")
   assert run("zip",[zip])[0]=="failed"
-  print("PASS: ZIP/TAR/7z/multivolume RAR, interrupted staging, verified recovery, missing parts and unsafe archive rejection")
+  print("PASS: ZIP/TAR/7z/multivolume RAR, decoder memory refusal, interrupted staging, verified recovery, missing parts and unsafe archive rejection")
 if __name__=="__main__":main()
