@@ -136,6 +136,10 @@ outputs still go to this repository's `.build/<name>/` and `dist/<TITLE_ID>/`.
 `.git/` and `node_modules/` inside it are ignored by the watcher and the build
 receipt, which records app files as `app/<path>`.
 
+PNG files in the app's `sce_sys/` go into the title's `sce_sys/`: `icon0.png`
+(512×512) is the home-screen icon and `pic0.png` (1920×1080) its background.
+Without an `icon0.png` the build draws a placeholder icon.
+
 `@ps5-react/core` and React resolve through this repository's bundler, so the
 external project needs no `node_modules`. For editor IntelliSense, add a
 `jsconfig.json` whose paths point back to this checkout (adjust `../ps5-react`):

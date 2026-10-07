@@ -185,14 +185,19 @@ def main():
     param.update(titleId=TITLE, conceptId=TITLE[4:], contentId=config["contentId"], contentVersion=config["version"])
     param["localizedParameters"]["en-US"]["titleName"] = config["name"]
     (app / "sce_sys/param.json").write_text(json.dumps(param, indent=2) + "\n")
-    # A reproducible proof icon in the demo's existing colors, without kit artwork.
-    from PIL import Image, ImageDraw, ImageFont
-    image = Image.new("RGB", (512, 512), "#101820")
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype(str(er / "assets/fonts/Inter-Regular.ttf"), 64)
-    draw.text((48, 140), "PS5", font=font, fill="#45d4de")
-    draw.text((48, 225), "React", font=font, fill="white")
-    image.save(app / "sce_sys/icon0.png")
+    # An app's own home-screen art (icon0.png 512x512, pic0.png 1920x1080) replaces the proof icon.
+    art = sorted((app_dir / "sce_sys").glob("*.png"))
+    for path in art:
+        shutil.copy2(path, app / "sce_sys" / path.name)
+    if not any(path.name == "icon0.png" for path in art):
+        # A reproducible proof icon in the demo's existing colors, without kit artwork.
+        from PIL import Image, ImageDraw, ImageFont
+        image = Image.new("RGB", (512, 512), "#101820")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.truetype(str(er / "assets/fonts/Inter-Regular.ttf"), 64)
+        draw.text((48, 140), "PS5", font=font, fill="#45d4de")
+        draw.text((48, 225), "React", font=font, fill="white")
+        image.save(app / "sce_sys/icon0.png")
     notices = app / "notices"
     notices.mkdir(exist_ok=True)
     if access_client:
