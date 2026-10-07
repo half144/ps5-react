@@ -11,8 +11,9 @@ set(ERUI_BORDER_AA ON CACHE BOOL "" FORCE)
 set(ERUI_TRANSFORMS FULL CACHE STRING "" FORCE)
 set(ERUI_SCRATCH_W 512 CACHE STRING "" FORCE)
 set(ERUI_SCRATCH_H 512 CACHE STRING "" FORCE)
-# Motion allocates one Animated.Value per animated key per element (716 B each with 8 bindings).
-set(ERUI_MAX_ANIM_VALUES 256 CACHE STRING "" FORCE)
+# Motion allocates one Animated.Value per animated key per element (716 B each with 8 bindings). A
+# search over a large catalog mounts enough animated cards at once to exhaust 256.
+set(ERUI_MAX_ANIM_VALUES 1024 CACHE STRING "" FORCE)
 set(ERUI_MAX_VALUE_BINDINGS 8 CACHE STRING "" FORCE)
 # Photos are baked at half size and drawn up to 2560 px wide: bilinear, one full-width row in the
 # scaler and gradient pools (+7 KB each over 800 px), and 256 image slots (+11 KB at 88 B per slot).
