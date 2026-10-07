@@ -47,6 +47,10 @@ extern const unsigned long proof_bundle_length;
 }
 
 namespace {
+// Startup steps log their time since main(), to show where launch time goes.
+std::int64_t launch_us = 0;
+long long since_launch_ms() { return (hui::sys::monotonic_us() - launch_us) / 1000; }
+
 // A file in the app folder's dev/ directory. After console filesystem elevation /app0 is only a
 // logical path, so it is resolved like the native API's paths.
 std::string dev_path(const char* name) {
@@ -199,7 +203,7 @@ bool run_proof() {
   FrameStats stats;
   bool runtime = false, software = false;
   bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT);
-  async_log::write("[PS5-REACT] display=%d", ok);
+  async_log::write("[PS5-REACT] display=%d at %lldms", ok, since_launch_ms());
   if (ok) {
     ok = presenter.init(width, height);
     async_log::write("[PS5-REACT] presenter=%d", ok);
@@ -212,12 +216,12 @@ bool run_proof() {
   // The pad opens before the bundle runs: it also initializes the user service
   // that the users, notification and browser calls need.
   if (ok) {
-    async_log::write("[PS5-REACT] pad=%d", pad.open());
+    async_log::write("[PS5-REACT] pad=%d at %lldms", pad.open(), since_launch_ms());
     host_platform_set_pad(&pad);
   }
   if (ok) {
     if (network::start()) ps5_react_start_images();
-    async_log::write("[PS5-REACT] sound=%d", ps5_react_start_sound());
+    async_log::write("[PS5-REACT] sound=%d at %lldms", ps5_react_start_sound(), since_launch_ms());
     ErRuntimeConfig config = {};
     config.screen_width = width; config.screen_height = height;
     config.screen_scale = 2;
@@ -228,12 +232,12 @@ bool run_proof() {
     config.install_host_globals = ps5_react_install_host_api;
     runtime = er_runtime_init(&config);
     ok = runtime;
-    async_log::write("[PS5-REACT] runtime=%d", ok);
+    async_log::write("[PS5-REACT] runtime=%d at %lldms", ok, since_launch_ms());
   }
   if (ok) {
     er_register_assets();
     ok = er_runtime_load_source(proof_bundle, proof_bundle_length, "app.jsx.bundle");
-    async_log::write("[PS5-REACT] bundle=%d gc_accounting=%d", ok, er_runtime_gc_accounting_ok());
+    async_log::write("[PS5-REACT] bundle=%d gc_accounting=%d at %lldms", ok, er_runtime_gc_accounting_ok(), since_launch_ms());
   }
   if (ok) {
     // Input failure is logged; timeout still allows the display-only proof to end.
@@ -308,7 +312,7 @@ bool run_proof() {
       if (!first_present) {
         first_present = hui::sys::monotonic_us();
         hui::sys::hide_splash_screen();
-        async_log::write("[PS5-REACT] first frame presented");
+        async_log::write("[PS5-REACT] first frame presented at %lldms", since_launch_ms());
       }
       embedded_renderer_tick(static_cast<std::uint32_t>(std::clamp<std::int64_t>((now-previous)/1000, 0, 50)));
       previous = now;
@@ -333,7 +337,7 @@ bool run_proof() {
 
 void* render_thread(void*) {
   name_thread("render");
-  hui::sys::log("[PS5-REACT] render thread started, 8 MiB stack");
+  hui::sys::log("[PS5-REACT] render thread started, 8 MiB stack, at %lldms", since_launch_ms());
   if (!async_log::start()) hui::sys::log("[PS5-REACT] log writer thread failed; logging synchronously");
   const bool ok = run_proof();
   async_log::stop();
@@ -345,6 +349,7 @@ void* render_thread(void*) {
 
 int main() {
   hui::sys::log("[PS5-REACT] %s (%s)", PS5_REACT_NAME, PS5_REACT_TITLE);
+  launch_us = hui::sys::monotonic_us();
   initialize_filesystem_access();
   pthread_attr_t attributes;
   int result = pthread_attr_init(&attributes);
