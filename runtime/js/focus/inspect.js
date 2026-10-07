@@ -18,6 +18,11 @@ export function textOf(value, depth = 0) {
   return '';
 }
 
+function inert(scope) {
+  for (; scope; scope = scope.parent) if (scope.props.inert) return true;
+  return false;
+}
+
 /** @param {import('./manager.js').FocusManager} manager */
 export function installInspector(manager) {
   globalThis.__ps5ReactInspect = () => JSON.stringify([...manager.nodes].map(node => {
@@ -28,6 +33,8 @@ export function installInspector(manager) {
       text: (node.texts?.size ? [...node.texts.values()].join(' ') : textOf(node.props)).replace(/\s+/g, ' ').trim().slice(0, 160),
       x: round(rect?.x), y: round(rect?.y), width: round(rect?.width), height: round(rect?.height),
       focused: manager.focused === node,
+      // In a hidden layer (browse under another screen): laid out and on screen, but unreachable.
+      inert: inert(node.scope),
       // On screen: inside the 1920×1080 render, not merely laid out somewhere in a scrolled page.
       visible: Boolean(rect && (rect.width > 0 || rect.height > 0) && rect.x < screen.width && rect.y < screen.height
         && rect.x + rect.width > 0 && rect.y + rect.height > 0),

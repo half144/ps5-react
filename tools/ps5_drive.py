@@ -6,13 +6,19 @@
   ps5_drive.py start --app-dir <dir>    build and launch the preview with its control channel
   ps5_drive.py press down               up/down/left/right/confirm/back/triangle/square/l1/r1/l2/r2
   ps5_drive.py focus <focusKey>         move focus to an element by key
-  ps5_drive.py snapshot                 focusable elements as JSON: focusKey, text, rect, focused
+  ps5_drive.py snapshot [--all|--json]  the focusable elements on screen, one line each with a ref:
+                                        @e3 > "Hi-Fi RUSH · View game" key=trio:PPSA17168 [72,812 400x420]
+                                        (> marks focus; rects in logical px). --all adds off-screen and
+                                        hidden-layer elements; --json prints the raw records
+  ps5_drive.py diff                     what changed on screen since the last snapshot or diff
+  ps5_drive.py focus <key|@ref>         move focus by focusKey or by a ref from the last snapshot
   ps5_drive.py shot <path.bmp>          the frame on screen, 960×540
   ps5_drive.py logs                     output printed since the last call
   ps5_drive.py wait <ms>                return after that many milliseconds of frames
   ps5_drive.py stop
 """
 import fcntl
+import json
 import os
 from pathlib import Path
 import signal
@@ -73,6 +79,72 @@ def stop():
         PID.unlink()
 
 
+STATE = Path(SOCKET + ".snapshot.json")
+SCALE = 1.5  # render px per logical px
+TEXT = 60
+
+
+def records():
+    return json.loads(send("snapshot"))
+
+
+def on_screen(record):
+    return record["visible"] and not record.get("inert")
+
+
+def lines(nodes):
+    """One line per element, like agent-browser's accessibility snapshot: ref, focus mark, text, key, rect."""
+    out = []
+    for index, node in enumerate(nodes, 1):
+        text = node["text"] if len(node["text"]) <= TEXT else node["text"][:TEXT - 1] + "…"
+        rect = "[{},{} {}x{}]".format(*(round(node[k] / SCALE) for k in ("x", "y", "width", "height")))
+        key = f' key={node["focusKey"]}' if node["focusKey"] else ""
+        out.append(f'@e{index} {">" if node["focused"] else " "} "{text}"{key} {rect}')
+    return out
+
+
+def snapshot(flags):
+    nodes = records()
+    if "--json" in flags:
+        return print(json.dumps(nodes))
+    shown = nodes if "--all" in flags else [node for node in nodes if on_screen(node)]
+    STATE.write_text(json.dumps(shown))
+    print("\n".join(lines(shown)) or "(nothing focusable on screen)")
+
+
+def diff():
+    """By element, not by line: a scroll moves every rect, which is one fact, not a changed screen."""
+    before = json.loads(STATE.read_text()) if STATE.exists() else []
+    after = [node for node in records() if on_screen(node)]
+    STATE.write_text(json.dumps(after))
+    key = lambda node: node["focusKey"] or f'{node["text"]}@{node["x"]},{node["y"]}'
+    old, new = {key(node): node for node in before}, {key(node): node for node in after}
+    listed = dict(zip(map(key, after), lines(after)))
+    out = []
+    was = next((node for node in before if node["focused"]), None)
+    now = next((node for node in after if node["focused"]), None)
+    if was is not now and (was and key(was)) != (now and key(now)):
+        out.append(f'focus: {was and key(was)} -> {listed.get(key(now)) if now else None}')
+    out += [f"+ {listed[name]}" for name in new if name not in old]
+    out += [f'- "{old[name]["text"][:TEXT]}" key={name}' for name in old if name not in new]
+    changed = [listed[name] for name in new if name in old and new[name]["text"] != old[name]["text"]]
+    out += [f"~ {line}" for line in changed]
+    moved = sum(1 for name in new if name in old and (new[name]["x"], new[name]["y"]) != (old[name]["x"], old[name]["y"]))
+    if moved:
+        out.append(f"({moved} moved, e.g. by a scroll)")
+    print("\n".join(out) or "(no change)")
+
+
+def resolve(target):
+    if not target.startswith("@e"):
+        return target
+    nodes = json.loads(STATE.read_text()) if STATE.exists() else []
+    index = int(target[2:]) - 1
+    if not 0 <= index < len(nodes) or not nodes[index]["focusKey"]:
+        raise SystemExit(f"{target}: no such ref with a focusKey in the last snapshot")
+    return nodes[index]["focusKey"]
+
+
 def main():
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
@@ -84,6 +156,12 @@ def main():
     if args[0] == "stop":
         return stop()
     try:
+        if args[0] == "snapshot":
+            return snapshot(args[1:])
+        if args[0] == "diff":
+            return diff()
+        if args[0] == "focus" and len(args) == 2:
+            return print(send(f"focus {resolve(args[1])}"))
         print(send(" ".join(args)))
     except OSError as error:
         raise SystemExit(f"No preview on {SOCKET} ({error}); run: ps5_drive.py start --app-dir <dir>")
