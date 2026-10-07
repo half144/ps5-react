@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     // A release before completion cancels the transfer and never reports.
     const auto id = load(url, 64, 64, 0, now);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    images::release(id);
+    images::release(id, false);
     std::printf("{\"reported\":%zu}\n", wait(1, 1500).size());
   } else if (mode == "evict") {
     // Unused images over budget are evicted oldest first; images in use never are.
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     std::vector<std::uint32_t> ids;
     for (int i = 0; i < count; ++i) ids.push_back(load(url + "?n=" + std::to_string(i), 1024, 1024, 2, now));
     const auto results = wait(static_cast<std::size_t>(count), 30000);
-    for (std::size_t i = 1; i < ids.size(); ++i) images::release(ids[i]);
+    for (std::size_t i = 1; i < ids.size(); ++i) images::release(ids[i], false);
     wait(1, 50);
     std::printf("{\"loaded\":%zu,\"evicted\":%zu,\"first\":%u,\"kept\":%s}\n", results.size(), evicted.size(),
                 evicted.empty() ? 0 : evicted.front(),

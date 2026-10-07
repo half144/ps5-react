@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // <Image>: bundled assets by name, and http(s) URLs loaded natively at the size they are drawn.
 import {createElement, forwardRef, useLayoutEffect, useReducer, useRef} from 'react';
-import {acquireImage} from '../native.js';
+import {acquireImage, warmImages} from '../native.js';
 import {createFocusable, isFocusable, resolveStyle} from './focusable.js';
 
 const HostImage = createFocusable('Image');
@@ -121,6 +121,14 @@ Image.getColor = uri => new Promise((resolve, reject) => {
   });
   if (settled) release();
 });
+
+/**
+ * Fills the disk cache with `uris` in the background, in order: a few connections, only while no
+ * image waits to load, and only files up to 512 KiB. Nothing is decoded, so a later load still
+ * decodes, from disk instead of the network. Each call replaces the previous list.
+ * @param {string[]} uris
+ */
+Image.warm = uris => warmImages(uris);
 
 Image.prefetch = (uri, {width, height, resizeMode = 'cover'}) => new Promise((resolve, reject) => {
   let release = null, settled = false;

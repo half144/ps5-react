@@ -354,6 +354,14 @@ function pollImagesSoon() {
  * @param {(result: {state: string, name: string, width: number, height: number, error: string, color: string | null}) => void} listener
  * @returns {() => void}
  */
+/**
+ * Internal: replaces the list of URLs the host fetches into its disk cache in the background, while
+ * no image load waits. @param {string[]} uris
+ */
+export function warmImages(uris) {
+  host().image.warm(uris);
+}
+
 export function acquireImage(uri, width, height, fit, prefetch, listener) {
   const result = host().image.load(uri, width, height, fit, prefetch);
   const {id} = result;
@@ -366,7 +374,7 @@ export function acquireImage(uri, width, height, fit, prefetch, listener) {
     const listeners = pendingImages.get(id);
     listeners?.delete(listener);
     if (listeners?.size === 0) pendingImages.delete(id);
-    host().image.release(id);
+    host().image.release(id, prefetch);
     pollImagesSoon();
   };
   try {

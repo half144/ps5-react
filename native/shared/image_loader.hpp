@@ -21,7 +21,7 @@ constexpr std::size_t kMaxEncodedBytes = 8 * 1024 * 1024;
 // Encoded bytes kept by URL, so the same image drawn at another size decodes without a fetch.
 constexpr std::size_t kEncodedCacheBytes = 4 * 1024 * 1024;
 // Encoded responses kept on disk between launches; entries older than a week are fetched again.
-constexpr std::size_t kDiskCacheBytes = 64 * 1024 * 1024;
+constexpr std::size_t kDiskCacheBytes = 256 * 1024 * 1024;
 // One image decodes at a time, holding up to about 8 bytes per source pixel (PNG) while it does.
 constexpr std::uint64_t kMaxSourcePixels = 5000000;
 
@@ -45,8 +45,12 @@ void stop(void (*evict)(std::uint32_t id));
 // Prefetches are fetched and decoded after images an element draws.
 std::uint32_t load(const std::string& url, int width, int height, Fit fit, bool prefetch, Result& result,
                    std::string& error);
-// Drops one reference. Unfinished work without references is cancelled.
-void release(std::uint32_t id);
+// Drops one reference, taken by a load with the same `prefetch`. Unfinished work without references
+// is cancelled; an image no element draws any more waits behind those on screen.
+void release(std::uint32_t id, bool prefetch);
+// Replaces the warm list: URLs fetched into the disk cache, in order, on a few connections while no
+// load waits, skipping those cached and responses over 512 KiB. Nothing is decoded.
+void warm(std::vector<std::string> urls);
 // Finished loads since the last poll. Evicts unused images over budget first, calling `evict`
 // before their pixels are freed.
 std::vector<Result> poll(void (*evict)(std::uint32_t id));

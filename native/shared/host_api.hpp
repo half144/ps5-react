@@ -52,7 +52,10 @@
 //                                  (optional) loads after drawn images; state 'loading' |
 //                                  'ready' | 'failed'; name is the engine image name when ready;
 //                                  color is '#rrggbb', the art's most prominent vivid hue, or null
-//   image.release(id)              drops a reference; cancels unfinished work without references
+//   image.release(id, prefetch)    drops a reference taken by a load with the same prefetch;
+//                                  cancels unfinished work without references
+//   image.warm(urls)               fills the disk cache with `urls` in the background, after loads;
+//                                  replaces the previous list
 //   image.poll()                   [{id, state, name, width, height, error, color}] finished since last poll
 //   sound.play(name, volume, pan)  ABI v5; boolean; posts an imported WAV to the mixer (volume
 //                                  0..1, pan -1..1); false without audio or while it still plays

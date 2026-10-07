@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+- Remote images on screen load newest first, ahead of every prefetch. An image counted as on screen
+  once stayed so while a prefetch held it, so a held key queued hundreds of covers ahead of those
+  shown; after 150 rows scrolled, on-screen covers waited 24 s (now 0.15 s on an M4). Images take
+  32 connections instead of 12. `image.release(id, prefetch)` names the reference it drops.
+- Add `Image.warm(uris)`: fills the disk cache in the background on up to four connections while
+  no image waits, skipping cached URLs and files over 512 KiB, without decoding. The disk cache
+  grows from 64 to 256 MiB.
+
 - `Downloads.enqueue` takes `mirrors`: other URLs serving the same file. Verified ones share the
   ranges with the primary, and one that fails is dropped; servers that limit each host serve more
   together.

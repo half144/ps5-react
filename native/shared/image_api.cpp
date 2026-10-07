@@ -72,7 +72,26 @@ JSValue load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 JSValue release(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   std::uint32_t id = 0;
   if (!argc || JS_ToUint32(ctx, &id, argv[0])) return JS_ThrowTypeError(ctx, "image.release: expected an image id");
-  images::release(id);
+  images::release(id, argc > 1 && JS_ToBool(ctx, argv[1]) == 1);
+  return JS_UNDEFINED;
+}
+
+JSValue warm(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+  if (!argc || !JS_IsArray(argv[0])) return JS_ThrowTypeError(ctx, "image.warm: expected an array of URLs");
+  std::int64_t length = 0;
+  if (JS_GetLength(ctx, argv[0], &length)) return JS_EXCEPTION;
+  std::vector<std::string> urls;
+  for (std::int64_t i = 0; i < length; ++i) {
+    JSValue item = JS_GetPropertyInt64(ctx, argv[0], i);
+    if (const char* text = JS_ToCString(ctx, item)) {
+      std::string url(text);
+      JS_FreeCString(ctx, text);
+      if ((url.starts_with("https://") || url.starts_with("http://")) && url.size() <= 8192 &&
+          url.find_first_of(std::string("\r\n\0", 3)) == std::string::npos) urls.push_back(std::move(url));
+    }
+    JS_FreeValue(ctx, item);
+  }
+  images::warm(std::move(urls));
   return JS_UNDEFINED;
 }
 
@@ -101,7 +120,7 @@ void ps5_react_stop_images() { images::stop(unregister); }
 
 JSValue ps5_react_image_api(JSContext* ctx) {
   JSValue out = JS_NewObject(ctx);
-  for (const auto& item : {std::pair<const char*, JSCFunction*>{"load", &load}, {"release", &release}, {"poll", &poll}})
+  for (const auto& item : {std::pair<const char*, JSCFunction*>{"load", &load}, {"release", &release}, {"warm", &warm}, {"poll", &poll}})
     JS_SetPropertyStr(ctx, out, item.first, JS_NewCFunction(ctx, item.second, item.first, 0));
   return out;
 }

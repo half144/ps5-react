@@ -51,7 +51,12 @@
 namespace images {
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr unsigned kConnections = 12, kAttempts = 3;
+constexpr unsigned kConnections = 32, kAttempts = 3;
+constexpr std::uint64_t kDrawn = std::uint64_t{1} << 62;
+// Warming fills the disk cache in the background: a few connections, only while no load waits, and
+// only files small enough that many fit.
+constexpr unsigned kWarmConnections = 4;
+constexpr std::size_t kWarmMaxBytes = 512 * 1024;
 
 struct Entry {
   ~Entry() { std::free(pixels); }
@@ -60,8 +65,10 @@ struct Entry {
   int box_width = 0, box_height = 0;
   Fit fit = Fit::cover;
   std::atomic<bool> cancelled{false};
-  // Drawn by an element, not only prefetched: fetched and decoded before prefetches.
-  std::atomic<bool> wanted{false};
+  // Fetch order, highest first: kDrawn plus the request sequence while an element draws it (the image
+  // that came on screen last is the one looked at), else the sequence of its latest prefetch. A held
+  // key scrolls past hundreds of covers; serving them oldest first left the ones on screen waiting.
+  std::atomic<std::uint64_t> rank{0};
   // Written by the workers before the entry is handed to poll() under the service mutex.
   std::shared_ptr<const std::string> body;
   std::uint32_t* pixels = nullptr;
@@ -72,8 +79,8 @@ struct Entry {
   unsigned attempts = 0;
   Clock::time_point retry_at{};
   // Render thread only.
-  unsigned refs = 0;
-  std::uint64_t used = 0;
+  unsigned refs = 0, drawers = 0;
+  std::uint64_t used = 0, prefetched = 0;
   bool reported = false;
 };
 using EntryPtr = std::shared_ptr<Entry>;
@@ -84,6 +91,8 @@ struct Transfer {
   std::string url, body;
   std::vector<EntryPtr> entries;
   bool overflow = false;
+  // Started by warm(): written to the disk cache; loads of its URL join it.
+  bool warm = false;
 };
 
 // Recently fetched encoded bytes by URL, so another box for the same image decodes without a fetch.
@@ -256,6 +265,8 @@ public:
     trim();
   }
 
+  bool has(const std::string& url) { return !directory_.empty() && find(key(url)); }
+
   std::shared_ptr<const std::string> read(const std::string& url) {
     if (directory_.empty()) return nullptr;
     const std::string name = key(url);
@@ -402,10 +413,18 @@ public:
       { std::lock_guard lock(mutex_); fetches_.push_back(entry); }
       curl_multi_wakeup(multi_);
     }
-    if (!prefetch) entry->wanted = true;
     ++entry->refs; entry->used = ++clock_;
+    if (prefetch) entry->prefetched = clock_;
+    else ++entry->drawers;
+    entry->rank = entry->drawers ? kDrawn | clock_ : entry->prefetched;
     result = report(*entry);
     return entry->id;
+  }
+
+  void warm(std::vector<std::string> urls) {
+    if (!running_) return;
+    { std::lock_guard lock(mutex_); warms_.assign(std::make_move_iterator(urls.begin()), std::make_move_iterator(urls.end())); }
+    curl_multi_wakeup(multi_);
   }
 
   void discard(std::uint32_t id, const std::string& reason) {
@@ -417,10 +436,11 @@ public:
     entry.error = message(entry, reason);
   }
 
-  void release(std::uint32_t id) {
+  void release(std::uint32_t id, bool prefetch) {
     const auto found = by_id_.find(id);
     if (found == by_id_.end()) return;
     const EntryPtr entry = found->second;
+    if (!prefetch && entry->drawers && !--entry->drawers) entry->rank = entry->prefetched;
     if (--entry->refs) return;
     entry->used = ++clock_;
     if (entry->reported && entry->pixels) { over_budget_ = true; return; }
@@ -484,14 +504,17 @@ private:
   static std::size_t body(char* data, std::size_t size, std::size_t count, void* opaque) {
     auto& t = *static_cast<Transfer*>(opaque);
     const std::size_t length = size * count;
-    if (length > kMaxEncodedBytes - t.body.size()) { t.overflow = true; return 0; }
+    const std::size_t limit = t.entries.empty() ? kWarmMaxBytes : kMaxEncodedBytes;
+    if (length > limit - t.body.size()) { t.overflow = true; return 0; }
     t.body.append(data, length);
     return length;
   }
 
   // Aborts a transfer once every load waiting for it has been released.
   static int progress(void* opaque, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
-    const auto& entries = static_cast<Transfer*>(opaque)->entries;
+    const auto& t = *static_cast<Transfer*>(opaque);
+    const auto& entries = t.entries;
+    if (t.warm && entries.empty()) return 0;
     return std::all_of(entries.begin(), entries.end(), [](const EntryPtr& e) { return e->cancelled.load(); }) ? 1 : 0;
   }
 
@@ -533,11 +556,47 @@ private:
       decode_later({std::move(entry)}, body);
       return;
     }
-    for (Transfer& t : transfers_) if (!t.entries.empty() && t.url == entry->url) { t.entries.push_back(std::move(entry)); return; }
-    Transfer* t = nullptr;
-    for (Transfer& candidate : transfers_) if (candidate.entries.empty()) { t = &candidate; break; }
-    t->url = entry->url; t->body.clear(); t->overflow = false;
+    for (Transfer& t : transfers_) if (busy(t) && t.url == entry->url) { t.entries.push_back(std::move(entry)); return; }
+    Transfer* t = begin(entry->url, false);
     t->entries.push_back(std::move(entry));
+    if (!send(*t)) {
+      for (const EntryPtr& e : t->entries) fail(e, "could not configure the HTTP transport");
+      t->entries.clear();
+      return;
+    }
+    ++active;
+  }
+
+  static bool busy(const Transfer& t) { return t.warm || !t.entries.empty(); }
+
+  Transfer* begin(const std::string& url, bool warm) {
+    Transfer* t = nullptr;
+    for (Transfer& candidate : transfers_) if (!busy(candidate)) { t = &candidate; break; }
+    t->url = url; t->body.clear(); t->overflow = false; t->warm = warm;
+    return t;
+  }
+
+  // Fetch thread: the next warm URL not already cached or in flight, on a connection of its own.
+  void start_warm(unsigned& active, unsigned& warming) {
+    while (true) {
+      std::string url;
+      {
+        std::lock_guard lock(mutex_);
+        if (warms_.empty()) return;
+        url = std::move(warms_.front());
+        warms_.pop_front();
+      }
+      if (cached(url) || disk_.has(url) || std::any_of(transfers_.begin(), transfers_.end(),
+          [&](const Transfer& t) { return busy(t) && t.url == url; })) continue;
+      Transfer* t = begin(url, true);
+      if (!send(*t)) { t->warm = false; return; }
+      ++active; ++warming;
+      return;
+    }
+  }
+
+  bool send(Transfer& transfer) {
+    Transfer* t = &transfer;
     curl_easy_reset(t->curl);
     bool ok = network::configure_transport(t->curl, t->url, true);
     const auto set = [&](CURLoption option, auto value) { ok = ok && curl_easy_setopt(t->curl, option, value) == CURLE_OK; };
@@ -545,13 +604,12 @@ private:
     set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, t);
     set(CURLOPT_XFERINFOFUNCTION, progress); set(CURLOPT_XFERINFODATA, t);
     set(CURLOPT_NOPROGRESS, 0L); set(CURLOPT_PRIVATE, t);
-    if (ok && curl_multi_add_handle(multi_, t->curl) == CURLM_OK) { ++active; return; }
-    for (const EntryPtr& e : t->entries) fail(e, "could not configure the HTTP transport");
-    t->entries.clear();
+    return ok && curl_multi_add_handle(multi_, t->curl) == CURLM_OK;
   }
 
   void complete(Transfer& t, CURLcode result) {
     curl_multi_remove_handle(multi_, t.curl);
+    t.warm = false;
     std::vector<EntryPtr> entries;
     entries.swap(t.entries);
     std::erase_if(entries, [](const EntryPtr& e) { return e->cancelled.load(); });
@@ -564,7 +622,9 @@ private:
     if (t.overflow) reason = "response exceeds 8 MiB";
     else if (result != CURLE_OK) reason = curl_easy_strerror(result);
     else if (status != 200) reason = "HTTP " + std::to_string(status);
-    if (reason.empty()) {
+    if (reason.empty() && entries.empty()) {
+      disk_.write(t.url, t.body);
+    } else if (reason.empty()) {
       auto body = std::make_shared<const std::string>(std::move(t.body));
       remember(t.url, body);
       disk_.write(t.url, *body);
@@ -587,25 +647,30 @@ private:
   void fetch_loop() {
     name_thread("img-fetch");
     disk_.open(cache_directory_);
-    unsigned active = 0;
+    unsigned active = 0, warming = 0;
     while (true) {
       std::vector<EntryPtr> starting;
+      bool idle = false;
       {
         std::lock_guard lock(mutex_);
         if (stopping_) break;
         const auto now = Clock::now();
+        std::erase_if(fetches_, [](const EntryPtr& e) { return e->cancelled.load(); });
+        std::stable_sort(fetches_.begin(), fetches_.end(), [](const EntryPtr& a, const EntryPtr& b) { return a->rank > b->rank; });
         // Loads joining a transfer or served from cache take no connection; this bound is loose.
-        // Images on screen first, then prefetches, each in request order.
-        for (const bool prefetches : {false, true})
-          for (std::size_t n = fetches_.size(); n && active + starting.size() < kConnections; --n) {
-            EntryPtr entry = std::move(fetches_.front());
-            fetches_.pop_front();
-            if (entry->cancelled) continue;
-            if (entry->retry_at > now || (!prefetches && !entry->wanted)) fetches_.push_back(std::move(entry));
-            else starting.push_back(std::move(entry));
-          }
+        for (auto it = fetches_.begin(); it != fetches_.end() && active + starting.size() < kConnections;) {
+          if ((*it)->retry_at > now) { ++it; continue; }
+          starting.push_back(std::move(*it));
+          it = fetches_.erase(it);
+        }
+        idle = fetches_.empty();
       }
       for (EntryPtr& entry : starting) start_fetch(std::move(entry), active);
+      while (idle && active < kConnections && warming < kWarmConnections) {
+        const unsigned before = warming;
+        start_warm(active, warming);
+        if (warming == before) break;
+      }
       int running = 0;
       curl_multi_perform(multi_, &running);
       int left = 0;
@@ -613,12 +678,13 @@ private:
         if (done->msg != CURLMSG_DONE) continue;
         Transfer* t = nullptr;
         curl_easy_getinfo(done->easy_handle, CURLINFO_PRIVATE, &t);
+        if (t->warm) --warming;
         complete(*t, done->data.result);
         --active;
       }
       curl_multi_poll(multi_, nullptr, 0, 100, nullptr);
     }
-    for (Transfer& t : transfers_) if (!t.entries.empty()) { curl_multi_remove_handle(multi_, t.curl); t.entries.clear(); }
+    for (Transfer& t : transfers_) if (busy(t)) { curl_multi_remove_handle(multi_, t.curl); t.entries.clear(); t.warm = false; }
   }
 
   void decode_loop() {
@@ -629,8 +695,8 @@ private:
         std::unique_lock lock(mutex_);
         wake_.wait(lock, [&] { return stopping_ || !decodes_.empty(); });
         if (stopping_) break;
-        auto next = std::find_if(decodes_.begin(), decodes_.end(), [](const EntryPtr& e) { return e->wanted.load(); });
-        if (next == decodes_.end()) next = decodes_.begin();
+        auto next = std::max_element(decodes_.begin(), decodes_.end(),
+                                     [](const EntryPtr& a, const EntryPtr& b) { return a->rank < b->rank; });
         entry = std::move(*next);
         decodes_.erase(next);
       }
@@ -643,6 +709,7 @@ private:
   std::mutex mutex_;
   std::condition_variable wake_;
   std::deque<EntryPtr> fetches_, decodes_;
+  std::deque<std::string> warms_;
   std::vector<EntryPtr> finished_;
   std::array<Transfer, kConnections> transfers_{};
   // Fetch thread only.
@@ -669,7 +736,8 @@ std::uint32_t load(const std::string& url, int width, int height, Fit fit, bool 
                    std::string& error) {
   return service.load(url, width, height, fit, prefetch, result, error);
 }
-void release(std::uint32_t id) { service.release(id); }
+void release(std::uint32_t id, bool prefetch) { service.release(id, prefetch); }
+void warm(std::vector<std::string> urls) { service.warm(std::move(urls)); }
 std::vector<Result> poll(void (*evict)(std::uint32_t)) { return service.poll(evict); }
 } // namespace images
 #else
@@ -680,7 +748,8 @@ void discard(std::uint32_t, const std::string&) {}
 std::uint32_t load(const std::string& url, int, int, Fit, bool, Result&, std::string& error) {
   error = "Image.load " + url + ": enable networking: true and filesystemAccess: console in app.json"; return 0;
 }
-void release(std::uint32_t) {}
+void release(std::uint32_t, bool) {}
+void warm(std::vector<std::string>) {}
 std::vector<Result> poll(void (*)(std::uint32_t)) { return {}; }
 } // namespace images
 #endif
