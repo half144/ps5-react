@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 #if PS5_REACT_CONSOLE_FILESYSTEM
 #include "elevation.hpp"
@@ -26,6 +27,9 @@ bool console_access = false;
 char app_root[256] = "/app0";
 char data_root[256] = "/download0";
 char temp_root[256] = "/temp0";
+// Caches that may grow large: the title's download0 is a fixed image of a few hundred MiB that also holds
+// its state, so a full cache there left the app nowhere to write.
+char cache_root[256] = "/download0/.cache";
 
 #if PS5_REACT_CONSOLE_FILESYSTEM
 // Native titles must initialize libSceNet; linking its stub is not enough.
@@ -88,6 +92,25 @@ bool writable(const char* root) {
   return ok;
 }
 
+// Images were cached in download0 until it filled the title's fixed-size image and left no room for
+// its state; they now live under /data, and the old files go before download0 is checked.
+void remove_legacy_image_cache() {
+  char directory[320];
+  std::snprintf(directory, sizeof directory, "%s/.cache/images", data_root);
+  DIR* dir = opendir(directory);
+  if (!dir) return;
+  int removed = 0;
+  while (dirent* item = readdir(dir)) {
+    if (item->d_name[0] == '.') continue;
+    char path[600];
+    std::snprintf(path, sizeof path, "%s/%s", directory, item->d_name);
+    removed += unlink(path) == 0;
+  }
+  closedir(dir);
+  rmdir(directory);
+  hui::sys::log("[PS5-REACT] removed %d cached images from %s", removed, directory);
+}
+
 bool ensure_directory(const char* path) {
   if (mkdir(path, 0700) == 0) return true;
   return errno == EEXIST && accessible(path);
@@ -123,6 +146,7 @@ void initialize_filesystem_access() {
   sandbox_root("app0", app_root, sizeof app_root);
   sandbox_root("download0", data_root, sizeof data_root);
   sandbox_root("temp0", temp_root, sizeof temp_root);
+  remove_legacy_image_cache();
   if (!writable(data_root)) {
     hui::sys::log("[PS5-REACT] data root not writable path=%s errno=%d; trying title data", data_root, errno);
     std::snprintf(data_root, sizeof data_root, "/data/ps5-react/%s", PS5_REACT_TITLE);
@@ -134,14 +158,23 @@ void initialize_filesystem_access() {
     if (!ensure_directory(temp_root) || !writable(temp_root))
       hui::sys::log("[PS5-REACT] temp root write proof failed path=%s errno=%d", temp_root, errno);
   }
-  hui::sys::log("[PS5-REACT] filesystem roots app=%s data=%s temp=%s", app_root, data_root, temp_root);
+  char title_data[256];
+  std::snprintf(title_data, sizeof title_data, "/data/ps5-react/%s", PS5_REACT_TITLE);
+  std::snprintf(cache_root, sizeof cache_root, "%s/cache", title_data);
+  if (!ensure_directory("/data/ps5-react") || !ensure_directory(title_data) || !ensure_directory(cache_root) || !writable(cache_root))
+    std::snprintf(cache_root, sizeof cache_root, "%s/.cache", data_root);
+  hui::sys::log("[PS5-REACT] filesystem roots app=%s data=%s temp=%s cache=%s", app_root, data_root, temp_root, cache_root);
 #endif
 }
 
 bool resolve_filesystem_path(const char* path, char* out, std::size_t size) {
   const char* suffix = "";
   const char* base = path;
-  if (console_access) {
+  if (!std::strncmp(path, "/cache0", 7) && (!path[7] || path[7] == '/')) {
+    // Without console access the sandbox paths are used as they are.
+    base = console_access ? cache_root : "/download0/.cache";
+    suffix = path + 7;
+  } else if (console_access) {
     const char* logical[] = {"/app0", "/download0", "/temp0"};
     const char* physical[] = {app_root, data_root, temp_root};
     for (int i = 0; i < 3; ++i) {

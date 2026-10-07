@@ -113,7 +113,7 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 
 bool ps5_react_start_images() {
   char cache[PATH_MAX];
-  return images::start(host::resolve_path("/download0/.cache/images", cache, sizeof cache) ? cache : "");
+  return images::start(host::resolve_path("/cache0/images", cache, sizeof cache) ? cache : "");
 }
 
 void ps5_react_stop_images() { images::stop(unregister); }
