@@ -445,7 +445,7 @@ bool storage_test() {
       () => network.request("file:///tmp/example", {}),
       () => network.request("https://example.com", {maxBytes: 0}),
       () => network.request("https://example.com", {headers: {Range: "bytes=0-1"}}),
-      () => network.download("https://example.com", "/download0/a", {connections: 17}),
+      () => network.download("https://example.com", "/download0/a", {connections: 65}),
       () => network.download("https://example.com", "/download0/a", {recoverCompleted: 'yes'}),
       () => network.cancel(),
     ]) {
