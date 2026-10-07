@@ -193,3 +193,23 @@ Sources: [SDK v0.40 kernel initialization](https://github.com/ps5-payload-dev/sd
 The user confirmed the SDK v0.42 replacement worked. This qualifies the exact
 application/helper pair recorded in `HARDWARE.md`; the earlier failures above
 remain historical evidence explaining the integration and its access contract.
+
+## Writable roots after elevation
+
+A subsequent Game-store report described `fs.writeFile` permission failures on
+the same console where Orbit and Spectrum worked. The local Game-store build
+receipt enables console filesystem access and includes an exact-title
+`PPSA99058` helper; this is not a missing manifest opt-in. Static inspection
+found that root selection checked only `open(O_RDONLY | O_DIRECTORY)`. A root
+can pass that check and still deny the queue's file creation after elevation.
+
+Data and temporary roots now pass exclusive write/read/remove probes before
+being retained. A failed data-root probe selects the title-owned `/data` path;
+temporary storage can use its `tmp` child. Directory creation and fallback
+proof failures log their path and errno. Probes never truncate existing files.
+Mocked native tests cover writable and read-only roots, fallback path mapping,
+probe collisions, failed readback, cleanup and rejected elevation. These tests
+establish the root-selection correction; they do not establish that it caused
+or resolved the reported console failure. The rebuilt Game-store still needs
+the startup access status, selected roots and a successful queue save recorded
+on hardware.

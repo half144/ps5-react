@@ -6,6 +6,7 @@
 #include "host_platform.hpp"
 #include "platform/ps5/system.hpp"
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -50,6 +51,48 @@ bool accessible(const char* path) {
   return true;
 }
 
+// A sandbox mount can remain readable after elevation while denying writes.
+// Exercise the same file operations as the app, without replacing any file.
+bool writable(const char* root) {
+  char path[512];
+  int fd = -1;
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    if (std::snprintf(path, sizeof path, "%s/.ps5-react-write-%ld-%d", root,
+                      static_cast<long>(getpid()), attempt) >= static_cast<int>(sizeof path)) {
+      errno = ENAMETOOLONG;
+      return false;
+    }
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0 || errno != EEXIST) break;
+  }
+  if (fd < 0) return false;
+  const char token = 'R';
+  ssize_t count;
+  do { count = write(fd, &token, 1); } while (count < 0 && errno == EINTR);
+  bool ok = count == 1;
+  int error = ok ? 0 : count < 0 ? errno : EIO;
+  if (close(fd) != 0 && ok) { ok = false; error = errno; }
+  if (ok) {
+    fd = open(path, O_RDONLY, 0);
+    char received = 0;
+    if (fd < 0) { ok = false; error = errno; }
+    else {
+      do { count = read(fd, &received, 1); } while (count < 0 && errno == EINTR);
+      ok = count == 1 && received == token;
+      if (!ok) error = count < 0 ? errno : EIO;
+    }
+    if (fd >= 0 && close(fd) != 0 && ok) { ok = false; error = errno; }
+  }
+  if (unlink(path) != 0 && ok) { ok = false; error = errno; }
+  if (!ok) errno = error ? error : EIO;
+  return ok;
+}
+
+bool ensure_directory(const char* path) {
+  if (mkdir(path, 0700) == 0) return true;
+  return errno == EEXIST && accessible(path);
+}
+
 // Preserve logical app roots after the helper changes the process's root.
 // Prefer the original sandbox mounts. /data is used only after its write/read
 // proof succeeded, and is namespaced by title rather than replacing app files.
@@ -80,14 +123,16 @@ void initialize_filesystem_access() {
   sandbox_root("app0", app_root, sizeof app_root);
   sandbox_root("download0", data_root, sizeof data_root);
   sandbox_root("temp0", temp_root, sizeof temp_root);
-  if (!accessible(data_root)) {
-    mkdir("/data/ps5-react", 0700);
+  if (!writable(data_root)) {
+    hui::sys::log("[PS5-REACT] data root not writable path=%s errno=%d; trying title data", data_root, errno);
     std::snprintf(data_root, sizeof data_root, "/data/ps5-react/%s", PS5_REACT_TITLE);
-    mkdir(data_root, 0700);
+    if (!ensure_directory("/data/ps5-react") || !ensure_directory(data_root) || !writable(data_root))
+      hui::sys::log("[PS5-REACT] data root write proof failed path=%s errno=%d", data_root, errno);
   }
-  if (!accessible(temp_root)) {
+  if (!writable(temp_root)) {
     std::snprintf(temp_root, sizeof temp_root, "%s/tmp", data_root);
-    mkdir(temp_root, 0700);
+    if (!ensure_directory(temp_root) || !writable(temp_root))
+      hui::sys::log("[PS5-REACT] temp root write proof failed path=%s errno=%d", temp_root, errno);
   }
   hui::sys::log("[PS5-REACT] filesystem roots app=%s data=%s temp=%s", app_root, data_root, temp_root);
 #endif

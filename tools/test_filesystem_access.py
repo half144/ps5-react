@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 import sys
 
-from common import run
+from common import ROOT, run
 
 
 def main():
@@ -26,6 +26,15 @@ def main():
     run(["clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror", fixture, "-o", executable])
     run([executable])
     print("PASS: resident/helper selection, partial transfers, rejection and data proof")
+    headers = build / "root-test-headers"
+    (headers / "platform/ps5").mkdir(parents=True, exist_ok=True)
+    (headers / "app_config.hpp").write_text('#define PS5_REACT_CONSOLE_FILESYSTEM 1\n#define PS5_REACT_TITLE "PPSA99058"\n')
+    (headers / "platform/ps5/system.hpp").write_text(
+        '#pragma once\nnamespace hui::sys { template<class... T> void log(const char*, T...) {} }\n')
+    root_test = build / "test-filesystem-roots"
+    run(["clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I", headers,
+         "-I", client / "examples/sandbox-elevation", ROOT / "tools/test_filesystem_roots.cpp", "-o", root_test])
+    run([root_test])
 
 
 if __name__ == "__main__":
