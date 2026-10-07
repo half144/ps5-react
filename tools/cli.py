@@ -50,6 +50,7 @@ def desktop(app, test=False):
             log=ROOT / ".build/tailwind-test.log")
         if app != ROOT / "apps/starter":
             raise ValueError("The scripted UI test belongs to starter; use preview for other apps")
+        run(["python3", ROOT / "tools/test_resources.py"], log=ROOT / ".build/resource-test.log")
         run(["python3", ROOT / "tools/test_network.py"], log=ROOT / ".build/network-test.log")
         run(["python3", ROOT / "tools/test_images.py"], log=ROOT / ".build/image-test.log")
         command.append("--self-test")

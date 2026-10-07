@@ -126,7 +126,9 @@ calls retain their normal permission errors rather than returning fake values.
 
 ## Http and Downloads
 
-`Http.request(url, options)` provides bounded text/JSON HTTP responses.
+`Http.request(url, options)` provides bounded text/JSON HTTP responses, effective
+URLs and allowlisted lowercase response headers. Set `followRedirects: false`
+to inspect redirect metadata; cookies and authentication headers stay private.
 `Downloads.enqueue({url, destination, ...options})` returns a cancellable task
 with progress subscriptions and a completion promise. Binary downloads stay
 native, use parallel validated ranges when eligible, and resume durable ranges.
@@ -134,7 +136,7 @@ native, use parallel validated ranges when eligible, and resume durable ranges.
 byte manifests with per-piece SHA-1 and whole-file SHA-256 verification.
 `DownloadFormats` validates manifests and routes image, package, archive and
 binary filenames to their appropriate destinations. Native download options
-include exact `expectedBytes`, `storageRoot` identity checks, `recoverCompleted`
+include opt-in `rejectHtml`, exact `expectedBytes`, `storageRoot` identity checks, `recoverCompleted`
 for receipt-backed SHA-256 verification of published files, and normalized
 `pieces: [{url, offset, size, sha1}]`. These options share ABI v2 on both hosts;
 there are no additional global native functions.

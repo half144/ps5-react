@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace network {
@@ -21,10 +22,13 @@ struct Request {
   std::uint64_t max_bytes = 1024 * 1024, range_bytes = 32 * 1024 * 1024;
   unsigned connections = 8;
   bool resume = true, adaptive = true, recover_completed = false;
+  bool follow_redirects = true, reject_html = false;
 };
 struct Snapshot {
   std::uint32_t id = 0;
   std::string state = "queued", error, body, destination;
+  std::string url;
+  std::vector<std::pair<std::string, std::string>> headers;
   std::uint64_t received = 0, written = 0, total = 0, buffered = 0;
   double bytes_per_second = 0;
   unsigned connections = 0, retries = 0;

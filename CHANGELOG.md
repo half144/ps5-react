@@ -31,6 +31,14 @@
   back to the title-owned `/data/ps5-react/<TITLE_ID>` directory, with explicit
   diagnostics if directory creation or the fallback proof fails.
 
+- Expose effective HTTP URLs and allowlisted lowercase transfer headers; add
+  `followRedirects: false` and opt-in `rejectHtml` download protection on both
+  hosts. Cookies/authentication response headers stay private. Local transport
+  tests cover redirect isolation and HTML rejection; PS5 validation is pending.
+- Package explicit `resources` from app.json for on-demand data loading without
+  embedding large catalogs in the JavaScript heap. Resource paths reject
+  traversal, symlinks and collisions with package infrastructure.
+
 - Refresh the README with an original project logo, complete first-app example,
   application configuration, Tailwind themes, focus/list navigation, animation,
   native API examples and troubleshooting. Document external-app editor setup

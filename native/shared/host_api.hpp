@@ -37,8 +37,10 @@
 //                                  for inactivity (the desktop display does not sleep)
 //   network.download(url, path, options) task ID; queues native binary file I/O
 //     options: expectedBytes, storageRoot, pieces[{url, offset, size, sha1}],
-//              sha256, connections, adaptive, rangeBytes, resume, recoverCompleted, headers
+//              sha256, connections, adaptive, rangeBytes, resume, recoverCompleted, headers, rejectHtml
 //   network.request(url, options)  task ID; queues bounded HTTP text I/O
+//     options: method, body, maxBytes, headers, followRedirects (default true)
+//     terminal snapshots: status, body, effective url, allowlisted lowercase headers
 //   network.cancel(id)             requests cancellation
 //   network.poll()                 progress/results; consumes terminal snapshots
 //   network.version()              transport version string

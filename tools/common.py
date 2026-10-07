@@ -111,6 +111,32 @@ def app_files(app):
         yield from (Path(directory) / f for f in sorted(files))
 
 
+
+def resource_files(app, config):
+    """Explicit read-only package resources, kept outside the JavaScript heap."""
+    entries = config.get("resources", [])
+    if not isinstance(entries, list) or len(entries) > 16:
+        raise ValueError("resources must be an array of at most 16 relative paths")
+    files = {}
+    for entry in entries:
+        if not isinstance(entry, str) or not entry or "\\" in entry or "\0" in entry:
+            raise ValueError("resources must contain safe relative paths")
+        relative = Path(entry)
+        if relative.is_absolute() or any(part in (".", "..") for part in entry.split("/")):
+            raise ValueError("resources cannot escape the app directory")
+        source = app / relative
+        if not source.exists(): raise ValueError(f"Missing resource: {entry}; generate it before building")
+        candidates = [source, *sorted(source.rglob("*"))] if source.is_dir() else [source]
+        for path in candidates:
+            if path.is_symlink() or not path.resolve().is_relative_to(app.resolve()):
+                raise ValueError(f"Resource symlinks are not supported: {entry}")
+            target = path.relative_to(app)
+            if target.parts[0] in ("sce_sys", "sce_module", "notices") or str(target) in ("eboot.bin", "lapy.elf", "lapy-manifest.json"):
+                raise ValueError(f"Resource would overwrite package infrastructure: {target}")
+            if path.is_file(): files[target] = path
+            elif not path.is_dir(): raise ValueError(f"Resource is not a regular file: {target}")
+    return files
+
 def app_config(app, config=None):
     """`app` is the app directory: apps/<name> or an external folder named <name>."""
     if not re.fullmatch(r"[a-z][a-z0-9-]*", app.name):
@@ -142,6 +168,7 @@ def app_config(app, config=None):
         raise ValueError("networking must be a boolean")
     if config.get("networking") and config.get("filesystemAccess", "sandbox") != "console":
         raise ValueError('networking requires filesystemAccess: "console" for the PS5 native transport')
+    resource_files(app, config)
     for other in (ROOT / "apps").glob("*/app.json"):
         if other.parent.resolve() != app.resolve() and json.loads(other.read_text())["titleId"] == title:
             raise ValueError(f"titleId already belongs to {other.parent.name}")

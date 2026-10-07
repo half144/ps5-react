@@ -290,6 +290,7 @@ export const Http = {
     try {
       const response = await task.done;
       return Object.freeze({status: response.status, ok: response.status >= 200 && response.status < 300,
+        url: response.url || url, headers: Object.freeze({...response.headers}),
         text: async () => response.body, json: async () => JSON.parse(response.body)});
     } finally {
       if (signal) signal.removeEventListener('abort', abort);

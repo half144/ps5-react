@@ -160,7 +160,8 @@ struct Transfer {
   unsigned piece = 0, source = 0, retry_after = 0;
   unsigned mirror = 0; // 0 is the primary URL, n is Job::mirrors[n-1]
   long status = 0;
-  std::string etag, encoding, error;
+  std::string etag, encoding, error, content_type, html_prefix;
+  std::vector<std::pair<std::string, std::string>> response_headers;
   std::uint64_t content_length = 0;
   bool length_known = false;
   std::uint64_t range_begin = 0, range_end = 0, range_total = 0;
@@ -171,6 +172,8 @@ struct Transfer {
 bool valid_file_response(const Transfer& t) {
   const Job& job = *t.job;
   if (!t.encoding.empty() && t.encoding != "identity") return false;
+  if (job.request.reject_html && (t.content_type.starts_with("text/html") ||
+      t.content_type.starts_with("application/xhtml+xml"))) return false;
   if (!job.sources.empty()) {
     const auto& source = job.sources[t.source];
     if (!source.ranged) return t.status == 200;
@@ -685,6 +688,7 @@ std::size_t Service::header(char* data, std::size_t size, std::size_t count, voi
   std::string_view line(data, length);
   if (line.starts_with("HTTP/")) {
     t.etag.clear(); t.encoding.clear(); t.content_range = false; t.length_known = false;
+    t.content_type.clear(); t.response_headers.clear();
     const auto space = line.find(' ');
     if (space != std::string_view::npos && line.size() >= space+4) {
       std::uint64_t status = 0;
@@ -697,6 +701,19 @@ std::size_t Service::header(char* data, std::size_t size, std::size_t count, voi
   std::string name(line.substr(0, colon));
   for (char& c : name) if (c >= 'A' && c <= 'Z') c += 'a'-'A';
   const auto value = trim(line.substr(colon+1));
+  if (name == "content-type") {
+    t.content_type.assign(value);
+    for (char& c : t.content_type) if (c >= 'A' && c <= 'Z') c += 'a'-'A';
+  }
+  // Only bounded transfer metadata crosses into JS; never expose cookies or auth headers.
+  if (name == "content-type" || name == "content-length" || name == "content-disposition" ||
+      name == "content-range" || name == "location" || name == "hx-redirect" ||
+      name == "etag" || name == "retry-after") {
+    auto found = std::find_if(t.response_headers.begin(), t.response_headers.end(),
+                            [&](const auto& item) { return item.first == name; });
+    if (found == t.response_headers.end()) t.response_headers.emplace_back(name, value);
+    else found->second.assign(value);
+  }
   if (name == "etag") t.etag.assign(value);
   if (name == "content-encoding") t.encoding.assign(value);
   if (name == "content-length") t.length_known = decimal(value, t.content_length);
@@ -722,11 +739,21 @@ std::size_t Service::body(char* data, std::size_t size, std::size_t count, void*
   Job& job = *t.job;
   if (job.cancelled || job.failed) return 0;
   if (t.probe) {
-    if (t.status == 200) return 0; // Range ignored: do not consume a potentially huge probe body.
+    if (t.status != 206) return 0; // Ignore error/redirect bodies and unbounded responses to an ignored Range.
     if (length > 1-t.accepted) { t.error = "invalid range probe body"; return 0; }
     t.accepted += length; return length;
   }
   if (!job.request.destination.empty()) {
+    if (job.request.reject_html && t.html_prefix.size() < 64 && t.begin == 0) {
+      t.html_prefix.append(data, std::min<std::size_t>(length, 64-t.html_prefix.size()));
+      std::string prefix = t.html_prefix;
+      for (char& c : prefix) if (c >= 'A' && c <= 'Z') c += 'a'-'A';
+      auto view = trim(prefix);
+      while (!view.empty() && (view.front() == '\r' || view.front() == '\n')) view.remove_prefix(1);
+      if (view.starts_with("<!doctype html") || view.starts_with("<html")) {
+        t.error = "provider returned a web page; browser verification required"; return 0;
+      }
+    }
     if (!valid_file_response(t)) {
       t.error = "server changed the resource or returned an invalid range/encoding/status"; return 0;
     }
@@ -752,7 +779,7 @@ bool Service::configure(Transfer& t) {
   curl_easy_reset(t.curl);
   if (t.headers) curl_slist_free_all(t.headers);
   t.headers = nullptr; t.status = 0; t.header_bytes = 0;
-  t.etag.clear(); t.encoding.clear(); t.error.clear();
+  t.etag.clear(); t.encoding.clear(); t.error.clear(); t.content_type.clear(); t.response_headers.clear(); t.html_prefix.clear();
   t.content_range = false; t.length_known = false; t.paused = false; t.retry_after = 0;
   Job& job = *t.job;
   bool ok = true;
@@ -774,7 +801,7 @@ bool Service::configure(Transfer& t) {
   const bool ranged = source ? source->ranged : job.ranged;
   if (ranged && !t.probe && !etag.empty()) add("If-Range: " + etag);
   // Custom application headers must never be forwarded to an unrelated redirect origin.
-  if (!configure_transport(t.curl, url, job.request.headers.empty())) ok = false;
+  if (!configure_transport(t.curl, url, job.request.follow_redirects && job.request.headers.empty())) ok = false;
   // body() copies each callback into one block, so curl must never hand over more than a block. Smaller
   // still: older curl gives every one of the 64 transfers its own buffer, out of the 128 MiB heap.
   set(CURLOPT_BUFFERSIZE, 64L * 1024);
@@ -839,6 +866,16 @@ bool Service::probe_source(Job& job, unsigned source_index) {
     while (!job.cancelled && Clock::now() < retry_at) curl_multi_poll(multi_, nullptr, 0, 50, nullptr);
   }
   if (job.cancelled) return false;
+  if (job.request.reject_html && (probe.status == 401 || probe.status == 403)) {
+    job.fail("provider denied the file; browser verification required (HTTP " + std::to_string(probe.status) + ")"); return false;
+  }
+  if (probe.status >= 400) {
+    job.fail("range probe failed (HTTP " + std::to_string(probe.status) + ", " + curl_easy_strerror(result) + ")"); return false;
+  }
+  if (job.request.reject_html && (probe.content_type.starts_with("text/html") ||
+      probe.content_type.starts_with("application/xhtml+xml"))) {
+    job.fail("provider returned a web page; browser verification required"); return false;
+  }
   if (probe.status == 200 && result == CURLE_WRITE_ERROR && probe.error.empty()) {
     job.known = probe.length_known; job.total = probe.content_length;
   } else if (result == CURLE_OK && probe.status == 206 && probe.content_range &&
@@ -1223,7 +1260,16 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
         curl_multi_remove_handle(multi_, message->easy_handle);
         if (!t) { job->fail("missing transfer identity"); break; }
         t->result = message->data.result;
-        { std::lock_guard lock(job->mutex); job->snapshot.status = static_cast<int>(t->status); }
+        {
+          std::lock_guard lock(job->mutex);
+          job->snapshot.status = static_cast<int>(t->status);
+          if (!file) {
+            job->snapshot.headers = t->response_headers;
+            char* effective = nullptr;
+            if (curl_easy_getinfo(t->curl, CURLINFO_EFFECTIVE_URL, &effective) == CURLE_OK && effective)
+              job->snapshot.url.assign(effective, std::min<std::size_t>(std::strlen(effective), 8192));
+          }
+        }
         finish_transfer(*t);
       }
       if (now-previous >= std::chrono::milliseconds(250)) {

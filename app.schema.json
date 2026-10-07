@@ -92,6 +92,16 @@
       "type": "boolean",
       "default": false,
       "description": "Enable native HTTP and large-file downloads; PS5 requires filesystemAccess: console. Desktop networking is available independently."
+    },
+    "resources": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Relative files or directories copied read-only into the application folder. No symlinks, traversal or package-infrastructure paths."
     }
   },
   "additionalProperties": false,
