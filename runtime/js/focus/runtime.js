@@ -5,9 +5,11 @@
 import {createContext} from 'react';
 import {subscribeInput} from '../input.js';
 import {dispatchBackPress} from '../native.js';
+import {installInspector} from './inspect.js';
 import {FocusManager} from './manager.js';
 
 export const manager = new FocusManager();
+installInspector(manager);
 
 /** The enclosing FocusScope; the manager's root outside any. */
 export const ScopeContext = createContext(manager.root);

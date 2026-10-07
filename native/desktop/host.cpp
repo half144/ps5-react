@@ -27,6 +27,7 @@ void er_register_assets(void);
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "actions.hpp"
+#include "control.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
 #include "screenshot.hpp"
@@ -121,6 +122,10 @@ struct Host {
   Uint32 previous_tick = 0, next_repeat = 0;
   const char* held_action = nullptr;
   InputScript script;
+  Control control;
+  bool controlled = false;
+  struct Wait { int client; Uint32 until; };
+  std::vector<Wait> waits;
   Uint32 slow_frame_us = 33000;
   SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
@@ -178,6 +183,13 @@ struct Host {
     cfg.install_host_globals = ps5_react_install_host_api;
     runtime_started = er_runtime_init(&cfg);
     if (!runtime_started) return false;
+    if (controlled) {
+      // Read when the bundle loads: Text reports its content to the inspector only then.
+      JSContext* ctx = er_runtime_context();
+      JSValue global = JS_GetGlobalObject(ctx);
+      JS_SetPropertyStr(ctx, global, "__ps5ReactInspecting", JS_TRUE);
+      JS_FreeValue(ctx, global);
+    }
     er_register_assets();
     FILE* file = std::fopen(path, "rb");
     if (!file) return false;
@@ -219,6 +231,69 @@ struct Host {
     JS_FreeValue(ctx, fn); JS_FreeValue(ctx, global);
     er_perf_phase_end(ER_PERF_PHASE_JS);
     return ok;
+  }
+
+  // A development hook's result as text: strings as they are, anything else through JSON.
+  std::string call_js(const char* name, const char* arg) {
+    JSContext* ctx = er_runtime_context();
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, global, name);
+    JSValue argument = arg ? JS_NewString(ctx, arg) : JS_UNDEFINED;
+    JSValue result = JS_Call(ctx, fn, global, arg ? 1 : 0, &argument);
+    std::string text;
+    if (JS_IsException(result)) {
+      JSValue error = JS_GetException(ctx);
+      const char* message = JS_ToCString(ctx, error);
+      text = std::string("error: ") + (message ? message : "JS exception");
+      if (message) JS_FreeCString(ctx, message);
+      JS_FreeValue(ctx, error);
+    } else {
+      JSValue json = JS_IsString(result) ? JS_DupValue(ctx, result) : JS_JSONStringify(ctx, result, JS_UNDEFINED, JS_UNDEFINED);
+      if (const char* value = JS_ToCString(ctx, json)) { text = value; JS_FreeCString(ctx, value); }
+      JS_FreeValue(ctx, json);
+    }
+    JS_FreeValue(ctx, result); JS_FreeValue(ctx, argument);
+    JS_FreeValue(ctx, fn); JS_FreeValue(ctx, global);
+    return text;
+  }
+
+  // Commands from tools/ps5_drive.py, a few a frame so a busy client cannot stall rendering.
+  bool serve_control() {
+    const Uint32 ticks = SDL_GetTicks();
+    std::erase_if(waits, [&](const Wait& wait) {
+      if (!SDL_TICKS_PASSED(ticks, wait.until)) return false;
+      Control::reply(wait.client, "ok");
+      return true;
+    });
+    for (int served = 0; served < 4; ++served) {
+      int client = -1;
+      const std::string line = control.next(client);
+      if (client < 0) return true;
+      const std::size_t space = line.find(' ');
+      const std::string verb = line.substr(0, space), arg = space == std::string::npos ? "" : line.substr(space + 1);
+      if (verb == "press") {
+        const bool known = std::any_of(std::begin(kActionNames), std::end(kActionNames),
+                                       [&](const char* name) { return arg == name; });
+        if (known && !dispatch(arg.c_str())) return false;
+        Control::reply(client, known ? "ok" : "unknown action: " + arg);
+      } else if (verb == "shot") {
+        Control::reply(client, save_screenshot(arg.c_str()) ? arg : std::string("error: ") + std::strerror(errno));
+      } else if (verb == "snapshot") {
+        Control::reply(client, call_js("__ps5ReactInspect", nullptr));
+      } else if (verb == "focus") {
+        Control::reply(client, call_js("__ps5ReactFocus", arg.c_str()) == "true" ? "ok" : "not found: " + arg);
+      } else if (verb == "logs") {
+        Control::reply(client, control.take_logs());
+      } else if (verb == "wait") {
+        waits.push_back({client, ticks + static_cast<Uint32>(std::max(0, std::atoi(arg.c_str())))});
+      } else if (verb == "quit") {
+        running = false;
+        Control::reply(client, "ok");
+      } else {
+        Control::reply(client, "unknown command: " + verb);
+      }
+    }
+    return true;
   }
 
   // Runs the scripted action that is due; it goes through the same dispatch as keys.
@@ -271,6 +346,7 @@ struct Host {
       if (action && !dispatch(action)) return false;
     }
     if (!play_script()) return false;
+    if (controlled && !serve_control()) return false;
     if (held_action) {
       // Polled state, not key-up events: synthetic self-test presses never stay held.
       const bool down = held_key != SDL_SCANCODE_UNKNOWN ? SDL_GetKeyboardState(nullptr)[held_key]
@@ -545,6 +621,13 @@ int main(int argc, char** argv) {
   host.log_frames = !testing;
   bool ok = host.start();
   if (ok && testing) ok = color_test(host);
+  if (ok && !testing) {
+    if (const char* path = std::getenv("PS5_REACT_CONTROL")) {
+      host.controlled = host.control.start(path);
+      if (!host.controlled) std::fprintf(stderr, "PS5_REACT_CONTROL: cannot listen on %s: %s\n", path, std::strerror(errno));
+      else std::printf("[PS5-REACT] control: %s\n", path);
+    }
+  }
   if (ok) ok = host.boot(argv[1]);
   if (ok && testing) ok = self_test(host);
   else if (ok) {
