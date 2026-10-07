@@ -31,6 +31,11 @@
   back to the title-owned `/data/ps5-react/<TITLE_ID>` directory, with explicit
   diagnostics if directory creation or the fallback proof fails.
 
+- Refresh the README with an original project logo, complete first-app example,
+  application configuration, Tailwind themes, focus/list navigation, animation,
+  native API examples and troubleshooting. Document external-app editor setup
+  and the font-size configuration needed for automatic baking.
+
 - Add the `borderGradient` View style (`{type: 'conic', width, angle, stops}`)
   and the animatable `borderGradientAngle`: a conic gradient seen only through
   the rounded border ring, the classic rotating-gradient border. Turning it
