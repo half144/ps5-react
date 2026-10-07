@@ -76,8 +76,8 @@ while loads are pending, then registers finished pixels with the engine.
 
 | Budget | Value |
 | --- | --- |
-| Decoded cache | 32 MiB and at most 128 images. Images in use are never evicted, so a screen that draws more than that exceeds it; unused ones are evicted least recently used first |
-| Encoded cache | 8 MiB of recently fetched bytes by URL, so the same image at another size decodes without a second fetch. Loads of a URL already being fetched join that request |
+| Decoded cache | 24 MiB and at most 128 images. Images in use are never evicted, so a screen that draws more than that exceeds it; unused ones are evicted least recently used first |
+| Encoded cache | 4 MiB of recently fetched bytes by URL, so the same image at another size decodes without a second fetch. Loads of a URL already being fetched join that request |
 | Decode | One image at a time; a decode holds about 4.5 bytes per source pixel for JPEG and 8 for PNG (up to 40 MiB at the source limit) until it finishes |
 | Threads | Two, with 1 MiB stacks |
 

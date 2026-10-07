@@ -15,11 +15,11 @@ enum class Fit : std::uint8_t { cover, contain, stretch, none };
 
 // Decoded pixels that stay cached while unused, least recently used evicted first. Images in use
 // are never evicted, so a screen that shows more than this exceeds it.
-constexpr std::size_t kCacheBytes = 32 * 1024 * 1024;
+constexpr std::size_t kCacheBytes = 24 * 1024 * 1024;
 constexpr std::size_t kCacheEntries = 128;
 constexpr std::size_t kMaxEncodedBytes = 8 * 1024 * 1024;
 // Encoded bytes kept by URL, so the same image drawn at another size decodes without a fetch.
-constexpr std::size_t kEncodedCacheBytes = 8 * 1024 * 1024;
+constexpr std::size_t kEncodedCacheBytes = 4 * 1024 * 1024;
 // Encoded responses kept on disk between launches; entries older than a week are fetched again.
 constexpr std::size_t kDiskCacheBytes = 64 * 1024 * 1024;
 // One image decodes at a time, holding up to about 8 bytes per source pixel (PNG) while it does.

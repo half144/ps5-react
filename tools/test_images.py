@@ -178,9 +178,9 @@ def main():
         started = time.monotonic()
         assert run("cancel", origin + "/slow.jpg") == {"reported": 0}
         assert time.monotonic() - started < 2.5
-        # 12 images of 4 MiB against a 32 MiB budget: the 4 oldest unused go, the one in use stays.
+        # 12 images of 4 MiB against a 24 MiB budget: the 6 oldest unused go, the one in use stays.
         evicted = run("evict", origin + "/photo.jpg", 12)
-        assert evicted == {"loaded": 12, "evicted": 4, "first": 2, "kept": True}, evicted
+        assert evicted == {"loaded": 12, "evicted": 6, "first": 2, "kept": True}, evicted
         # A second launch serves the encoded bytes from the disk cache without a request.
         cache = directory / "cache"
         before = len(Handler.requests)

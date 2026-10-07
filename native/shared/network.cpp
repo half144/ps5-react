@@ -775,8 +775,9 @@ bool Service::configure(Transfer& t) {
   if (ranged && !t.probe && !etag.empty()) add("If-Range: " + etag);
   // Custom application headers must never be forwarded to an unrelated redirect origin.
   if (!configure_transport(t.curl, url, job.request.headers.empty())) ok = false;
-  // body() copies each callback into one block, so curl must never hand over more than a block.
-  set(CURLOPT_BUFFERSIZE, static_cast<long>(block_size));
+  // body() copies each callback into one block, so curl must never hand over more than a block. Smaller
+  // still: older curl gives every one of the 64 transfers its own buffer, out of the 128 MiB heap.
+  set(CURLOPT_BUFFERSIZE, 64L * 1024);
   set(CURLOPT_HTTPHEADER, t.headers);
   set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, &t);
   set(CURLOPT_HEADERFUNCTION, header); set(CURLOPT_HEADERDATA, &t);
