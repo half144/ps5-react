@@ -4,6 +4,7 @@
 #include "network.hpp"
 #include "app_config.hpp"
 #include "filesystem_access.hpp"
+#include "platform/ps5/system.hpp"
 #include <unistd.h>
 #if PS5_REACT_NETWORKING
 extern "C" {
@@ -35,5 +36,12 @@ void platform_stop() {
   pool = -1; initialized = false;
 }
 const char* ca_path() { return "/system/common/cert/CA_LIST.cer"; }
+// The title's fixed 128 MiB heap (platform app_heap.c), so download telemetry shows how close it runs.
+extern "C" void hui_heap_stats(std::size_t* live_bytes, std::size_t* peak_bytes, std::size_t* blocks, std::size_t* failures);
+void platform_log(const char* line) {
+  std::size_t live = 0, peak = 0, blocks = 0, failures = 0;
+  hui_heap_stats(&live, &peak, &blocks, &failures);
+  hui::sys::log("[PS5-REACT] %s heap=%zuMiB peak=%zuMiB failed=%zu", line, live >> 20, peak >> 20, failures);
+}
 }
 #endif

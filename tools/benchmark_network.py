@@ -31,7 +31,7 @@ def main():
                     sample = json.loads(result.stdout)
                     assert sample["state"] == "completed", sample
                     assert hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(DATA).digest()
-                    assert sample["peakBuffer"] <= 8*1024*1024, sample
+                    assert sample["peakBuffer"] <= 16*1024*1024, sample
                     samples.append(sample["milliseconds"])
                     path.unlink()
                 milliseconds = statistics.median(samples)

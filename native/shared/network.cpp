@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "network.hpp"
+#include "thread_name.hpp"
 #ifdef PROSPERO
 #include "app_config.hpp"
 #endif
@@ -18,6 +19,7 @@
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <fcntl.h>
@@ -31,8 +33,13 @@
 namespace network {
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr std::size_t block_size = 256 * 1024, block_count = 32;
-constexpr unsigned max_connections = 16, max_jobs = 8, max_ranges = 65536;
+// Every transfer holds one block while it fills, so the pool must stay well above the connection
+// count: at 64 connections, 256 KiB blocks left none free for the writer queue.
+constexpr std::size_t block_size = 128 * 1024, block_count = 128;
+constexpr unsigned max_connections = 64, max_jobs = 8, max_ranges = 65536;
+// Two writers keep one large write going while the next batch is copied; more did not raise PS5 storage
+// throughput. Every buffer here comes out of the title's fixed 128 MiB heap, shared with images and JS.
+constexpr unsigned writer_count = 2;
 static_assert(sizeof(off_t) >= 8, "Large downloads require 64-bit file offsets");
 constexpr std::uint64_t safe_integer = 9007199254740991ULL;
 
@@ -93,7 +100,7 @@ private:
 
 struct Source {
   Piece piece;
-  std::string etag;
+  std::string etag, location;
   bool ranged = false;
 };
 struct Segment {
@@ -108,22 +115,27 @@ struct Job {
   Request request;
   Snapshot snapshot;
   std::mutex mutex;
-  std::atomic<bool> cancelled{false}, failed{false}, finalized{false};
+  std::atomic<bool> cancelled{false}, failed{false}, finalized{false}, syncing{false};
   std::atomic<unsigned> pending{0};
   int fd = -1;
   int root_fd = -1;
   struct stat root_stat{};
-  Clock::time_point storage_checked{};
-  std::string etag, identity, response, receipt_identity, verified_digest;
+  // Read and written by every writer thread; 0 forces the next check.
+  std::atomic<Clock::rep> storage_checked{0};
+  std::string etag, location, identity, response, receipt_identity, verified_digest;
   std::vector<unsigned char> completed;
   std::vector<Source> sources;
+  // Mirrors whose size and ETag matched the primary; one that fails a range is emptied.
+  std::vector<std::string> mirrors;
   std::vector<Segment> segments;
   std::uint64_t total = 0, committed = 0;
   unsigned retries = 0;
   bool ranged = false, known = false, checkpoint_ready = false, recovering = false;
   void fail(const std::string& reason) {
     std::lock_guard lock(mutex);
-    if (!failed.exchange(true)) snapshot.error = reason;
+    if (failed.exchange(true)) return;
+    snapshot.error = reason;
+    platform_log(("download failed: " + reason).c_str());
   }
 };
 
@@ -146,12 +158,13 @@ struct Transfer {
   std::atomic<std::uint64_t> written{0};
   std::atomic<unsigned> pending{0};
   unsigned piece = 0, source = 0, retry_after = 0;
+  unsigned mirror = 0; // 0 is the primary URL, n is Job::mirrors[n-1]
   long status = 0;
   std::string etag, encoding, error;
   std::uint64_t content_length = 0;
   bool length_known = false;
   std::uint64_t range_begin = 0, range_end = 0, range_total = 0;
-  bool content_range = false, probe = false, paused = false, active = false, draining = false;
+  bool content_range = false, probe = false, paused = false, active = false, draining = false, redirected = false;
   CURLcode result = CURLE_OK;
 };
 
@@ -172,6 +185,30 @@ bool valid_file_response(const Transfer& t) {
          (job.etag.empty() || t.etag == job.etag);
 }
 
+// Ranges skip the redirect hop by reusing the probe's final URL. Such a URL can
+// expire (signed CDN links), so a client error there falls back to the original.
+bool forget_redirect(Job& job, const Transfer& t) {
+  if (!t.redirected || t.status < 400 || t.status >= 500) return false;
+  (job.sources.empty() ? job.location : job.sources[t.source].location).clear();
+  return true;
+}
+
+// A mirror that fails a range, even transiently, is dropped and the range retried on the primary:
+// a lost mirror costs only speed, while retrying it could exhaust the range's attempts.
+bool forget_mirror(Job& job, const Transfer& t) {
+  if (!t.mirror || job.mirrors[t.mirror-1].empty()) return false;
+  job.mirrors[t.mirror-1].clear();
+  return true;
+}
+
+// Transfers are spread over the primary and the mirrors still in use. Each transfer slot keeps one
+// server so its connection is reused; picking per range reconnected and kept idle TLS sessions alive.
+unsigned pick_mirror(const Job& job, unsigned slot) {
+  if (job.mirrors.empty()) return 0;
+  const auto index = static_cast<unsigned>(slot % (job.mirrors.size()+1));
+  return index && !job.mirrors[index-1].empty() ? index : 0;
+}
+
 bool retryable(const Transfer& t) {
   return (t.error.empty() && (t.result == CURLE_RECV_ERROR || t.result == CURLE_SEND_ERROR ||
           t.result == CURLE_OPERATION_TIMEDOUT || t.result == CURLE_PARTIAL_FILE ||
@@ -186,7 +223,6 @@ struct Write {
   std::uint64_t offset = 0;
   std::size_t size = 0;
   std::vector<unsigned char> checkpoint;
-  bool finish = false;
 };
 
 struct Checkpoint {
@@ -224,8 +260,9 @@ std::string system_error(const char* action) {
 
 bool storage_matches(Job& job) {
   if (job.root_fd < 0) return true;
-  const auto now = Clock::now();
-  if (job.storage_checked != Clock::time_point{} && now-job.storage_checked < std::chrono::seconds(1)) return true;
+  const auto now = Clock::now().time_since_epoch().count();
+  const auto checked = job.storage_checked.load();
+  if (checked && now-checked < std::chrono::duration_cast<Clock::duration>(std::chrono::seconds(1)).count()) return true;
   job.storage_checked = now;
   struct stat current;
   if (stat(job.request.storage_root.c_str(), &current) != 0 || current.st_dev != job.root_stat.st_dev ||
@@ -304,11 +341,23 @@ bool recover_file(Job& job) {
   return true;
 }
 
+// The PS5 libkernel gives titles no link(): its import binds to null and the first call faults.
+// Reporting ENOTSUP sends publication down the exclusive-reserve-and-rename path instead.
+int hard_link(const char* from, const char* to) {
+#ifdef PROSPERO
+  (void)from; (void)to;
+  errno = ENOTSUP;
+  return -1;
+#else
+  return link(from, to);
+#endif
+}
+
 bool publish_file(Job& job) {
   // Persist proof of verification before the final name can become visible.
   if (job.request.recover_completed && !save_receipt(job)) return false;
   const std::string partial = job.request.destination+".part";
-  if (link(partial.c_str(), job.request.destination.c_str()) == 0) {
+  if (hard_link(partial.c_str(), job.request.destination.c_str()) == 0) {
     if (unlink(partial.c_str()) != 0) { job.fail(system_error("remove published partial")); return false; }
   } else {
     if (errno != EPERM && errno != ENOTSUP && errno != ENOSYS) {
@@ -413,6 +462,10 @@ bool configure_transport(void* handle, const std::string& url, bool follow_redir
   set(CURLOPT_IPRESOLVE, static_cast<long>(CURL_IPRESOLVE_V4));
   set(CURLOPT_SOCKOPTFUNCTION, +[](void*, curl_socket_t fd, curlsocktype)->int {
     int enabled = 1;
+    // The console's default receive window caps each connection far below the link on
+    // high-latency origins; 2 MiB matches what Spectrum requests. A refusal keeps the default.
+    int window = 2*1024*1024;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &window, sizeof window);
     return setsockopt(fd, SOL_SOCKET, 0x1200, &enabled, sizeof enabled) == 0 ? CURL_SOCKOPT_OK : CURL_SOCKOPT_ERROR;
   });
 #endif
@@ -429,16 +482,21 @@ public:
   std::vector<Snapshot> poll();
 private:
   std::mutex mutex_, disk_mutex_;
-  std::condition_variable wake_, disk_wake_;
+  std::condition_variable wake_, disk_wake_, sync_wake_;
   std::deque<std::shared_ptr<Job>> jobs_, waiting_;
-  std::deque<Write> writes_;
+  std::deque<Write> writes_, syncs_;
   std::vector<Block*> free_;
   std::array<Block, block_count> blocks_{};
   std::array<Transfer, max_connections> transfers_{};
   CURLM* multi_ = nullptr;
   std::atomic<bool> stopping_{false}, writer_stopping_{false};
-  pthread_t network_thread_{}, writer_thread_{};
-  bool running_ = false, network_started_ = false, writer_started_ = false, platform_started_ = false, curl_started_ = false;
+  std::atomic<unsigned> write_max_us_{0}, sync_max_us_{0};
+  std::atomic<std::uint64_t> write_calls_{0}, write_bytes_{0};
+  std::uint64_t perform_us_ = 0;
+  pthread_t network_thread_{}, sync_thread_{};
+  std::array<pthread_t, writer_count> writer_threads_{};
+  unsigned writers_started_ = 0;
+  bool running_ = false, network_started_ = false, sync_started_ = false, platform_started_ = false, curl_started_ = false;
   std::uint32_t next_id_ = 1;
   std::string error_;
   Block* take_block() {
@@ -458,17 +516,29 @@ private:
     { std::lock_guard lock(disk_mutex_); writes_.push_back(std::move(command)); }
     t.block = nullptr; t.fill = 0; disk_wake_.notify_one();
   }
-  void queue_checkpoint(const std::shared_ptr<Job>& job, bool finish) {
-    Write command; command.job = job; command.checkpoint = job->completed; command.finish = finish;
+  // Checkpoints fsync the partial file, which can take seconds on console storage.
+  // They run on their own thread so block writes, and therefore reception, keep flowing.
+  void queue_checkpoint(const std::shared_ptr<Job>& job) {
+    if (job->syncing.exchange(true)) return;
+    Write command; command.job = job; command.checkpoint = job->completed;
     ++job->pending;
-    { std::lock_guard lock(disk_mutex_); writes_.push_back(std::move(command)); }
-    disk_wake_.notify_one();
+    { std::lock_guard lock(disk_mutex_); syncs_.push_back(std::move(command)); }
+    sync_wake_.notify_one();
   }
   void network_loop();
   void writer_loop();
+  void sync_loop();
+  void finalize(Job& job);
+  static void record_max(std::atomic<unsigned>& slot, Clock::time_point started) {
+    const auto us = static_cast<unsigned>(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-started).count());
+    unsigned seen = slot.load();
+    while (us > seen && !slot.compare_exchange_weak(seen, us)) {}
+  }
+  void log_stats(const Job& job, unsigned allowed, std::uint64_t& previous_received, std::uint64_t& previous_written);
   void run_job(const std::shared_ptr<Job>& job);
   bool prepare(Job& job);
   bool probe_source(Job& job, unsigned source);
+  void verify_mirrors(Job& job);
   CURLcode perform_probe(Transfer& probe);
   bool configure(Transfer& t);
   void finish_transfer(Transfer& t);
@@ -505,7 +575,9 @@ bool Service::start() {
     if (!block.data) { error_ = "download buffer allocation failed"; stop(); return false; }
     free_.push_back(&block);
   }
-  if (curl_multi_setopt(multi_, CURLMOPT_MAX_HOST_CONNECTIONS, static_cast<long>(max_connections)) != CURLM_OK ||
+  // The idle-connection cache defaults to four per handle, and every cached TLS session costs heap.
+  if (curl_multi_setopt(multi_, CURLMOPT_MAXCONNECTS, static_cast<long>(max_connections)) != CURLM_OK ||
+      curl_multi_setopt(multi_, CURLMOPT_MAX_HOST_CONNECTIONS, static_cast<long>(max_connections)) != CURLM_OK ||
       curl_multi_setopt(multi_, CURLMOPT_MAX_TOTAL_CONNECTIONS, static_cast<long>(max_connections)) != CURLM_OK) {
     error_ = "curl connection limit configuration failed"; stop(); return false;
   }
@@ -514,8 +586,12 @@ bool Service::start() {
     t.curl = curl_easy_init();
     if (!t.curl) { error_ = "curl handle allocation failed"; stop(); return false; }
   }
-  writer_started_ = spawn(writer_thread_, +[](void* p)->void* { static_cast<Service*>(p)->writer_loop(); return nullptr; }, this);
-  network_started_ = writer_started_ && spawn(network_thread_, +[](void* p)->void* { static_cast<Service*>(p)->network_loop(); return nullptr; }, this);
+  for (auto& thread : writer_threads_) {
+    if (!spawn(thread, +[](void* p)->void* { name_thread("dl-writer"); static_cast<Service*>(p)->writer_loop(); return nullptr; }, this)) break;
+    ++writers_started_;
+  }
+  sync_started_ = writers_started_ == writer_count && spawn(sync_thread_, +[](void* p)->void* { name_thread("dl-sync"); static_cast<Service*>(p)->sync_loop(); return nullptr; }, this);
+  network_started_ = sync_started_ && spawn(network_thread_, +[](void* p)->void* { name_thread("dl-network"); static_cast<Service*>(p)->network_loop(); return nullptr; }, this);
   if (!network_started_) { error_ = "download worker creation failed"; stop(); return false; }
   running_ = true; return true;
 }
@@ -529,8 +605,10 @@ void Service::stop() {
   network_started_ = false;
   writer_stopping_ = true;
   disk_wake_.notify_all();
-  if (writer_started_) pthread_join(writer_thread_, nullptr);
-  writer_started_ = false;
+  sync_wake_.notify_all();
+  for (unsigned i = 0; i < writers_started_; ++i) pthread_join(writer_threads_[i], nullptr);
+  if (sync_started_) pthread_join(sync_thread_, nullptr);
+  writers_started_ = 0; sync_started_ = false;
   for (Transfer& t : transfers_) {
     if (t.headers) curl_slist_free_all(t.headers);
     if (t.curl) curl_easy_cleanup(t.curl);
@@ -687,13 +765,18 @@ bool Service::configure(Transfer& t) {
   };
   for (const auto& text : job.request.headers) add(text);
   const Source* source = job.sources.empty() ? nullptr : &job.sources[t.source];
-  const auto& url = source ? source->piece.url : job.request.url;
+  const auto& origin = source ? source->piece.url : job.request.url;
+  const auto& location = source ? source->location : job.location;
+  const std::string* mirror = !source && t.mirror ? &job.mirrors[t.mirror-1] : nullptr;
+  t.redirected = !mirror && !t.probe && !location.empty();
+  const auto& url = mirror ? *mirror : t.redirected ? location : origin;
   const auto& etag = source ? source->etag : job.etag;
   const bool ranged = source ? source->ranged : job.ranged;
   if (ranged && !t.probe && !etag.empty()) add("If-Range: " + etag);
   // Custom application headers must never be forwarded to an unrelated redirect origin.
   if (!configure_transport(t.curl, url, job.request.headers.empty())) ok = false;
-  set(CURLOPT_BUFFERSIZE, 256L*1024);
+  // body() copies each callback into one block, so curl must never hand over more than a block.
+  set(CURLOPT_BUFFERSIZE, static_cast<long>(block_size));
   set(CURLOPT_HTTPHEADER, t.headers);
   set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, &t);
   set(CURLOPT_HEADERFUNCTION, header); set(CURLOPT_HEADERDATA, &t);
@@ -771,6 +854,11 @@ bool Service::probe_source(Job& job, unsigned source_index) {
   if ((!probe.encoding.empty() && probe.encoding != "identity") || job.total > safe_integer) {
     job.fail("unsupported content encoding or file size"); return false;
   }
+  char* effective = nullptr;
+  if (curl_easy_getinfo(probe.curl, CURLINFO_EFFECTIVE_URL, &effective) == CURLE_OK && effective) {
+    auto& location = job.sources.empty() ? job.location : job.sources[source_index].location;
+    if (effective != (job.sources.empty() ? job.request.url : job.sources[source_index].piece.url)) location.assign(effective);
+  }
   if (!job.sources.empty()) {
     auto& source = job.sources[source_index];
     if (!job.known || job.total != source.piece.size) {
@@ -784,6 +872,25 @@ bool Service::probe_source(Job& job, unsigned source_index) {
     source.ranged = probe.status == 206;
   }
   return true;
+}
+
+// Keeps the mirrors that serve exactly the primary's bytes: same size, and the same strong ETag (or,
+// without one, a SHA-256 that verifies the whole file at the end).
+void Service::verify_mirrors(Job& job) {
+  Transfer& probe = transfers_[0];
+  for (const auto& url : job.request.mirrors) {
+    if (job.cancelled) break;
+    job.mirrors.push_back(url);
+    probe.probe = true; probe.source = 0; probe.mirror = static_cast<unsigned>(job.mirrors.size()); probe.accepted = 0;
+    const bool same = configure(probe) && perform_probe(probe) == CURLE_OK && probe.status == 206 && probe.content_range &&
+      probe.range_begin == 0 && probe.range_end == 0 && probe.range_total == job.total &&
+      (job.etag.empty() ? !job.request.sha256.empty() : probe.etag == job.etag);
+    if (!same) {
+      job.mirrors.pop_back();
+      platform_log(("download mirror ignored: " + url).c_str());
+    }
+  }
+  probe.mirror = 0;
 }
 
 bool Service::prepare(Job& job) {
@@ -805,8 +912,9 @@ bool Service::prepare(Job& job) {
     if (job.request.expected_bytes && (!job.known || job.total != job.request.expected_bytes)) {
       job.fail("expectedBytes does not match the server file size"); return false;
     }
+    if (job.ranged) verify_mirrors(job);
   } else {
-    for (const auto& piece : job.request.pieces) job.sources.push_back({piece, {}, false});
+    for (const auto& piece : job.request.pieces) job.sources.push_back({piece, {}, {}, false});
     for (unsigned i = 0; i < job.sources.size(); ++i) {
       job.etag.clear(); job.ranged = false; job.known = false; job.total = 0;
       if (!probe_source(job, i)) return false;
@@ -878,52 +986,123 @@ bool Service::prepare(Job& job) {
   return true;
 }
 
+// Contiguous blocks of one transfer are joined into one write. Thousands of 128 KiB pwrites spread over
+// 64 ranges held PS5 storage near 30 MB/s however many writers ran; large sequential writes are far
+// faster. A writer without its staging buffer still works, one block per write.
 void Service::writer_loop() {
+  constexpr std::size_t max_batch = 16;
+  char* const staging = static_cast<char*>(std::malloc(block_size * max_batch));
+  const std::size_t batch_limit = staging ? max_batch : 1;
+  std::vector<Write> batch;
+  batch.reserve(max_batch);
   for (;;) {
-    Write command;
+    batch.clear();
     {
       std::unique_lock lock(disk_mutex_);
       disk_wake_.wait(lock, [&] { return writer_stopping_ || !writes_.empty(); });
       if (writes_.empty() && writer_stopping_) break;
-      command = std::move(writes_.front()); writes_.pop_front();
-    }
-    Job& job = *command.job;
-    if (command.block) {
-      if (!job.failed && storage_matches(job) && write_all(job.fd, command.block->data, command.size, command.offset))
-        command.transfer->written += command.size;
-      else if (!job.failed) job.fail(system_error("write partial file"));
-      release(command.block);
-      --command.transfer->pending;
-    } else {
-      if (job.fd >= 0 && job.checkpoint_ready) checkpoint(job, command.checkpoint);
-      if (command.finish) {
-        if (!job.cancelled && !job.failed && !job.recovering && ftruncate(job.fd, static_cast<off_t>(job.total)) != 0)
-          job.fail(system_error("truncate completed file"));
-        if (!job.cancelled && !job.failed && verify_file(job)) {
-          if (!job.recovering && fsync(job.fd) != 0) job.fail(system_error("sync completed file"));
-          job.storage_checked = {};
-          if (!job.cancelled && !job.failed && storage_matches(job)) {
-            if (job.recovering) {
-              struct stat visible{}, opened{};
-              if (lstat(job.request.destination.c_str(), &visible) != 0 || fstat(job.fd, &opened) != 0 ||
-                  visible.st_dev != opened.st_dev || visible.st_ino != opened.st_ino)
-                job.fail("completed destination changed during recovery");
-            } else publish_file(job);
-          }
-        }
-        if (job.fd >= 0 && close(job.fd) != 0) job.fail(system_error("close partial file"));
-        job.fd = -1;
-        {
-          std::lock_guard lock(job.mutex);
-          job.snapshot.state = terminal_state(job);
-          job.snapshot.connections = 0;
-        }
-        job.finalized = true;
+      batch.push_back(std::move(writes_.front())); writes_.pop_front();
+      // A transfer queues its blocks in order and is reused only once none are pending, so its
+      // next blocks are the queue entries that continue at the batch's end.
+      std::uint64_t end = batch[0].offset + batch[0].size;
+      for (auto it = writes_.begin(); it != writes_.end() && batch.size() < batch_limit;) {
+        if (it->transfer != batch[0].transfer || it->offset != end) { ++it; continue; }
+        end += it->size;
+        batch.push_back(std::move(*it));
+        it = writes_.erase(it);
       }
     }
+    Job& job = *batch[0].job;
+    const char* data = batch[0].block->data;
+    std::size_t size = batch[0].size;
+    if (batch.size() > 1) {
+      size = 0;
+      for (const Write& write : batch) { std::memcpy(staging + size, write.block->data, write.size); size += write.size; }
+      data = staging;
+    }
+    const auto started = Clock::now();
+    if (!job.failed && storage_matches(job) && write_all(job.fd, data, size, batch[0].offset)) {
+      batch[0].transfer->written += size;
+      ++write_calls_; write_bytes_ += size;
+    }
+    else if (!job.failed) job.fail(system_error("write partial file"));
+    record_max(write_max_us_, started);
+    for (const Write& write : batch) {
+      release(write.block);
+      --write.transfer->pending;
+      --job.pending;
+    }
+    if (multi_) curl_multi_wakeup(multi_);
+  }
+  std::free(staging);
+}
+
+void Service::finalize(Job& job) {
+  if (!job.cancelled && !job.failed && !job.recovering && ftruncate(job.fd, static_cast<off_t>(job.total)) != 0)
+    job.fail(system_error("truncate completed file"));
+  if (!job.cancelled && !job.failed && verify_file(job)) {
+    if (!job.recovering && fsync(job.fd) != 0) job.fail(system_error("sync completed file"));
+    job.storage_checked = 0;
+    if (!job.cancelled && !job.failed && storage_matches(job)) {
+      if (job.recovering) {
+        struct stat visible{}, opened{};
+        if (lstat(job.request.destination.c_str(), &visible) != 0 || fstat(job.fd, &opened) != 0 ||
+            visible.st_dev != opened.st_dev || visible.st_ino != opened.st_ino)
+          job.fail("completed destination changed during recovery");
+      } else publish_file(job);
+    }
+  }
+  if (job.fd >= 0 && close(job.fd) != 0) job.fail(system_error("close partial file"));
+  job.fd = -1;
+  {
+    std::lock_guard lock(job.mutex);
+    job.snapshot.state = terminal_state(job);
+    job.snapshot.connections = 0;
+  }
+  job.finalized = true;
+}
+
+void Service::sync_loop() {
+  for (;;) {
+    Write command;
+    {
+      std::unique_lock lock(disk_mutex_);
+      sync_wake_.wait(lock, [&] { return writer_stopping_ || !syncs_.empty(); });
+      if (syncs_.empty() && writer_stopping_) break;
+      command = std::move(syncs_.front()); syncs_.pop_front();
+    }
+    Job& job = *command.job;
+    const auto started = Clock::now();
+    if (job.fd >= 0 && job.checkpoint_ready) checkpoint(job, command.checkpoint);
+    record_max(sync_max_us_, started);
+    job.syncing = false;
     --job.pending;
     if (multi_) curl_multi_wakeup(multi_);
   }
+}
+
+// Every two seconds while downloading: enough to tell network, disk and sync stalls apart on the console.
+void Service::log_stats(const Job& job, unsigned allowed, std::uint64_t& previous_received, std::uint64_t& previous_written) {
+  std::uint64_t received = job.committed, written = job.committed;
+  unsigned active = 0, paused = 0;
+  for (const Transfer& t : transfers_) if (t.active || t.draining) {
+    received += t.accepted; written += t.written.load(); ++active; paused += t.paused;
+  }
+  std::size_t free_blocks, queued;
+  { std::lock_guard lock(disk_mutex_); free_blocks = free_.size(); queued = writes_.size(); }
+  const std::uint64_t calls = write_calls_.exchange(0), bytes = write_bytes_.exchange(0);
+  const std::uint64_t average_write = calls ? bytes / calls : 0;
+  char line[256];
+  std::snprintf(line, sizeof line,
+    "download: conns=%u/%u paused=%u recv=%lluKB/s disk=%lluKB/s buffered=%zuKiB queued=%zu retries=%u write_max=%ums sync_max=%ums net_busy=%llu%% write_avg=%lluKiB mirrors=%zu",
+    active, allowed, paused, static_cast<unsigned long long>((received-previous_received)/2048),
+    static_cast<unsigned long long>((written-previous_written)/2048), (block_count-free_blocks)*block_size/1024, queued,
+    job.retries, write_max_us_.exchange(0)/1000, sync_max_us_.exchange(0)/1000,
+    static_cast<unsigned long long>(perform_us_/20000), static_cast<unsigned long long>(average_write / 1024),
+    static_cast<std::size_t>(std::count_if(job.mirrors.begin(), job.mirrors.end(), [](const std::string& url) { return !url.empty(); })));
+  perform_us_ = 0;
+  platform_log(line);
+  previous_received = received; previous_written = written;
 }
 
 void Service::snapshot(Job& job, unsigned allowed, Clock::time_point now,
@@ -960,7 +1139,7 @@ void Service::finish_transfer(Transfer& t) {
 
 void Service::run_job(const std::shared_ptr<Job>& job) {
   for (Transfer& t : transfers_) {
-    t.job = job; t.active = false; t.draining = false; t.probe = false; t.source = 0;
+    t.job = job; t.active = false; t.draining = false; t.probe = false; t.source = 0; t.mirror = 0;
     t.accepted = 0; t.written = 0; t.pending = 0;
   }
   { std::lock_guard lock(job->mutex); job->snapshot.state = "connecting"; }
@@ -970,13 +1149,14 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
   if (prepared && !job->cancelled && !job->recovering) {
     { std::lock_guard lock(job->mutex); job->snapshot.state = "downloading"; }
     const unsigned limit = job->ranged ? job->request.connections : 1;
-    unsigned allowed = job->request.adaptive ? std::min(4u, limit) : limit;
+    unsigned allowed = job->request.adaptive ? std::min(8u, limit) : limit;
     const std::size_t count = job->ranged ? job->completed.size() : 1;
     std::vector<unsigned char> scheduled(count);
     std::vector<unsigned> attempts(count);
     std::vector<Clock::time_point> retry_at(count);
     for (std::size_t i = 0; i < count && job->ranged; ++i) scheduled[i] = job->completed[i];
-    Clock::time_point previous = Clock::now(), adjusted = previous, checkpointed = previous;
+    Clock::time_point previous = Clock::now(), adjusted = previous, checkpointed = previous, logged = previous;
+    std::uint64_t logged_received = job->committed, logged_written = job->committed;
     std::uint64_t previous_written = job->committed;
     double previous_speed = 0;
     std::size_t finished = static_cast<std::size_t>(std::count(scheduled.begin(), scheduled.end(), 1));
@@ -991,7 +1171,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             job->committed += t.written;
             if (job->ranged) job->completed[t.piece] = 1;
             ++finished;
-          } else if (attempts[t.piece] < 4 && retryable(t)) {
+          } else if (attempts[t.piece] < 4 && (forget_mirror(*job, t) || retryable(t) || forget_redirect(*job, t))) {
             ++job->retries;
             scheduled[t.piece] = 0;
             retry_at[t.piece] = now+std::chrono::milliseconds(std::max(t.retry_after*1000u,
@@ -1020,6 +1200,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
           } else {
             t.begin = job->ranged ? t.piece*job->request.range_bytes : 0;
             t.length = job->ranged ? std::min(job->request.range_bytes, job->total-t.begin) : job->total;
+            t.mirror = job->ranged ? pick_mirror(*job, static_cast<unsigned>(&t - transfers_.data())) : 0;
           }
           t.accepted = 0; t.written = 0; ++attempts[next];
           if (!file) job->response.clear();
@@ -1030,7 +1211,9 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
         }
       }
       int running = 0;
+      const auto performing = Clock::now();
       const auto result = curl_multi_perform(multi_, &running);
+      perform_us_ += std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-performing).count();
       if (result != CURLM_OK) { job->fail(curl_multi_strerror(result)); break; }
       int left = 0;
       while (CURLMsg* message = curl_multi_info_read(multi_, &left)) if (message->msg == CURLMSG_DONE) {
@@ -1049,12 +1232,13 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
           { std::lock_guard lock(job->mutex); speed = job->snapshot.bytes_per_second; buffered = job->snapshot.buffered; }
           if (buffered > block_size*block_count*3/4 || (previous_speed > 0 && speed < previous_speed*0.85))
             allowed = std::max(1u, allowed-1);
-          else if (!previous_speed || speed > previous_speed*1.05) allowed = std::min(limit, allowed+1);
+          else if (!previous_speed || speed > previous_speed*1.05) allowed = std::min(limit, allowed+2);
           previous_speed = speed; adjusted = now;
         }
       }
+      if (now-logged >= std::chrono::seconds(2)) { log_stats(*job, allowed, logged_received, logged_written); logged = now; }
       if (job->ranged && now-checkpointed >= std::chrono::seconds(5)) {
-        queue_checkpoint(job, false); checkpointed = now;
+        queue_checkpoint(job); checkpointed = now;
       }
       if (finished < count) curl_multi_poll(multi_, nullptr, 0, 50, nullptr);
     }
@@ -1073,8 +1257,8 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
     job->snapshot.total = job->total; job->snapshot.total_known = true;
   }
   if (file && job->fd >= 0) {
-    queue_checkpoint(job, true);
-    while (!job->finalized) curl_multi_poll(multi_, nullptr, 0, 50, nullptr);
+    if (job->checkpoint_ready) checkpoint(*job, job->completed);
+    finalize(*job);
   } else {
     std::lock_guard lock(job->mutex);
     job->snapshot.body = std::move(job->response);

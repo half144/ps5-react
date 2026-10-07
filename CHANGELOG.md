@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- `Downloads.enqueue` takes `mirrors`: other URLs serving the same file. Verified ones share the
+  ranges with the primary, and one that fails is dropped; servers that limit each host serve more
+  together.
+
+- Add `Image.getColor(uri)`: the art's most prominent vivid colour, computed on the
+  decode worker, for accents or the controller light bar.
+
+- Fix a PS5 crash when a download finished: titles have no `link()`, whose import
+  bound to null. PS5 publication now always reserves the final name and renames.
+
+- Allow up to 64 download connections (was 16) and a 16 MiB transfer buffer of 128 KiB blocks (was 8 MiB),
+  written by two writers that join contiguous blocks into writes of up to 2 MiB:
+  origins that throttle each connection, such as archive.org at about 1.4 MB/s,
+  scale with connection count.
+
+- PS5 notifications use libkernel's `sceKernelSendNotificationRequest` instead of a
+  dlopen'd `sceNotificationSend`.
+
+- Download ranges reuse the probe's final URL instead of repeating the redirect
+  for every range, and fall back to the original URL if that target returns a
+  client error. Adaptive concurrency starts at up to 8 connections and grows by
+  2 per step. Resume checkpoints, which fsync the partial file, run on their own
+  thread so a slow sync no longer stalls block writes and pauses every transfer.
+
+- Verify PS5 data and temporary roots with exclusive write/read/remove probes
+  after filesystem elevation. Readable but unwritable sandbox mounts now fall
+  back to the title-owned `/data/ps5-react/<TITLE_ID>` directory, with explicit
+  diagnostics if directory creation or the fallback proof fails.
+
 - Add the `borderGradient` View style (`{type: 'conic', width, angle, stops}`)
   and the animatable `borderGradientAngle`: a conic gradient seen only through
   the rounded border ring, the classic rotating-gradient border. Turning it

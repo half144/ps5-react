@@ -74,8 +74,9 @@ task during cleanup if its lifetime belongs to that component.
 
 | Option | Default | Limits and behavior |
 | --- | --- | --- |
-| `connections` | 8 | Integer 1–16; maximum ranges in flight |
-| `adaptive` | `true` | Starts at up to 4; adjusts concurrency every 3 seconds using disk progress and buffer pressure |
+| `connections` | 8 | Integer 1–64; maximum ranges in flight |
+| `mirrors` | omitted | Up to 4 other http(s) URLs for the same file. Each is probed and kept only if its size and strong ETag match the primary (or a `sha256` is given); ranges then rotate over the primary and the mirrors, and a mirror that fails a range is dropped. Not combined with `pieces` |
+| `adaptive` | `true` | Starts at up to 8; every 3 seconds adds 2 while speed rises, removes 1 on buffer pressure or a speed drop |
 | `rangeBytes` | 32 MiB | Integer 1–256 MiB; at most 65,536 ranges |
 | `resume` | `true` | Reuses matching durable completed ranges; `false` refuses existing partial files |
 | `recoverCompleted` | `false` | Writes a durable `.complete` receipt before publication; a later identical request verifies an owned final file instead of downloading it again |
@@ -85,7 +86,7 @@ task during cleanup if its lifetime belongs to that component.
 | `headers` | omitted | Up to 32 string header values; see HTTP restrictions below |
 
 A one-byte GET probe checks range support and size. Parallel download and resume
-require a strong ETag or a supplied SHA-256. Every range checks its exact bounds,
+require a strong ETag or a supplied SHA-256. Ranges reuse the probe's final URL after redirects, falling back to the original URL on a 4xx. Every range checks its exact bounds,
 total, status and identity. Without those guarantees, downloading uses a single
 sequential connection; its partial files cannot resume. Resume requires the same
 URL, validator/hash, size and range size. Only completed, synced ranges survive
@@ -129,7 +130,7 @@ Alternatively, `enqueue` accepts `pieces: [{url, offset, size, sha1}]` together
 with `expectedBytes`. Each source is probed separately. Sources supporting
 ranges use source-relative HTTP ranges; writes use absolute output offsets.
 Sources without range support use one whole-piece request. Multiple pieces can
-be in flight within the same 1–16 connection and 8 MiB buffer limits. No complete
+be in flight within the same 1–64 connection and 16 MiB buffer limits. No complete
 temporary copy of each piece is required. The final writer verifies SHA-1
 pieces and optional whole-file SHA-256 in one sequential read before publication.
 SHA-1 here checks legacy manifest integrity; it is not a modern authenticity proof.
@@ -209,7 +210,7 @@ transport policy on their own workers and connections, outside this queue.
 ## Performance and resource contract
 
 One persistent libcurl multi handle and reusable easy handles share connections.
-HTTP/1.1 limits buffering associated with paused multiplexed streams. An 8 MiB
+HTTP/1.1 limits buffering associated with paused multiplexed streams. A 16 MiB
 pool of 32 × 256 KiB blocks bounds application file buffers, independently of
 file size and concurrency. A network worker and a disk writer each use a 1 MiB
 stack; TLS, curl internals, response strings and metadata consume additional

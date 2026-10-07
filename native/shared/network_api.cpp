@@ -57,6 +57,22 @@ bool digest(std::string& value, std::size_t size) {
   return true;
 }
 
+bool mirrors(JSContext* ctx, JSValueConst options, network::Request& request) {
+  Value array{ctx, JS_GetPropertyStr(ctx, options, "mirrors")};
+  if (JS_IsUndefined(array.value)) return true;
+  if (!JS_IsArray(array.value)) return false;
+  std::uint64_t count = 0;
+  if (!number_option(ctx, array.value, "length", count, 0, 4)) return false;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    Value item{ctx, JS_GetPropertyUint32(ctx, array.value, i)};
+    std::string url;
+    if (!text(ctx, item.value, url, 8192) || !(url.starts_with("https://") || url.starts_with("http://")) ||
+        url.find_first_of("\r\n") != std::string::npos) return false;
+    request.mirrors.push_back(std::move(url));
+  }
+  return request.mirrors.empty() || request.pieces.empty();
+}
+
 bool pieces(JSContext* ctx, JSValueConst options, network::Request& request) {
   Value array{ctx, JS_GetPropertyStr(ctx, options, "pieces")};
   if (JS_IsUndefined(array.value)) return true;
@@ -135,14 +151,14 @@ JSValue begin(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, bool d
         return JS_ThrowTypeError(ctx, "%s %s: destination must be inside storageRoot", call, path.c_str());
     }
     std::uint64_t connections = request.connections;
-    if (!number_option(ctx, options, "connections", connections, 1, 16) ||
+    if (!number_option(ctx, options, "connections", connections, 1, 64) ||
         !number_option(ctx, options, "rangeBytes", request.range_bytes, 1024*1024, 256*1024*1024) ||
         !boolean_option(ctx, options, "resume", request.resume) || !boolean_option(ctx, options, "adaptive", request.adaptive) ||
         !boolean_option(ctx, options, "recoverCompleted", request.recover_completed) ||
         !string_option(ctx, options, "sha256", request.sha256, 64) || !digest(request.sha256, 64) ||
         !number_option(ctx, options, "expectedBytes", request.expected_bytes, 1, 9007199254740991ULL) ||
-        !pieces(ctx, options, request))
-      return JS_ThrowTypeError(ctx, "%s %s: invalid download options; pieces must cover expectedBytes exactly without gaps or overlaps", call, path.c_str());
+        !pieces(ctx, options, request) || !mirrors(ctx, options, request))
+      return JS_ThrowTypeError(ctx, "%s %s: invalid download options; pieces must cover expectedBytes exactly without gaps or overlaps, and mirrors (at most 4 http(s) URLs) cannot be combined with pieces", call, path.c_str());
     request.connections = static_cast<unsigned>(connections);
   } else {
     if (!string_option(ctx, options, "method", request.method, 16) ||

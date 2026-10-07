@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "async_log.hpp"
+#include "thread_name.hpp"
 
 #include "platform/ps5/system.hpp"
 #include <cstdarg>
@@ -22,6 +23,7 @@ unsigned dropped = 0;
 bool running = false, stopping = false;
 
 void* drain(void*) {
+  name_thread("log-writer");
   char line[line_size];
   pthread_mutex_lock(&mutex);
   for (;;) {

@@ -36,6 +36,13 @@ int main(int argc, char** argv) {
   if (std::string(argv[2]) != "-") request.destination = argv[2];
   request.adaptive = false;
   request.recover_completed = std::getenv("NETWORK_TEST_RECOVER") != nullptr;
+  if (const char* mirrors = std::getenv("NETWORK_TEST_MIRRORS")) {
+    for (std::string list = mirrors; !list.empty();) {
+      const auto comma = list.find(',');
+      request.mirrors.push_back(list.substr(0, comma));
+      list = comma == std::string::npos ? "" : list.substr(comma+1);
+    }
+  }
   request.connections = argc > 3 ? static_cast<unsigned>(std::atoi(argv[3])) : 4;
   request.range_bytes = 1024*1024;
   request.max_bytes = argc > 4 ? std::strtoull(argv[4], nullptr, 10) : 1024*1024;

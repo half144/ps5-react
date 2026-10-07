@@ -126,18 +126,21 @@ def main():
         directory = Path(temporary)
         binary = compile_client(directory)
 
-        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False):
+        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, mirrors=()):
             environment = dict(os.environ)
             environment.pop("NETWORK_TEST_RECOVER", None)
             if recover:
                 environment["NETWORK_TEST_RECOVER"] = "1"
+            environment.pop("NETWORK_TEST_MIRRORS", None)
+            if mirrors:
+                environment["NETWORK_TEST_MIRRORS"] = ",".join(origin+m for m in mirrors)
             result = subprocess.run([str(binary), (endpoint if endpoint.startswith("https:") else origin+endpoint), str(path), str(connections), str(max_bytes),
                                      str(cancel), digest, method, str(file_limit), str(stop),
                                      "pieces" if pieces else "single", *(hashes or [])], capture_output=True, text=True, timeout=20, env=environment)
             if not result.stdout.strip():
                 raise AssertionError(result.stderr or f"client exited {result.returncode}")
             out = json.loads(result.stdout)
-            assert out["peakBuffer"] <= 8*1024*1024, out
+            assert out["peakBuffer"] <= 16*1024*1024, out
             assert out["peakConnections"] <= connections, out
             return out
 
@@ -192,9 +195,36 @@ def main():
         assert out["state"] == "completed", out
         assert path.read_bytes() == assembled
         assert len([r for r in Handler.requests[before:] if r[1] != "bytes=0-0"]) < 18
+        # 64 connections run on four lanes; every range lands once, retried ones included.
+        for endpoint in ("/slow", "/flaky"):
+            path = directory / f"lanes{endpoint.replace('/', '-')}"
+            out = run(endpoint, path, connections=64, digest=hashlib.sha256(DATA).hexdigest())
+            assert out["state"] == "completed", out
+            assert path.read_bytes() == DATA
+            path.unlink()
+        # Ranges spread over a mirror with the primary's size and ETag; one with another ETag gets none.
+        before = len(Handler.requests)
+        path = directory / "mirrored"
+        out = run("/file", path, connections=8, mirrors=("/mirror", "/changed"), digest=hashlib.sha256(DATA).hexdigest())
+        assert out["state"] == "completed", out
+        assert path.read_bytes() == DATA
+        ranges = [r for r in Handler.requests[before:] if r[1] and r[1] != "bytes=0-0"]
+        assert any(r[0] == "/mirror" for r in ranges) and any(r[0] == "/file" for r in ranges), ranges
+        assert not any(r[0] == "/changed" for r in ranges), ranges
+        path.unlink()
+        # A mirror that passes the probe but fails its ranges is dropped; they go back to the primary.
+        out = run("/file", path, connections=8, mirrors=("/truncated",), digest=hashlib.sha256(DATA).hexdigest())
+        assert out["state"] == "completed", out
+        assert path.read_bytes() == DATA
+        path.unlink()
+        # /flaky fails each range once per server run; later checks count those retries afresh.
+        Handler.retried.clear()
         for endpoint in ("/file", "/redirect", "/no-range", "/no-validator"):
             path = directory / endpoint.removeprefix("/")
+            before = len(Handler.requests)
             out = run(endpoint, path)
+            if endpoint == "/redirect":
+                assert [r[0] for r in Handler.requests[before:]].count("/redirect") == 1, Handler.requests[before:]
             assert out["state"] == "completed", out
             assert hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(DATA).digest()
             assert out["written"] == len(DATA), out

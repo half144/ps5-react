@@ -4,6 +4,7 @@
 // Independent React proof: PS5 lifecycle/display/input, software UI and GL texture.
 
 #include "network.hpp"
+#include "thread_name.hpp"
 #include "app_config.hpp"
 #include "async_log.hpp"
 #include "platform/ps5/display_egl.hpp"
@@ -331,6 +332,7 @@ bool run_proof() {
 }
 
 void* render_thread(void*) {
+  name_thread("render");
   hui::sys::log("[PS5-REACT] render thread started, 8 MiB stack");
   if (!async_log::start()) hui::sys::log("[PS5-REACT] log writer thread failed; logging synchronously");
   const bool ok = run_proof();

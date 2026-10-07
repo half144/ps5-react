@@ -15,6 +15,8 @@ struct Request {
   std::string url, destination, storage_root, method = "GET", body, sha256;
   std::vector<std::string> headers;
   std::vector<Piece> pieces;
+  // Other URLs serving the same bytes; ranges are spread across them and `url`.
+  std::vector<std::string> mirrors;
   std::uint64_t expected_bytes = 0;
   std::uint64_t max_bytes = 1024 * 1024, range_bytes = 32 * 1024 * 1024;
   unsigned connections = 8;
@@ -43,4 +45,5 @@ bool configure_transport(void* curl, const std::string& url, bool follow_redirec
 bool platform_start(std::string& error);
 void platform_stop();
 const char* ca_path();
+void platform_log(const char* line);
 } // namespace network

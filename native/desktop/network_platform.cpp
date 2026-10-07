@@ -6,4 +6,5 @@ namespace network {
 bool platform_start(std::string&) { return true; }
 void platform_stop() {}
 const char* ca_path() { return nullptr; }
+void platform_log(const char*) {}
 }
