@@ -553,7 +553,7 @@ std::string check(Volumes& in) {
       std::array<unsigned char, 2> first{};
       if (fresh && method != stored && data >= 2 && in.read(at + size, first.data(), first.size()) &&
           (first[0] & ppmd_block) && (first[0] & ppmd_memory))
-        memory = std::max(memory, (first[1] + 1ULL) * mib);
+        memory = std::max<std::uint64_t>(memory, (first[1] + 1ULL) * mib);
     }
     if (size + data > in.size() - std::min(at, in.size())) break;
     at += size + data;
