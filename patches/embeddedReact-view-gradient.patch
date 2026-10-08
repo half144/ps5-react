@@ -6,7 +6,8 @@ Changed files: engine/rendering/gradient.{c,h}, engine/include/er_scene.h,
 engine/scene/er_node_internal.h, engine/scene/compositor.c,
 engine/tests/rendering/{CMakeLists.txt,test_gradient.c},
 bridges/quickjs/native_ui_bridge.c and
-bridges/quickjs/js/src/embedded-react/index.d.ts. Not yet proposed upstream.
+bridges/quickjs/js/src/embedded-react/index.d.ts. Proposed upstream as pull
+request #283.
 
 The engine could rasterize View gradients (ERUI_GRADIENT) but the QuickJS
 bridge only exposed them for <Dial>. This adds a `backgroundGradient` style

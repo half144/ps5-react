@@ -6,7 +6,7 @@ one there. Changed files: engine/include/native_renderer.h,
 engine/core/native_renderer.c, engine/core/renderer_internal.h,
 engine/scene/er_node_internal.h, engine/scene/compositor.c,
 backends/software/renderer_backend.c and engine/tests/scroll (new
-test_scroll_copy.c). Not yet proposed upstream.
+test_scroll_copy.c). Proposed upstream as pull request #293.
 
 A changed scroll offset dirtied the ScrollView, so every commit of a scroll
 repainted (and a host re-uploaded) the whole viewport. Backends may now offer

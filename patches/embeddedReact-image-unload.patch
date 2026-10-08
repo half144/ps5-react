@@ -3,7 +3,7 @@ Embedded React: unload registered images, and register ARGB with known opacity.
 Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
 revision pinned in dependencies.lock.json. Changed files: engine/include/
 er_scene.h, engine/rendering/image_registry.{c,h}, engine/rendering/
-image_scaler.c. Not yet proposed upstream.
+image_scaler.c. Proposed upstream as pull request #307.
 
 The registry could only add or replace images, so an image cache could never
 give a slot back or let go of pixels: every remote image would have kept its

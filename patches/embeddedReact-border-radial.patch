@@ -6,7 +6,8 @@ one there. Changed files: engine/include/er_scene.h,
 engine/scene/er_node_internal.h, engine/scene/compositor.c,
 engine/rendering/border_sweep.c, engine/rendering/border_sweep.h,
 bridges/quickjs/native_ui_bridge.c and
-bridges/quickjs/js/src/embedded-react/index.d.ts. Not yet proposed upstream.
+bridges/quickjs/js/src/embedded-react/index.d.ts. Proposed upstream, with the
+other border ring patches, as pull request #325.
 
 Magic UI's ShineBorder is a CSS radial-gradient on a background several times
 the box, its position looping corner to corner, masked to the border. The View

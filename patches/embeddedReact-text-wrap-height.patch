@@ -4,7 +4,7 @@ Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
 revision pinned in dependencies.lock.json, after the patches listed before this
 one there. Changed files: engine/layout/layout_engine.c,
 engine/text/text_renderer.c, engine/text/text_renderer.h and
-engine/tests/layout/test_layout.c. Not yet proposed upstream.
+engine/tests/layout/test_layout.c. Proposed upstream as pull request #319.
 
 The renderer breaks text at its node's width (unlimited lines by default, at
 most numberOfLines), but layout gave an auto-height Text one line, or exactly

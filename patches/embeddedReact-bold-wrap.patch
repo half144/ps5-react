@@ -4,7 +4,7 @@ Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
 revision pinned in dependencies.lock.json, after the patches listed before this
 one there. Changed files: engine/text/text_renderer.c,
 engine/text/text_renderer.h, engine/layout/layout_engine.c and
-engine/tests/text/test_text.c. Not yet proposed upstream.
+engine/tests/text/test_text.c. Proposed upstream as pull request #321.
 
 Faux bold draws every glyph a pixel wider, and the measurement counts it, but
 line breaking used the regular advance. A bold title slightly wider than its

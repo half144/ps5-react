@@ -3,8 +3,8 @@ Embedded React: keep a scroll strip and a card apart in the damage set.
 Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
 revision pinned in dependencies.lock.json, after the patches listed before this
 one there. Changed files: engine/scene/damage.c,
-engine/scene/er_damage_internal.h and engine/tests/scene/test_damage_set.c. Not
-yet proposed upstream.
+engine/scene/er_damage_internal.h and engine/tests/scene/test_damage_set.c.
+Proposed upstream as pull request #309.
 
 The damage set merged any two rects that overlapped or abutted into their
 bounding box. During a scroll, the exposed full-width strip and a card or menu

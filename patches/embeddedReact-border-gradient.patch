@@ -7,7 +7,8 @@ engine/scene/er_node_internal.h, engine/scene/compositor.c,
 engine/animation/animation.c, engine/rendering/border_sweep.c,
 engine/rendering/border_sweep.h, bridges/quickjs/native_ui_bridge.c,
 bridges/quickjs/js/src/embedded-react/index.d.ts and
-engine/tests/rendering/test_border_sweep.c. Not yet proposed upstream.
+engine/tests/rendering/test_border_sweep.c. Proposed upstream, with the other
+border ring patches, as pull request #325.
 
 The rotating-gradient border (a conic gradient turning behind the card, masked
 to its border) is the classic focus-ring shimmer. The View style

@@ -2,7 +2,8 @@ Embedded React: scale and convert only the clipped part of an image.
 
 Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
 revision pinned in dependencies.lock.json. Changed files: engine/rendering/
-image_scaler.c and engine/tests/rendering/test_image.c.
+image_scaler.c and engine/tests/rendering/test_image.c. Proposed upstream,
+without the integer bilinear weights, as pull request #285.
 
 render_region() produced every row of a scaled, tinted or CPU-converted RGB565
 image on each repaint, then let the row blits discard what fell outside the

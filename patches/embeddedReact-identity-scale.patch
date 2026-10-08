@@ -2,7 +2,7 @@ Embedded React: treat an explicit scale of 1 as no transform.
 
 Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
 revision pinned in dependencies.lock.json. Changed file: engine/rendering/
-transform.c.
+transform.c. Proposed upstream as pull request #287.
 
 er_transform_is_translate_only() recognised identity scale only as the unset
 value 0. A node whose scale is bound to an animated value resting at 1 (every

@@ -4,7 +4,8 @@ Modified from Embedded React (Apache-2.0, Copyright 2026 Cory Lamming) at the
 revision pinned in dependencies.lock.json, after the patches listed before this
 one there. Changed files: engine/scene/er_node_internal.h,
 engine/scene/compositor.c, engine/tests/rendering/CMakeLists.txt and the new
-engine/tests/rendering/test_paint_free_container.c. Not yet proposed upstream.
+engine/tests/rendering/test_paint_free_container.c. Proposed upstream as pull
+request #315.
 
 The damage pre-pass damaged the whole box of every node whose screen rect
 changed. A list that grows at its unseen end (a VirtualList filling rows, a
