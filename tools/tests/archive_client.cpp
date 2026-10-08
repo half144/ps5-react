@@ -1,8 +1,12 @@
 #include "archives.hpp"
+#include "archive_preflight.hpp"
 #include <chrono>
 #include <iostream>
 #include <thread>
 int main(int argc,char** argv){
+ if(argc>2&&std::string(argv[1])=="inspect"){
+  const auto inspection=archives::inspect(std::vector<std::string>(argv+2,argv+argc));
+  std::cout<<inspection.kind<<"\n"<<inspection.refusal<<"\n";return 0;}
  if(argc<4)return 2;
  archives::Request request;request.destination=argv[1];request.max_bytes=std::stoull(argv[2]);
  for(int i=3;i<argc;i++)request.sources.emplace_back(argv[i]);

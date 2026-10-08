@@ -137,5 +137,28 @@ def main():
   assert (root/"zip/game.ffpfsc").read_bytes()==DATA
   (root/"zip/game.ffpfsc").write_bytes(b"corrupt")
   assert run("zip",[zip])[0]=="failed"
-  print("PASS: ZIP/TAR/7z/multivolume RAR, decoder memory refusal, interrupted staging, verified recovery, missing parts and unsafe archive rejection")
+  # Inspection names a file by its bytes and refuses a too-large window from a download's first bytes.
+  def inspect(*paths):
+   return subprocess.check_output([str(binary),"inspect",*map(str,paths)],text=True,timeout=20).split("\n")[:2]
+  def partial(name,content,keep,hole=0):
+   p=root/name;p.write_bytes(content[:keep]+bytes(hole));return p
+  big_rar=rar5_with_window(9)
+  assert inspect(partial("big.rar.part",big_rar,len(big_rar)-40,1<<20))==["rar",TOO_BIG]
+  small_rar=rar5_with_window(8)
+  assert inspect(partial("small.rar.part",small_rar,len(small_rar)-40,1<<20))==["rar",""]
+  assert inspect(rar_parts[0])==["rar",""]
+  assert inspect(partial("hole.part",big_rar,0,1<<20))==["",""]
+  assert inspect(partial("zip.part",zip.read_bytes(),200))==["zip",""]
+  assert inspect(partial("7z.part",seven.read_bytes(),40))==["7z",""]
+  assert inspect(tar)==["tar",""]
+  gz=root/"fixture.tar.gz";gz.write_bytes(__import__("gzip").compress(tar.read_bytes()))
+  assert inspect(gz)==["tar.gz",""]
+  assert inspect(partial("huge.tar.xz.part",(root/"huge.tar.xz").read_bytes(),4096))==["tar.xz",TOO_BIG]
+  assert inspect(partial("game.pkg.part",b"\x7fCNT"+bytes(64),68))==["pkg",""]
+  assert inspect(partial("game.exfat",b"\xeb\x76\x90EXFAT   "+bytes(500),512))==["exfat",""]
+  ufs=bytearray(70000);ufs[65536+1372:65536+1376]=struct.pack("<I",0x19540119)
+  assert inspect(partial("game.ffpkg",bytes(ufs),len(ufs)))==["ffpkg",""]
+  assert inspect(partial("game.ffpfs",struct.pack("<QQ",1,0x20130315)+bytes(64),80))==["ffpfs",""]
+  assert inspect(partial("game.ffpfsc",b"PFSC"+bytes(64),68))==["ffpfsc",""]
+  print("PASS: header inspection of partial downloads; ZIP/TAR/7z/multivolume RAR, decoder memory refusal, interrupted staging, verified recovery, missing parts and unsafe archive rejection")
 if __name__=="__main__":main()

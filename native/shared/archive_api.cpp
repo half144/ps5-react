@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "host_api.hpp"
 #include "archives.hpp"
+#include "archive_preflight.hpp"
 #include <climits>
 #include <cmath>
 #include <cstring>
@@ -43,6 +44,25 @@ JSValue extract(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   if (!id) return JS_ThrowPlainError(ctx,"archives.extract: %s",error.c_str());
   return JS_NewUint32(ctx,id);
 }
+// Reads only a few headers, so it runs on the render thread; a download in progress can be inspected.
+JSValue inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+  if (argc < 1 || !JS_IsArray(argv[0])) return JS_ThrowTypeError(ctx,"archives.inspect: expected sources");
+  const JSValue length_value = JS_GetPropertyStr(ctx,argv[0],"length"); std::uint32_t length = 0;
+  const int result = JS_ToUint32(ctx,&length,length_value); JS_FreeValue(ctx,length_value);
+  if (result || !length || length > 1024) return JS_ThrowTypeError(ctx,"archives.inspect: expected 1–1024 ordered volumes");
+  std::vector<std::string> sources;
+  for (std::uint32_t i = 0; i < length; ++i) {
+    const JSValue value = JS_GetPropertyUint32(ctx,argv[0],i); std::string file;
+    const bool ok = path(ctx,value,file); JS_FreeValue(ctx,value);
+    if (!ok) return JS_ThrowTypeError(ctx,"archives.inspect: source path is not allowed");
+    sources.push_back(std::move(file));
+  }
+  const auto inspection = archives::inspect(sources);
+  JSValue out = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx,out,"kind",JS_NewString(ctx,inspection.kind.c_str()));
+  JS_SetPropertyStr(ctx,out,"refusal",JS_NewString(ctx,inspection.refusal.c_str()));
+  return out;
+}
 JSValue cancel(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   std::uint32_t id = 0;
   if (!argc || JS_ToUint32(ctx,&id,argv[0])) return JS_ThrowTypeError(ctx,"archives.cancel: expected task id");
@@ -68,6 +88,7 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 JSValue ps5_react_archive_api(JSContext* ctx) {
   JSValue api = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx,api,"extract",JS_NewCFunction(ctx,extract,"extract",3));
+  JS_SetPropertyStr(ctx,api,"inspect",JS_NewCFunction(ctx,inspect,"inspect",1));
   JS_SetPropertyStr(ctx,api,"cancel",JS_NewCFunction(ctx,cancel,"cancel",1));
   JS_SetPropertyStr(ctx,api,"poll",JS_NewCFunction(ctx,poll,"poll",0));
   return api;

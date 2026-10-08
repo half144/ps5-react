@@ -27,6 +27,16 @@ test('all catalog formats route to the correct consumer', () => {
   assert.throws(() => DownloadFormats.artifact({filename: 'game.pkg'}, '/data/../user'));
 });
 
+test('a file of unknown format routes by the kind its bytes revealed', () => {
+  const file = {filename: 'PPSA12345-game-1.00-pegasus-0-1-0.binary'};
+  assert.deepEqual(DownloadFormats.detected(file, '/data', 'rar'), {format: 'rar', nextAction: 'extraction-required',
+    directory: '/data/downloads/archives', destination: '/data/downloads/archives/PPSA12345-game-1.00-pegasus-0-1-0.rar'});
+  assert.equal(DownloadFormats.detected(file, '/data', 'tar.zst').destination, '/data/downloads/archives/PPSA12345-game-1.00-pegasus-0-1-0.tar.zst');
+  assert.equal(DownloadFormats.detected(file, '/data', 'pkg').nextAction, 'installer-required');
+  assert.equal(DownloadFormats.detected(file, '/mnt/usb0', 'exfat').destination, '/mnt/usb0/homebrew/PPSA12345-game-1.00-pegasus-0-1-0.exfat');
+  assert.throws(() => DownloadFormats.detected(file, '/data', 'exe'), /unknown detected kind/);
+});
+
 test('split manifests normalize out-of-order offsets and preserve exact bytes and hashes', () => {
   const manifest = {originalFileSize: 6, numberOfSplitFiles: 2, packageDigest: 'A'.repeat(64), pieces: [
     {url: 'https://example.com/b', fileOffset: 2, fileSize: 4, hashValue: 'B'.repeat(40)},

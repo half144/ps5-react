@@ -166,6 +166,10 @@ returns `directory`, `destination`, `format` and `nextAction`:
 | `zip`, `rar`, `7z`, `tar`, `tar.gz`, `tgz` | `downloads/archives/<filename>` | `extraction-required` |
 | Other binary files | `downloads/files/<filename>` | `downloaded` |
 
+`DownloadFormats.detected({filename}, root, kind)` routes a file whose catalog
+format was unknown by the `kind` `Archives.inspect` read from its bytes; the
+filename takes that extension in place of `.bin`/`.binary`.
+
 Routing checks declared format against known filename extensions; it does not
 parse filesystem/package headers or certify mountability. `.fpkg` is a package,
 whereas `.ffpkg` is a UFS image. A raw `.part0`/`.001` file cannot be handed to

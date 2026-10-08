@@ -44,6 +44,8 @@
 //   network.cancel(id)             requests cancellation
 //   network.poll()                 progress/results; consumes terminal snapshots
 //   archives.extract(sources, destination, maxBytes) task ID; bounded native archive worker
+//   archives.inspect(sources)      {kind, refusal}; file type from leading bytes and, for an archive,
+//                                  a decoder-memory refusal its headers so far justify; partial files ok
 //   archives.cancel(id)            requests cancellation; source volumes remain intact
 //   archives.poll()                state/error/written/entries/artifacts; consumes terminal results
 //   network.version()              transport version string
@@ -166,5 +168,5 @@ JSValue ps5_react_sound_api(JSContext* ctx);
 bool ps5_react_start_sound();
 void ps5_react_stop_sound();
 
-// ABI v5 additive archive tasks: extract(sources, destination, maxBytes), cancel(id), poll().
+// ABI v5 additive archive tasks: extract(sources, destination, maxBytes), inspect(sources), cancel(id), poll().
 JSValue ps5_react_archive_api(JSContext* ctx);

@@ -8,4 +8,9 @@ namespace archives {
 // Reads the archive headers before libarchive does and returns why the archive must be refused, or an
 // empty string when its declared decoder windows fit the console's memory budget.
 std::string preflight(const std::vector<std::string>& sources);
+struct Inspection { std::string kind, refusal; };
+// What the leading bytes of the ordered volumes are ("rar", "7z", "zip", "tar", "tar.gz", "tar.bz2",
+// "tar.xz", "tar.zst", "pkg", "exfat", "ffpkg", "ffpfs", "ffpfsc" or empty), and for an archive, a
+// refusal its headers read so far already justify. Works on a partial download, holes included.
+Inspection inspect(const std::vector<std::string>& sources);
 }

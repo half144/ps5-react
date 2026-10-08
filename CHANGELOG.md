@@ -19,6 +19,10 @@
 - `recoverCompleted` no longer reads the whole file to hash it when the request has no `sha256`,
   neither after the download nor when recovering it: the receipt's root, inode, size and request
   identity name the file. A requested hash is still verified both times.
+- Add `Archives.inspect(sources)`: the kind of file the leading bytes show (RAR, 7z, ZIP, TAR and
+  compressed TAR, PKG, exFAT/UFS2/PFS images) and, for RAR and xz/zstd, a decoder-memory refusal
+  from the headers read so far, also on a partial download. `DownloadFormats.detected` routes a
+  file by that kind; `tar.bz2`, `tar.xz` and `tar.zst` are archive formats.
 - Up to 128 `<Svg>` nodes can be mounted at once, from 64 (288 KB more .bss). Overdrive with two dozen
   favorites mounted more than 64 icons and its legend glyphs drew nothing.
 - The idle collector keeps QuickJS's GC threshold at most 28 MiB, an eighth below the 32 MiB JS heap

@@ -474,15 +474,16 @@ constexpr std::string_view signature("Rar!\x1A\x07\x01\x00", 8);
 constexpr std::uint64_t window_unit = 128 * 1024, max_header_size = 2 * 1024 * 1024;
 enum : std::uint64_t { file = 2, service = 3, encryption = 4, end = 5 };
 
-std::string check(Volumes& in) {
+std::string check(Volumes& in, bool partial) {
   std::uint64_t at = signature.size(), memory = 0;
-  while (true) {
+  // A partial download stops at its first hole or at a bounded number of headers.
+  for (unsigned headers = 0; !partial || headers < 4096; ++headers) {
     std::array<unsigned char, 7> prefix{};
     const auto available = std::min<std::uint64_t>(prefix.size(), in.size() - std::min(at, in.size()));
     if (available < 5 || !in.read(at, prefix.data(), available)) break;
     Cursor length{prefix.data() + 4, prefix.data() + available};
     const auto header_size = length.vint();
-    if (!length.ok || !header_size || header_size > max_header_size) return malformed;
+    if (!length.ok || !header_size || header_size > max_header_size) return partial ? fits(memory) : malformed;
     const auto header_at = at + (length.at - prefix.data());
     std::vector<unsigned char> header(header_size);
     if (!in.read(header_at, header.data(), header.size())) break;
@@ -503,7 +504,7 @@ std::string check(Volumes& in) {
       // libarchive allocates both a window and an equally sized filter buffer for every compressed file.
       if (!(file_flags & 1) && method) memory = std::max(memory, 2 * (window_unit << ((compression >> 10) & 0x1F)));
     }
-    if (!cursor.ok) return malformed;
+    if (!cursor.ok) return partial ? fits(memory) : malformed;
     at = header_at + header_size;
     if (data_size > in.size() - std::min(at, in.size())) break;
     at += data_size;
@@ -529,20 +530,20 @@ constexpr unsigned stored = 0x30, ppmd_version = 29, ppmd_block = 0x80, ppmd_mem
 
 // The LZSS window is capped at 4 MiB by libarchive; PPMd sizes its model from the first data bytes.
 // Only blocks at the start of a non-solid file are seen; a PPMd block switched to later is not caught.
-std::string check(Volumes& in) {
+std::string check(Volumes& in, bool partial) {
   std::uint64_t at = signature.size(), memory = 0;
-  while (true) {
+  for (unsigned headers = 0; !partial || headers < 4096; ++headers) {
     std::array<unsigned char, 32> header{};
     const auto available = std::min<std::uint64_t>(header.size(), in.size() - std::min(at, in.size()));
     if (available < 7 || !in.read(at, header.data(), available)) break;
     const unsigned type = header[2];
     const auto flags = static_cast<unsigned>(little_endian(header.data() + 3, 2));
     const auto size = little_endian(header.data() + 5, 2);
-    if (size < 7 || ((flags & has_data) && available < 11)) return malformed;
+    if (size < 7 || ((flags & has_data) && available < 11)) return partial ? fits(memory) : malformed;
     std::uint64_t data = flags & has_data ? little_endian(header.data() + 7, 4) : 0;
     if (type == archive_header && (flags & encrypted_headers)) break;
     if (type == file) {
-      if (available < 32 || size < 32) return malformed;
+      if (available < 32 || size < 32) return partial ? fits(memory) : malformed;
       if ((flags & large) && size >= 36) {
         std::array<unsigned char, 4> high{};
         if (!in.read(at + 32, high.data(), high.size())) break;
@@ -668,13 +669,43 @@ std::string preflight(const std::vector<std::string>& sources) {
   // libarchive searches executables for an embedded archive, which these checks do not follow.
   if (starts_with(magic, "MZ") || starts_with(magic, "\x7F" "ELF")) return "Self-extracting archives are not supported.";
   if (starts_with(magic, "7z\xBC\xAF\x27\x1C")) return seven_zip::check(in);
-  if (starts_with(magic, rar5::signature)) return rar5::check(in);
-  if (starts_with(magic, rar4::signature)) return rar4::check(in);
+  if (starts_with(magic, rar5::signature)) return rar5::check(in, false);
+  if (starts_with(magic, rar4::signature)) return rar4::check(in, false);
   // Compression around a TAR: only the outer layer is checked.
   if (const auto window = std::max({xz_window(in, 0), zstd_window(in, 0), lzip_window(in)})) return fits(window);
   std::string refusal;
   if (zip::check(in, refusal)) return refusal;
   if (starts_with(magic, "PK\x03\x04")) return malformed;
   return fits(lzma_alone_window(in));
+}
+
+Inspection inspect(const std::vector<std::string>& sources) {
+  Volumes in(sources);
+  std::array<unsigned char, 8> magic{};
+  in.read(0, magic.data(), static_cast<std::size_t>(std::min<std::uint64_t>(magic.size(), in.size())));
+  std::array<unsigned char, 8> boot{}, ustar{}, ufs{};
+  in.read(3, boot.data(), boot.size());
+  in.read(257, ustar.data(), 5);
+  // UFS2 keeps its superblock at 64 KiB, with fs_magic 1372 bytes in.
+  in.read(65536 + 1372, ufs.data(), 4);
+  if (starts_with(magic, rar5::signature)) return {"rar", rar5::check(in, true)};
+  if (starts_with(magic, rar4::signature)) return {"rar", rar4::check(in, true)};
+  // 7z and ZIP keep their directories at the end, so a partial download shows nothing to refuse yet.
+  if (starts_with(magic, "7z\xBC\xAF\x27\x1C")) return {"7z", {}};
+  if (starts_with(magic, "PK\x03\x04") || starts_with(magic, "PK\x05\x06") || starts_with(magic, "PK\x07\x08")) return {"zip", {}};
+  if (starts_with(magic, "\x1F\x8B")) return {"tar.gz", {}};
+  if (starts_with(magic, "BZh")) return {"tar.bz2", {}};
+  if (starts_with(magic, "\xFD" "7zXZ")) return {"tar.xz", fits(xz_window(in, 0))};
+  if (starts_with(magic, "\x28\xB5\x2F\xFD")) return {"tar.zst", fits(zstd_window(in, 0))};
+  if (std::string_view(reinterpret_cast<const char*>(ustar.data()), 5) == "ustar") return {"tar", {}};
+  if (starts_with(magic, "\x7F" "CNT")) return {"pkg", {}};
+  if (starts_with(magic, "PFSC")) return {"ffpfsc", {}};
+  if (little_endian(magic.data(), 8) == 1) {
+    std::array<unsigned char, 8> pfs{};
+    if (in.read(8, pfs.data(), pfs.size()) && little_endian(pfs.data(), 8) == 0x20130315) return {"ffpfs", {}};
+  }
+  if (starts_with(boot, "EXFAT   ")) return {"exfat", {}};
+  if (little_endian(ufs.data(), 4) == 0x19540119) return {"ffpkg", {}};
+  return {};
 }
 }

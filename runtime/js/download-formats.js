@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 
 const IMAGE_FORMATS = ['ffpkg', 'exfat', 'ffpfs', 'ffpfsc'];
-const ARCHIVE_FORMATS = ['zip', 'rar', '7z', 'tar', 'tar.gz', 'tgz'];
+const ARCHIVE_FORMATS = ['zip', 'rar', '7z', 'tar', 'tar.gz', 'tgz', 'tar.bz2', 'tar.xz', 'tar.zst'];
 const EXTENSIONS = [...IMAGE_FORMATS, 'pkg', 'fpkg', ...ARCHIVE_FORMATS];
 
 function integer(value, name, minimum = 1) {
@@ -63,7 +63,14 @@ export function downloadArtifact({format, filename}, root) {
     nextAction: image ? 'shadowmount' : type === 'pkg' ? 'installer-required' : archive ? 'extraction-required' : 'downloaded'};
 }
 
+/** Routes a file whose catalog gave no usable format by the `kind` its bytes revealed
+ * (`Archives.inspect`): the filename takes that extension, replacing a `.bin`/`.binary` one. */
+export function detectedArtifact({filename}, root, kind) {
+  if (!EXTENSIONS.includes(kind)) throw new Error(`Downloads: unknown detected kind ${kind}`);
+  return downloadArtifact({format: kind, filename: `${filename.replace(/\.(?:bin|binary)$/i, '')}.${kind}`}, root);
+}
+
 export const DownloadFormats = Object.freeze({
   images: Object.freeze(IMAGE_FORMATS), archives: Object.freeze(ARCHIVE_FORMATS),
-  artifact: downloadArtifact, manifest: normalizeDownloadManifest,
+  artifact: downloadArtifact, detected: detectedArtifact, manifest: normalizeDownloadManifest,
 });
