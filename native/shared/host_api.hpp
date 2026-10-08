@@ -26,7 +26,8 @@
 //                                  console access is opt-in via app.json
 //   fs.diskUsage(path)             {total, free} in bytes; free available to the app
 //   device.info()                  {model, firmware, cpuTemperature, socTemperature,
-//                                   cpuFrequency, freeMemory, processTime}; unknown = null
+//                                   cpuFrequency, freeMemory, processTime, language}; unknown = null
+//                                  language: the system language as a BCP 47 tag ('pt-BR')
 //   users.foreground()             {id, name} | null
 //   users.loggedIn()               [{id, name}]
 //   notify(message, subMessage)    boolean
@@ -131,6 +132,7 @@ struct DeviceInfo {
   std::int64_t cpu_frequency = -1; // Hz
   std::int64_t free_memory = -1;   // bytes available to the app
   std::int64_t process_time = -1;  // µs of CPU time used by this process
+  char language[16] = "";          // system language, BCP 47 ("en-US", "zh-Hans")
 };
 void device_info(DeviceInfo& info);
 

@@ -23,8 +23,9 @@ function host() {
  * @typedef {{id: number, name: string}} User
  * @typedef {{model: string | null, firmware: string | null, cpuTemperature: number | null,
  *   socTemperature: number | null, cpuFrequency: number | null, freeMemory: number | null,
- *   processTime: number | null}} Device
- *   Temperatures in °C, frequency in Hz, memory in bytes, process time in µs.
+ *   processTime: number | null, language: string | null}} Device
+ *   Temperatures in °C, frequency in Hz, memory in bytes, process time in µs; language is the
+ *   system language as a BCP 47 tag ('en-US', 'pt-BR', 'zh-Hans').
  * @typedef {'up' | 'down' | 'left' | 'right' | 'cross' | 'circle' | 'triangle' | 'square' | 'l1' | 'r1'
  *   | 'l2' | 'r2' | 'l3' | 'r3' | 'options' | 'touchpad'} Button
  * @typedef {{connected: boolean, leftX: number, leftY: number, rightX: number, rightY: number,

@@ -29,6 +29,18 @@ void sysctl_string(const char* name, char* out, std::size_t size) {
   if (sysctlbyname(name, out, &size, nullptr, 0) != 0) *out = '\0';
 }
 
+// "pt_BR.UTF-8" → "pt-BR"; the C and POSIX locales name no language.
+void environment_language(char* out, std::size_t size) {
+  const char* value = nullptr;
+  for (const char* name : {"PS5_REACT_LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"})
+    if ((value = std::getenv(name)) && *value) break;
+  if (!value || !*value || !std::strcmp(value, "C") || !std::strncmp(value, "C.", 2) || !std::strcmp(value, "POSIX")) return;
+  std::size_t length = std::strcspn(value, ".@");
+  if (length >= size) length = size - 1;
+  for (std::size_t i = 0; i < length; ++i) out[i] = value[i] == '_' ? '-' : value[i];
+  out[length] = '\0';
+}
+
 std::int64_t free_memory() {
   vm_statistics64_data_t stats;
   mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
@@ -110,6 +122,7 @@ void device_info(DeviceInfo& info) {
   if (getrusage(RUSAGE_SELF, &usage) == 0)
     info.process_time = (static_cast<std::int64_t>(usage.ru_utime.tv_sec) + usage.ru_stime.tv_sec) * 1000000 +
                         usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+  environment_language(info.language, sizeof info.language);
 }
 
 bool foreground_user(User& user) {

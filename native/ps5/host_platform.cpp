@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 
 namespace {
 // The firmware writes at most size bytes, so size must be set before the call.
@@ -56,6 +57,7 @@ int sceUserServiceGetUserName(int user, char* name, std::size_t size);
 int sceUserServiceGetLoginUserIdList(LoginUserIdList* list);
 int sceSystemServiceLaunchWebBrowser(const char* uri, void* parameters);
 int sceSystemServicePowerTick(void);
+int sceSystemServiceParamGetInt(int param, int* value);
 int sceKernelOpen(const char* path, int flags, int mode);
 int sceKernelGetdents(int fd, char* buffer, int size);
 int sceKernelClose(int fd);
@@ -98,6 +100,13 @@ private:
 };
 
 OptionalSymbol<int (*)(char*)> hw_model_name{"libkernel_sys.sprx", "sceKernelGetHwModelName"};
+
+constexpr int kSystemParamLanguage = 1; // SCE_SYSTEM_SERVICE_PARAM_ID_LANG
+// SCE_SYSTEM_PARAM_LANG_* values, indexed by ID.
+constexpr const char* kLanguages[] = {
+  "ja", "en-US", "fr", "es", "de", "it", "nl", "pt-PT", "ru", "ko", "zh-Hant", "zh-Hans", "fi", "sv", "da",
+  "no", "pl", "pt-BR", "en-GB", "tr", "es-419", "ar", "fr-CA", "cs", "hu", "el", "ro", "th", "vi", "id", "uk",
+};
 
 bool user_name(int id, char* name, std::size_t size) {
   const int result = sceUserServiceGetUserName(id, name, size);
@@ -271,6 +280,11 @@ void device_info(DeviceInfo& info) {
   if (sceKernelAvailableFlexibleMemorySize(&free_memory) == 0)
     info.free_memory = static_cast<std::int64_t>(free_memory);
   info.process_time = static_cast<std::int64_t>(sceKernelGetProcessTime());
+  int language = -1;
+  if (const int result = sceSystemServiceParamGetInt(kSystemParamLanguage, &language); result != 0)
+    async_log::write("[PS5-REACT] sceSystemServiceParamGetInt=0x%08x", static_cast<unsigned>(result));
+  else if (language >= 0 && language < static_cast<int>(std::size(kLanguages)))
+    std::snprintf(info.language, sizeof info.language, "%s", kLanguages[language]);
 }
 
 // Pad::open() initializes the user service before the bundle runs.

@@ -64,6 +64,7 @@ const label = Platform.select({ps5: 'Console', desktop: 'Preview', default: 'Unk
 | `cpuFrequency` | Hz | `null` when unknown (always on Apple silicon) |
 | `freeMemory` | bytes | Memory available to the app |
 | `processTime` | µs | CPU time used by this process |
+| `language` | string | System language as a BCP 47 tag (`en-US`, `pt-BR`, `zh-Hans`) |
 
 Any value the host cannot read is `null`.
 
@@ -287,6 +288,8 @@ exactly like pressing Options (React Native's name for the same call).
 - `Notifications.show` prints `[notify] message: subMessage` to the terminal.
 - `Users` reports the macOS user (`$USER`) with id `1`.
 - Temperatures are `null`; `cpuFrequency` is `null` on Apple silicon.
+- `language` comes from `PS5_REACT_LANGUAGE`, else `LC_ALL`, `LC_MESSAGES` or
+  `LANG` (`pt_BR.UTF-8` reads `pt-BR`); `null` for the `C`/`POSIX` locale.
 - `openURL` opens the URL in the default macOS browser.
 - With an SDL game controller connected, the light bar and rumble use it;
   otherwise the calls print a `[pad]` line. Without a controller, `getState()`
