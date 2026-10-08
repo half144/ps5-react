@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "js_heap.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 extern "C" {
@@ -43,6 +44,8 @@ constexpr std::int64_t kIdleUs = 500000;
 // Below this much garbage a collection is not worth a frame.
 constexpr std::size_t kMinGarbage = 512 * 1024;
 
+constexpr std::size_t kCeiling = kJsMemoryLimit - kJsMemoryLimit / 8;
+
 double mib(std::size_t bytes) { return bytes / (1024.0 * 1024.0); }
 } // namespace
 
@@ -56,10 +59,11 @@ const char* GcScheduler::frame(JSRuntime* runtime, std::int64_t now_us) {
   if (threshold != threshold_) {
     // QuickJS collected while the frame ran and moved its threshold to 1.5 times what survived.
     const bool first = threshold_ == 0;
-    threshold_ = threshold;
+    threshold_ = std::min(threshold, kCeiling);
+    if (threshold_ != threshold) JS_SetGCThreshold(runtime, threshold_);
     live_after_gc_ = live;
     if (first) return nullptr;
-    std::snprintf(line_, sizeof line_, "gc: automatic, %.1f MiB live, next at %.1f MiB", mib(live), mib(threshold));
+    std::snprintf(line_, sizeof line_, "gc: automatic, %.1f MiB live, next at %.1f MiB", mib(live), mib(threshold_));
     return line_;
   }
   const std::size_t room = threshold > live_after_gc_ ? threshold - live_after_gc_ : 0;
@@ -70,7 +74,7 @@ const char* GcScheduler::frame(JSRuntime* runtime, std::int64_t now_us) {
   JS_RunGC(runtime);
   live_after_gc_ = live;
   // The threshold QuickJS sets after its own collections, so the next one comes no later than it would have.
-  threshold_ = live + live / 2;
+  threshold_ = std::min(live + live / 2, kCeiling);
   JS_SetGCThreshold(runtime, threshold_);
   std::snprintf(line_, sizeof line_, "gc: idle, %.1f ms, %.1f -> %.1f MiB live", (clock_() - start) / 1000.0,
                 mib(before), mib(live));

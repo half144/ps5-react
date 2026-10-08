@@ -177,7 +177,7 @@ struct Host {
     ps5_react_start_sound();
     ErRuntimeConfig cfg = {};
     cfg.screen_width = width; cfg.screen_height = height; cfg.screen_scale = 2;
-    cfg.memory_limit = 32 * 1024 * 1024;
+    cfg.memory_limit = kJsMemoryLimit;
     cfg.malloc_functions = js_heap_functions();
     cfg.max_stack_size = 1024 * 1024;
     cfg.install_host_globals = ps5_react_install_host_api;

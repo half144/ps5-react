@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+- The idle collector keeps QuickJS's GC threshold at most 28 MiB, an eighth below the 32 MiB JS heap
+  limit. QuickJS sets the threshold to 1.5 times what survived a collection and fails an allocation
+  past the limit without collecting, so an app with over 21 MiB live (Overdrive's catalog) threw
+  "out of memory" during a burst of input and its React tree stopped responding.
 - Remote images on screen load newest first, ahead of every prefetch. An image counted as on screen
   once stayed so while a prefetch held it, so a held key queued hundreds of covers ahead of those
   shown; after 150 rows scrolled, on-screen covers waited 24 s (now 0.15 s on an M4). Images take

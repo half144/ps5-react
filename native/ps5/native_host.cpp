@@ -228,7 +228,7 @@ bool run_proof() {
     config.screen_scale = 2;
     config.log = react_log;
     config.max_stack_size = 1024 * 1024;
-    config.memory_limit = 32 * 1024 * 1024;
+    config.memory_limit = kJsMemoryLimit;
     config.malloc_functions = js_heap_functions();
     config.install_host_globals = ps5_react_install_host_api;
     runtime = er_runtime_init(&config);

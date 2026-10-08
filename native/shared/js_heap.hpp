@@ -14,6 +14,9 @@ extern "C" {
 // ErRuntimeConfig.malloc_functions; everything else runs on the render thread.
 const JSMallocFunctions* js_heap_functions();
 
+// ErRuntimeConfig.memory_limit on both hosts.
+constexpr std::size_t kJsMemoryLimit = 32 * 1024 * 1024;
+
 // QuickJS collects cycles when its heap grows past a threshold, in whichever
 // allocation crosses it: a full mark-and-sweep of every live object (tens of
 // milliseconds on the PS5 for a store's catalog) inside the frame that handles a
@@ -21,6 +24,10 @@ const JSMallocFunctions* js_heap_functions();
 // input), once a third of the room before that threshold is garbage, so a burst
 // of input starts with at least two thirds of it.
 // It never raises QuickJS's threshold: a collection is only ever brought forward.
+// It also keeps the threshold an eighth of kJsMemoryLimit below the limit: QuickJS
+// sets it to 1.5 times what survived a collection, and an allocation past the limit
+// fails without collecting first, so with over 21 MiB live the garbage of a burst
+// of input ran into the limit ("out of memory") before any collection.
 class GcScheduler {
 public:
   // `clock` is the host's monotonic microsecond clock, to time collections.
