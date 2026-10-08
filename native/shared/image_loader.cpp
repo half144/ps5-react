@@ -72,6 +72,8 @@ using Clock = std::chrono::steady_clock;
 // Five attempts, 0.5 + 1 + 2 + 4 s apart: a console that briefly cannot connect (Wi-Fi waking, a
 // burst of handshakes refused) recovers instead of failing every image on screen at once.
 constexpr unsigned kConnections = 32, kAttempts = 5;
+// An IP literal, so the DoH request itself needs no DNS.
+constexpr const char* kDohURL = "https://1.1.1.1/dns-query";
 // A decode that ran out of heap is tried again 1 and 2 s later, from the cached bytes.
 constexpr unsigned kDecodeAttempts = 3;
 // While a download runs it holds up to 64 connections and their TLS state; images take fewer.
@@ -125,7 +127,8 @@ struct Counters {
   std::atomic<std::uint64_t> loads{0}, decoded_hits{0}, encoded_hits{0}, disk_hits{0}, fetches{0}, decodes{0},
     decode_us{0}, cancelled{0}, aborted{0}, retries{0}, failed{0}, shown{0}, shown_ms{0}, shown_max_ms{0};
 } counters;
-struct Origin { std::string host; std::uint64_t requests = 0, failures = 0, ms = 0, bytes = 0; };
+// `last`: the latest failure's reason, so the stats line says why an origin fails.
+struct Origin { std::string host, last; std::uint64_t requests = 0, failures = 0, ms = 0, bytes = 0; };
 std::mutex origins_mutex;
 std::vector<Origin> origins;
 
@@ -136,12 +139,13 @@ std::string host_of(const std::string& url) {
   return url.substr(start + 3, end == std::string::npos ? std::string::npos : end - start - 3);
 }
 
-void count_request(const std::string& url, bool failed, std::uint64_t ms, std::size_t bytes) {
+void count_request(const std::string& url, const std::string& failure, std::uint64_t ms, std::size_t bytes) {
   std::lock_guard lock(origins_mutex);
   const std::string host = host_of(url);
   auto it = std::find_if(origins.begin(), origins.end(), [&](const Origin& o) { return o.host == host; });
-  if (it == origins.end()) { origins.push_back({host}); it = origins.end() - 1; }
-  ++it->requests; it->failures += failed; it->ms += ms; it->bytes += bytes;
+  if (it == origins.end()) { origins.push_back({host, {}}); it = origins.end() - 1; }
+  ++it->requests; it->ms += ms; it->bytes += bytes;
+  if (!failure.empty()) { ++it->failures; it->last = failure; }
 }
 constexpr std::uint64_t kDrawn = std::uint64_t{1} << 62;
 // Warming fills the disk cache in the background: a few connections, only while no load waits, and
@@ -749,6 +753,11 @@ private:
     bool ok = network::configure_transport(t->curl, t->url, true);
     const auto set = [&](CURLoption option, auto value) { ok = ok && curl_easy_setopt(t->curl, option, value) == CURLE_OK; };
     set(CURLOPT_TIMEOUT, 30L);
+    // The handle's cache still holds the blocked address, which a lookup would return before DoH.
+    if (std::find(doh_hosts_.begin(), doh_hosts_.end(), host_of(t->url)) != doh_hosts_.end()) {
+      set(CURLOPT_DOH_URL, kDohURL);
+      set(CURLOPT_DNS_CACHE_TIMEOUT, 0L);
+    }
     set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, t);
     set(CURLOPT_XFERINFOFUNCTION, progress); set(CURLOPT_XFERINFODATA, t);
     set(CURLOPT_NOPROGRESS, 0L); set(CURLOPT_PRIVATE, t);
@@ -765,11 +774,16 @@ private:
     std::erase_if(entries, [](const EntryPtr& e) { return e->cancelled.load(); });
     long status = 0;
     curl_easy_getinfo(t.curl, CURLINFO_RESPONSE_CODE, &status);
-    if (result == CURLE_ABORTED_BY_CALLBACK) ++counters.aborted;
-    // A warm response over its size limit is skipped, not failed.
-    else count_request(t.url, (result != CURLE_OK && !(warm && t.overflow)) || (result == CURLE_OK && status != 200),
-                       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t.started).count(), t.body.size);
-    const bool transient = t.out_of_memory || result == CURLE_COULDNT_CONNECT || result == CURLE_OPERATION_TIMEDOUT ||
+    // A connection refused at once or a name that does not resolve is what a blocking DNS gives: the
+    // host switches to DoH and the load retries.
+    const std::string host = host_of(t.url);
+    if ((result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST) &&
+        std::find(doh_hosts_.begin(), doh_hosts_.end(), host) == doh_hosts_.end()) {
+      doh_hosts_.push_back(host);
+      network::platform_log(("images: " + host + " unreachable through the system resolver (" + curl_easy_strerror(result) +
+                    "); resolving it over DoH").c_str());
+    }
+    const bool transient = t.out_of_memory || result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST || result == CURLE_OPERATION_TIMEDOUT ||
       result == CURLE_RECV_ERROR || result == CURLE_SEND_ERROR || result == CURLE_PARTIAL_FILE ||
       status == 429 || status == 502 || status == 503 || status == 504;
     std::string reason;
@@ -777,6 +791,10 @@ private:
     else if (t.out_of_memory) reason = "out of memory for the response";
     else if (result != CURLE_OK) reason = curl_easy_strerror(result);
     else if (status != 200) reason = "HTTP " + std::to_string(status);
+    if (result == CURLE_ABORTED_BY_CALLBACK) ++counters.aborted;
+    // A warm response over its size limit is skipped, not failed.
+    else count_request(t.url, warm && t.overflow ? std::string() : reason,
+                       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t.started).count(), t.body.size);
     if (reason.empty() && entries.empty()) {
       disk_.write(t.url, t.body);
     } else if (reason.empty()) {
@@ -892,6 +910,9 @@ private:
   DiskCache disk_;
   std::vector<Encoded> encoded_;
   std::uint64_t fetch_clock_ = 0;
+  // Hosts the console's resolver sends nowhere: a DNS that blocks a vendor's domains (as consoles
+  // running homebrew do, against system updates) also blocks its image CDN. These resolve over DoH.
+  std::vector<std::string> doh_hosts_;
   CURLM* multi_ = nullptr;
   pthread_t fetch_thread_{}, decode_thread_{};
   std::string cache_directory_;
@@ -945,6 +966,7 @@ std::string stats() {
                   static_cast<unsigned long long>(o.requests), static_cast<unsigned long long>(o.failures),
                   static_cast<unsigned long long>(o.ms / o.requests), static_cast<unsigned long long>(o.bytes / o.requests >> 10));
     out += line;
+    if (o.failures) out += " (last: " + o.last + ")";
   }
   return out;
 }
