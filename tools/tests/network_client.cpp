@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
   network::Request request;
   request.url = argv[1];
   if (std::string(argv[2]) != "-") request.destination = argv[2];
-  request.adaptive = false;
+  request.adaptive = std::getenv("NETWORK_TEST_ADAPTIVE") != nullptr;
   request.reject_html = std::getenv("NETWORK_TEST_REJECT_HTML") != nullptr;
   request.follow_redirects = std::getenv("NETWORK_TEST_NO_REDIRECT") == nullptr;
   request.recover_completed = std::getenv("NETWORK_TEST_RECOVER") != nullptr;

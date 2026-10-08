@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <pthread.h>
+#include <random>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -108,7 +109,7 @@ struct Transfer {
   std::uint64_t begin = 0, length = 0, accepted = 0, block_offset = 0;
   std::atomic<std::uint64_t> written{0};
   std::atomic<unsigned> pending{0};
-  unsigned piece = 0, source = 0, retry_after = 0;
+  unsigned piece = 0, source = 0, retry_after = 0, window = 0;
   unsigned mirror = 0; // 0 is the primary URL, n is Job::mirrors[n-1]
   long status = 0;
   std::string etag, last_modified, encoding, error, content_type, html_prefix, sample;
@@ -119,6 +120,9 @@ struct Transfer {
   bool length_known = false;
   std::uint64_t range_begin = 0, range_end = 0, range_total = 0;
   bool content_range = false, probe = false, paused = false, active = false, draining = false, redirected = false;
+  // A 200 or 206 that is not the range asked for but carries the file's validators: a proxy or a busy
+  // node answering oddly, retried a few times rather than taken for a changed file.
+  bool glitch = false;
   CURLcode result = CURLE_OK;
 };
 
@@ -141,6 +145,45 @@ bool valid_file_response(const Transfer& t) {
          (job.etag.empty() || t.etag == job.etag) && (job.last_modified.empty() || t.last_modified == job.last_modified);
 }
 
+// Judges a 200/206 that valid_file_response refused. Only validators that differ on the very URL they
+// came from mean the file changed; a range that was redirected elsewhere may have reached another
+// node's copy, and a right file with the wrong span is a glitch to retry.
+void classify_invalid(Transfer& t) {
+  const Job& job = *t.job;
+  if (!t.encoding.empty() && t.encoding != "identity") { t.error = "server sent the file with Content-Encoding " + t.encoding; return; }
+  if (job.request.reject_html && (t.content_type.starts_with("text/html") ||
+      t.content_type.starts_with("application/xhtml+xml"))) {
+    t.error = "provider returned a web page; browser verification required"; return;
+  }
+  const Source* source = job.sources.empty() ? nullptr : &job.sources[t.source];
+  const bool ranged = source ? source->ranged : job.ranged;
+  const auto& etag = source ? source->etag : job.etag;
+  const auto total = source ? source->piece.size : job.total;
+  const bool changed = (!etag.empty() && !t.etag.empty() && t.etag != etag) ||
+    (!source && !job.last_modified.empty() && !t.last_modified.empty() && t.last_modified != job.last_modified) ||
+    (ranged && t.content_range && t.range_total != total);
+  long redirects = 0;
+  curl_easy_getinfo(t.curl, CURLINFO_REDIRECT_COUNT, &redirects);
+  t.glitch = !changed || redirects > 0;
+  t.error = changed ? "server changed the resource (ETag, Last-Modified or size differ)" :
+    t.status == 200 ? "server ignored the byte range (HTTP 200)" : "server returned an unexpected range response (HTTP " + std::to_string(t.status) + ")";
+}
+
+// Error statuses carry no file bytes and are judged by the retry policy; anything else must be exactly
+// the bytes asked for.
+bool accept_response(Transfer& t) {
+  if (t.status != 200 && t.status != 206) return false;
+  if (valid_file_response(t)) return true;
+  classify_invalid(t);
+  return false;
+}
+
+std::string describe(const Transfer& t) {
+  if (!t.error.empty()) return t.error;
+  if (t.status >= 400) return "server answered HTTP " + std::to_string(t.status);
+  return curl_easy_strerror(t.result);
+}
+
 // Signed links expire mid-download; the app re-resolves the source page on this message.
 bool denied(Transfer& t) {
   if (t.status != 401 && t.status != 403) return false;
@@ -148,10 +191,11 @@ bool denied(Transfer& t) {
   return true;
 }
 
-// Ranges skip the redirect hop by reusing the probe's final URL. Such a URL can
-// expire (signed CDN links), so a client error there falls back to the original.
-bool forget_redirect(Job& job, const Transfer& t) {
-  if (!t.redirected || t.status < 400 || t.status >= 500) return false;
+// Ranges skip the redirect hop by reusing the probe's final URL. Such a URL can expire (signed CDN
+// links) or its node can stop serving, so a client error there, or a server error on a range's second
+// attempt, resolves the original URL again; the next range it lands pins the new target.
+bool forget_redirect(Job& job, const Transfer& t, unsigned attempt) {
+  if (!t.redirected || t.status < 400 || (t.status >= 500 && attempt < 2)) return false;
   (job.sources.empty() ? job.location : job.sources[t.source].location).clear();
   return true;
 }
@@ -172,11 +216,48 @@ unsigned pick_mirror(const Job& job, unsigned slot) {
   return index && !job.mirrors[index-1].empty() ? index : 0;
 }
 
-bool retryable(const Transfer& t) {
-  return (t.error.empty() && (t.result == CURLE_RECV_ERROR || t.result == CURLE_SEND_ERROR ||
-          t.result == CURLE_OPERATION_TIMEDOUT || t.result == CURLE_PARTIAL_FILE ||
-          t.result == CURLE_COULDNT_CONNECT)) ||
-         t.status == 429 || t.status == 502 || t.status == 503 || t.status == 504;
+// A busy or overloaded server: the range is retried and the origin's connection window shrinks.
+bool congested(const Transfer& t) {
+  if (!t.error.empty()) return false;
+  if (t.status == 408 || t.status == 429 || (t.status >= 500 && t.status <= 599)) return true;
+  switch (t.result) {
+    case CURLE_RECV_ERROR: case CURLE_SEND_ERROR: case CURLE_OPERATION_TIMEDOUT: case CURLE_PARTIAL_FILE:
+    case CURLE_COULDNT_CONNECT: case CURLE_GOT_NOTHING: case CURLE_SSL_CONNECT_ERROR: case CURLE_COULDNT_RESOLVE_HOST:
+      return true;
+    default: return false;
+  }
+}
+
+// Total attempts a range (or probe) gets after this failure; 0 fails the job at once.
+unsigned attempt_limit(const Transfer& t) {
+  if (congested(t)) return 8;
+  if (t.glitch) return 3;
+  return 0;
+}
+
+// Exponential from half a second up to 30 seconds, with jitter so throttled ranges do not return
+// together, and never sooner than the server's Retry-After (up to a minute).
+std::chrono::milliseconds retry_delay(const Transfer& t, unsigned attempt) {
+  static std::minstd_rand random(static_cast<unsigned>(Clock::now().time_since_epoch().count()));
+  const unsigned base = std::min(30000u, 500u << std::min(attempt-1, 6u));
+  const unsigned jittered = base/2 + static_cast<unsigned>(random() % (base/2+1));
+  return std::chrono::milliseconds(std::max(std::min(t.retry_after, 60u)*1000u, jittered));
+}
+
+// One line per failed range, with what the server answered: enough to tell throttling from a changed file.
+void log_failure(const Transfer& t, unsigned attempt) {
+  const auto header = [&](const char* name) {
+    for (const auto& [key, value] : t.response_headers) if (key == name) return value;
+    return std::string("-");
+  };
+  char* effective = nullptr;
+  curl_easy_getinfo(t.curl, CURLINFO_EFFECTIVE_URL, &effective);
+  const std::string line = "download range " + std::to_string(t.piece) + " attempt " + std::to_string(attempt) +
+    " failed: " + describe(t) + "; HTTP " + std::to_string(t.status) + " range=" + header("content-range") +
+    " length=" + header("content-length") + " etag=" + header("etag") + " encoding=" + (t.encoding.empty() ? "-" : t.encoding) +
+    " retry-after=" + header("retry-after") + " accepted=" + std::to_string(t.accepted) + "/" + std::to_string(t.length) +
+    " url=" + (effective ? effective : "-");
+  platform_log(line.c_str());
 }
 
 struct Write {
@@ -439,6 +520,48 @@ bool configure_transport(void* handle, const std::string& url, bool follow_redir
 }
 
 namespace {
+std::string host_of(const std::string& url) {
+  const auto scheme = url.find("://");
+  const auto start = scheme == std::string::npos ? 0 : scheme+3;
+  const auto end = url.find_first_of("/?#", start);
+  return url.substr(start, end == std::string::npos ? std::string::npos : end-start);
+}
+
+// The URL configure() requests for a range of this source on this mirror.
+const std::string& range_url(const Job& job, unsigned source, unsigned mirror) {
+  if (!job.sources.empty()) {
+    const auto& s = job.sources[source];
+    return s.location.empty() ? s.piece.url : s.location;
+  }
+  if (mirror) return job.mirrors[mirror-1];
+  return job.location.empty() ? job.request.url : job.location;
+}
+
+// Connections one origin may hold, adapted like TCP congestion control (AIMD). It starts small and
+// grows by half each second while the window is full and healthy; a 5xx, 429, 408 or broken connection
+// halves it, after which it grows by one a second. archive.org storage nodes answer HTTP 500 to some
+// ranges past about a dozen connections, while CDNs take all 64.
+struct Window {
+  std::string host;
+  unsigned allowed = 0, in_flight = 0;
+  bool congested = false;
+  Clock::time_point grown{}, shrunk{}, paused_until{};
+  bool open(Clock::time_point now) const { return in_flight < allowed && now >= paused_until; }
+  void grow(Clock::time_point now, unsigned limit) {
+    if (allowed >= limit || in_flight < allowed || now-grown < std::chrono::seconds(1) ||
+        now-shrunk < std::chrono::seconds(3)) return;
+    allowed = std::min(limit, congested ? allowed+1 : allowed+std::max(2u, allowed/2));
+    grown = now;
+  }
+  void shrink(Clock::time_point now, unsigned retry_after) {
+    if (retry_after) paused_until = std::max(paused_until, now+std::chrono::seconds(std::min(retry_after, 60u)));
+    // Ranges failing together report one overload: one cut per two seconds.
+    if (congested && now-shrunk < std::chrono::seconds(2)) return;
+    allowed = std::max(1u, std::min(allowed, in_flight+1)/2);
+    congested = true; shrunk = grown = now;
+  }
+};
+
 class Service {
 public:
   bool start();
@@ -710,6 +833,8 @@ std::size_t Service::body(char* data, std::size_t size, std::size_t count, void*
     t.accepted += length; return length;
   }
   if (!job.request.destination.empty()) {
+    // An error page (archive.org's HTTP 500 is HTML) is not the file; the retry policy judges its status.
+    if (denied(t) || (t.status != 200 && t.status != 206)) return 0;
     if (job.request.reject_html && t.html_prefix.size() < 64 && t.begin == 0) {
       t.html_prefix.append(data, std::min<std::size_t>(length, 64-t.html_prefix.size()));
       std::string prefix = t.html_prefix;
@@ -720,10 +845,7 @@ std::size_t Service::body(char* data, std::size_t size, std::size_t count, void*
         t.error = "provider returned a web page; browser verification required"; return 0;
       }
     }
-    if (denied(t)) return 0;
-    if (!valid_file_response(t)) {
-      t.error = "server changed the resource or returned an invalid range/encoding/status"; return 0;
-    }
+    if (!accept_response(t)) return 0;
     const std::uint64_t limit = job.ranged ? t.length : (job.known ? job.total : safe_integer);
     if (t.accepted > limit || length > limit-t.accepted) { t.error = "response exceeds expected size"; return 0; }
     if (t.block && block_size-t.fill < length) t.owner->flush(t);
@@ -748,7 +870,7 @@ bool Service::configure(Transfer& t) {
   t.headers = nullptr; t.status = 0; t.header_bytes = 0;
   t.etag.clear(); t.last_modified.clear(); t.encoding.clear(); t.error.clear(); t.content_type.clear();
   t.response_headers.clear(); t.html_prefix.clear(); t.sample.clear();
-  t.content_range = false; t.length_known = false; t.paused = false; t.retry_after = 0;
+  t.content_range = false; t.length_known = false; t.paused = false; t.retry_after = 0; t.glitch = false;
   Job& job = *t.job;
   bool ok = true;
   const auto set = [&](CURLoption option, auto value) {
@@ -825,14 +947,14 @@ bool Service::probe_source(Job& job, unsigned source_index) {
   Transfer& probe = transfers_[0];
   probe.probe = true; probe.source = source_index;
   CURLcode result = CURLE_FAILED_INIT;
-  for (unsigned attempt = 1; attempt <= 4; ++attempt) {
+  for (unsigned attempt = 1;; ++attempt) {
     probe.accepted = 0;
     if (!configure(probe)) { job.fail(probe.error); return false; }
     result = perform_probe(probe); probe.result = result;
     if (job.cancelled) return false;
-    if (attempt == 4 || !retryable(probe)) break;
+    if (attempt >= std::min(6u, attempt_limit(probe))) break;
     ++job.retries;
-    const auto retry_at = Clock::now()+std::chrono::milliseconds(std::max(probe.retry_after*1000u, 250u << attempt));
+    const auto retry_at = Clock::now()+retry_delay(probe, attempt);
     while (!job.cancelled && Clock::now() < retry_at) curl_multi_poll(multi_, nullptr, 0, 50, nullptr);
   }
   if (job.cancelled) return false;
@@ -1168,11 +1290,18 @@ void Service::finish_transfer(Transfer& t) {
   Job& job = *t.job;
   if (t.block) flush(t);
   t.active = false; t.draining = true;
-  if (t.result == CURLE_OK && !job.request.destination.empty() && !denied(t)) {
-    if (!valid_file_response(t)) t.error = "server changed the resource or returned an invalid range/encoding/status";
-    else if ((job.ranged || job.known) && t.accepted != t.length) t.error = "truncated response";
-    if (!job.known && !job.ranged) { job.total = t.accepted; job.known = true; }
-  }
+  if (t.result != CURLE_OK || job.request.destination.empty() || denied(t)) return;
+  if (!accept_response(t)) { if (t.error.empty()) t.result = CURLE_HTTP_RETURNED_ERROR; return; }
+  // Bytes still missing with the response complete: retried like a reset connection.
+  if ((job.ranged || job.known) && t.accepted != t.length) { t.result = CURLE_PARTIAL_FILE; return; }
+  if (!job.known && !job.ranged) { job.total = t.accepted; job.known = true; }
+  // A range that reached the file through a fresh redirect pins its target for the ranges after it.
+  long redirects = 0;
+  char* effective = nullptr;
+  auto& location = job.sources.empty() ? job.location : job.sources[t.source].location;
+  if (job.ranged && !t.mirror && location.empty() && curl_easy_getinfo(t.curl, CURLINFO_REDIRECT_COUNT, &redirects) == CURLE_OK &&
+      redirects > 0 && curl_easy_getinfo(t.curl, CURLINFO_EFFECTIVE_URL, &effective) == CURLE_OK && effective)
+    location.assign(effective);
 }
 
 void Service::run_job(const std::shared_ptr<Job>& job) {
@@ -1188,35 +1317,51 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
   if (prepared && !job->cancelled && !job->recovering) {
     { std::lock_guard lock(job->mutex); job->snapshot.state = "downloading"; }
     const unsigned limit = job->ranged ? job->request.connections : 1;
-    unsigned allowed = job->request.adaptive ? std::min(8u, limit) : limit;
+    const unsigned initial = job->request.adaptive ? std::min(8u, limit) : limit;
+    std::vector<Window> windows;
+    const auto window_for = [&](const std::string& url) {
+      auto host = host_of(url);
+      for (unsigned i = 0; i < windows.size(); ++i) if (windows[i].host == host) return i;
+      windows.push_back({std::move(host), initial});
+      return static_cast<unsigned>(windows.size()-1);
+    };
+    const auto allowed = [&] {
+      unsigned sum = 0;
+      for (const Window& w : windows) sum += w.allowed;
+      return std::min(limit, windows.empty() ? initial : sum);
+    };
     const std::size_t count = job->ranged ? job->completed.size() : 1;
     std::vector<unsigned char> scheduled(count);
     std::vector<unsigned> attempts(count);
     std::vector<Clock::time_point> retry_at(count);
     for (std::size_t i = 0; i < count && job->ranged; ++i) scheduled[i] = job->completed[i];
-    Clock::time_point previous = Clock::now(), adjusted = previous, checkpointed = previous, logged = previous;
+    Clock::time_point previous = Clock::now(), checkpointed = previous, logged = previous;
     std::uint64_t logged_received = job->committed, logged_written = job->committed;
     std::uint64_t previous_written = job->committed;
-    double previous_speed = 0;
     std::size_t finished = static_cast<std::size_t>(std::count(scheduled.begin(), scheduled.end(), 1));
     while (finished < count && !job->failed && !job->cancelled) {
       const auto now = Clock::now();
       unsigned in_flight = 0;
       for (Transfer& t : transfers_) if (t.active || t.draining) ++in_flight;
+      if (job->request.adaptive) for (Window& w : windows) w.grow(now, limit);
       for (Transfer& t : transfers_) {
         if (t.draining && !t.pending) {
-          t.draining = false; --in_flight;
+          t.draining = false; --in_flight; --windows[t.window].in_flight;
           if (t.result == CURLE_OK && t.error.empty()) {
             job->committed += t.written;
             if (job->ranged) job->completed[t.piece] = 1;
             ++finished;
-          } else if (attempts[t.piece] < 4 && (forget_mirror(*job, t) || retryable(t) || forget_redirect(*job, t))) {
+          } else {
+            const unsigned attempt = attempts[t.piece];
+            log_failure(t, attempt);
+            if (job->request.adaptive && congested(t)) windows[t.window].shrink(now, t.retry_after);
+            unsigned allowed_attempts = attempt_limit(t);
+            if (forget_mirror(*job, t)) allowed_attempts = std::max(allowed_attempts, 4u);
+            else if (forget_redirect(*job, t, attempt)) allowed_attempts = std::max(allowed_attempts, 4u);
+            if (attempt >= allowed_attempts) { job->fail(describe(t)); break; }
             ++job->retries;
             scheduled[t.piece] = 0;
-            retry_at[t.piece] = now+std::chrono::milliseconds(std::max(t.retry_after*1000u,
-                (250u << attempts[t.piece])+(t.piece*37)%200));
-          } else {
-            job->fail(t.error.empty() ? curl_easy_strerror(t.result) : t.error); break;
+            retry_at[t.piece] = now+retry_delay(t, attempt);
           }
         }
         if (t.active && t.paused) {
@@ -1228,9 +1373,23 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             if (result != CURLE_OK) job->fail(curl_easy_strerror(result));
           }
         }
-        if (!t.active && !t.draining && in_flight < allowed) {
+        if (!t.active && !t.draining && in_flight < limit) {
+          const unsigned mirror = job->ranged && job->sources.empty() ?
+            pick_mirror(*job, static_cast<unsigned>(&t - transfers_.data())) : 0;
+          // The first waiting range whose origin has room; manifest sources sit in order, so each
+          // source's window is looked up once per pass.
           std::size_t next = 0;
-          while (next < count && (scheduled[next] || now < retry_at[next])) ++next;
+          unsigned window = 0, checked = ~0u;
+          bool room = false;
+          for (; next < count; ++next) {
+            if (scheduled[next] || now < retry_at[next]) continue;
+            const unsigned source = job->sources.empty() ? 0 : job->segments[next].source;
+            if (source != checked) {
+              checked = source; window = window_for(range_url(*job, source, mirror));
+              room = windows[window].open(now);
+            }
+            if (room) break;
+          }
           if (next == count) continue;
           t.piece = static_cast<unsigned>(next); scheduled[next] = 1;
           if (!job->sources.empty()) {
@@ -1239,14 +1398,14 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
           } else {
             t.begin = job->ranged ? t.piece*job->request.range_bytes : 0;
             t.length = job->ranged ? std::min(job->request.range_bytes, job->total-t.begin) : job->total;
-            t.mirror = job->ranged ? pick_mirror(*job, static_cast<unsigned>(&t - transfers_.data())) : 0;
+            t.mirror = mirror;
           }
           t.accepted = 0; t.written = 0; ++attempts[next];
           if (!file) job->response.clear();
           if (!configure(t) || curl_multi_add_handle(multi_, t.curl) != CURLM_OK) {
             job->fail(t.error.empty() ? "could not schedule transfer" : t.error); break;
           }
-          t.active = true; ++in_flight;
+          t.active = true; t.window = window; ++in_flight; ++windows[window].in_flight;
         }
       }
       int running = 0;
@@ -1273,18 +1432,8 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
         }
         finish_transfer(*t);
       }
-      if (now-previous >= std::chrono::milliseconds(250)) {
-        snapshot(*job, allowed, now, previous, previous_written);
-        if (job->request.adaptive && now-adjusted >= std::chrono::seconds(3)) {
-          double speed; std::uint64_t buffered;
-          { std::lock_guard lock(job->mutex); speed = job->snapshot.bytes_per_second; buffered = job->snapshot.buffered; }
-          if (buffered > block_size*block_count*3/4 || (previous_speed > 0 && speed < previous_speed*0.85))
-            allowed = std::max(1u, allowed-1);
-          else if (!previous_speed || speed > previous_speed*1.05) allowed = std::min(limit, allowed+2);
-          previous_speed = speed; adjusted = now;
-        }
-      }
-      if (now-logged >= std::chrono::seconds(2)) { log_stats(*job, allowed, logged_received, logged_written); logged = now; }
+      if (now-previous >= std::chrono::milliseconds(250)) snapshot(*job, allowed(), now, previous, previous_written);
+      if (now-logged >= std::chrono::seconds(2)) { log_stats(*job, allowed(), logged_received, logged_written); logged = now; }
       if (job->ranged && now-checkpointed >= std::chrono::seconds(5)) {
         queue_checkpoint(job); checkpointed = now;
       }

@@ -30,6 +30,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
     expired = set()
     modified = "Wed, 01 Jan 2025 00:00:00 GMT"
     mutated = False
+    # /throttled answers like an archive.org storage node: past a few concurrent ranges it refuses
+    # with 500/503/429, and it resets some ranges halfway once.
+    busy = 0
+    refused = []
+    # /hop sends its first request (the probe) to /node-a, whose ranges then fail with HTTP 500, and
+    # every later one to /node-b, a healthy node with the same file.
+    hops = 0
+
+    def respond(self, head=False):
+        if self.path == "/hop":
+            with self.guard:
+                Handler.hops += 1
+                target = "/node-a" if Handler.hops == 1 else "/node-b"
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path == "/node-a" and self.headers.get("Range") != "bytes=0-0":
+            self.send_response(500)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if not self.path.startswith("/throttled") or self.headers.get("Range") in (None, "bytes=0-0"):
+            return self.serve(head)
+        with self.guard:
+            Handler.busy += 1
+            busy = Handler.busy
+        try:
+            with self.guard:
+                first = ("refuse", self.headers["Range"]) not in self.retried
+                self.retried.add(("refuse", self.headers["Range"]))
+            # The first range's first answer is archive.org's HTML error page; it must not read as a web page.
+            if busy > 6 or (first and self.headers["Range"].startswith("bytes=0-")):
+                status = (500, 503, 429)[len(self.refused) % 3]
+                self.refused.append(status)
+                body = b"<html><body>Internal Server Error</body></html>" if status == 500 else b""
+                self.send_response(status)
+                if status == 503: self.send_header("Retry-After", "0")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.serve(head)
+        finally:
+            with self.guard:
+                Handler.busy -= 1
 
     def handle(self):
         try:
@@ -46,7 +93,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.respond()
 
-    def respond(self, head=False):
+    def serve(self, head=False):
         path, _, query = self.path.partition("?")
         selected = self.headers.get("Range")
         with self.guard:
@@ -110,13 +157,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
         if path == "/changed" and selected != "bytes=0-0":
             status = 200
+        changed_etag = path == "/changed-etag" and selected != "bytes=0-0"
         self.send_response(status)
         self.send_header("Content-Length", str(end-start+1))
         if "modified" in path:
             self.send_header("Last-Modified", self.modified)
             self.send_header("ETag", 'W/"weak"')
         elif "no-validator" not in path:
-            self.send_header("ETag", '"fixture-v1"' if path != "/changed" else '"fixture-v2"')
+            self.send_header("ETag", '"fixture-v2"' if path == "/changed" or changed_etag else '"fixture-v1"')
         if status == 206:
             reported = start+1 if path == "/bad-range" and selected != "bytes=0-0" else start
             self.send_header("Content-Range", f"bytes {reported}-{end}/{total}")
@@ -133,6 +181,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.close_connection = True
                     self.connection.shutdown(socket.SHUT_RDWR)
                     return
+                if path == "/throttled" and offset == start and start % (3*1024*1024) == 0:
+                    with self.guard:
+                        first = ("reset", selected) not in self.retried
+                        self.retried.add(("reset", selected))
+                    if first:
+                        self.close_connection = True
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                        return
+                if path == "/throttled":
+                    time.sleep(0.004)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
@@ -154,10 +212,11 @@ def main():
         directory = Path(temporary)
         binary = compile_client(directory)
 
-        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, reject_html=False, no_redirect=False, mirrors=()):
+        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, reject_html=False, no_redirect=False, mirrors=(), adaptive=False):
             environment = dict(os.environ)
-            for name in ("NETWORK_TEST_RECOVER", "NETWORK_TEST_REJECT_HTML", "NETWORK_TEST_NO_REDIRECT"):
+            for name in ("NETWORK_TEST_RECOVER", "NETWORK_TEST_REJECT_HTML", "NETWORK_TEST_NO_REDIRECT", "NETWORK_TEST_ADAPTIVE"):
                 environment.pop(name, None)
+            if adaptive: environment["NETWORK_TEST_ADAPTIVE"] = "1"
             if reject_html: environment["NETWORK_TEST_REJECT_HTML"] = "1"
             if no_redirect: environment["NETWORK_TEST_NO_REDIRECT"] = "1"
             if recover:
@@ -280,11 +339,31 @@ def main():
             assert out["written"] == len(DATA), out
             assert not Path(str(path)+".part").exists()
             path.unlink()
-        for endpoint in ("/bad-range", "/changed", "/truncated"):
+        # A range answered with the wrong span, or a 200 that ignores Range, is retried a few times
+        # and then fails without blaming the file; validators that differ on the probed URL fail at once.
+        for endpoint, error in (("/bad-range", "unexpected range response"), ("/changed", "ignored the byte range"),
+                                ("/changed-etag", "changed the resource")):
             path = directory / endpoint.removeprefix("/")
             out = run(endpoint, path)
-            assert out["state"] == "failed", out
+            assert out["state"] == "failed" and error in out["error"], out
+            assert endpoint != "/changed-etag" or out["retries"] == 0, out
             assert not path.exists()
+        # Refused and reset ranges are a busy server, not a damaged file: the origin's window shrinks
+        # and every range lands once, byte-identical, at 64 connections.
+        Handler.refused.clear()
+        path = directory / "throttled"
+        out = run("/throttled", path, connections=64, adaptive=True, reject_html=True, digest=hashlib.sha256(DATA).hexdigest())
+        assert out["state"] == "completed", out
+        assert path.read_bytes() == DATA
+        assert {500, 503, 429} <= set(Handler.refused) and out["retries"] >= 3, (out, Handler.refused)
+        path.unlink()
+        # A pinned redirect target that keeps failing is resolved again, and the new target is pinned.
+        path = directory / "hop"
+        out = run("/hop", path, digest=hashlib.sha256(DATA).hexdigest())
+        assert out["state"] == "completed", out
+        assert path.read_bytes() == DATA
+        assert Handler.hops <= 8, Handler.hops
+        path.unlink()
         path = directory / "large-offset"
         size = 4*1024**3 + 1024**2
         # Seed completed sparse ranges to exercise the actual downloader beyond 4 GiB

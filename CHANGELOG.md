@@ -28,6 +28,16 @@
 
 ## Unreleased
 
+- Downloads treat a busy server as busy, not as a damaged file. archive.org's storage node answered
+  HTTP 500 to some of 16 or 64 concurrent ranges, which failed the whole task as "server changed the
+  resource"; now HTTP 5xx/429/408 and broken connections retry the range up to eight times (0.5 to
+  30 s apart with jitter, Retry-After honored up to a minute), a 200 that ignores `Range` or a wrong
+  span retries three times, and only validators that differ on the probed URL fail as changed. A
+  pinned redirect target is resolved again after a range's second 5xx and the new one pinned.
+- `adaptive` is now a per-origin AIMD window: it starts at 8, grows by half each second while
+  healthy, halves on 5xx/429/408 or a broken connection and then grows by one a second. BATTLESHIP
+  (1.25 GB) from archive.org completes in 99 s at 64 connections and 111 s at 16 (both failed
+  before; 8 fixed took 246 s). Each failed range logs its status, headers and final URL.
 - Remote images load lazily: an element's image reaches the network after 120 ms mounted, and no
   request starts while a ScrollView moves or for 150 ms after (new internal `image.defer`). Holding
   Down through Overdrive's grid for 3 s fetched 45 covers instead of 140 and decoded 69 instead of 167;

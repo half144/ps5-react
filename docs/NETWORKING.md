@@ -76,7 +76,7 @@ task during cleanup if its lifetime belongs to that component.
 | --- | --- | --- |
 | `connections` | 8 | Integer 1–64; maximum ranges in flight |
 | `mirrors` | omitted | Up to 4 other http(s) URLs for the same file. Each is probed and kept only if its size and strong ETag match the primary (or a `sha256` is given); ranges then rotate over the primary and the mirrors, and a mirror that fails a range is dropped. Not combined with `pieces` |
-| `adaptive` | `true` | Starts at up to 8; every 3 seconds adds 2 while speed rises, removes 1 on buffer pressure or a speed drop |
+| `adaptive` | `true` | Per-origin congestion window (AIMD) under `connections`: starts at up to 8 and grows by half each second while full and healthy; HTTP 5xx/429/408 or a broken connection halves it (Retry-After also pauses that origin), after which it grows by one a second. `false` keeps `connections` fixed |
 | `rangeBytes` | 32 MiB | Integer 1–256 MiB; at most 65,536 ranges |
 | `resume` | `true` | Reuses matching durable completed ranges; `false` refuses existing partial files |
 | `rejectHtml` | `false` | Rejects HTML content types and initial HTML signatures before a file can be published; provider pages are not binary downloads |
@@ -90,8 +90,13 @@ A one-byte GET probe checks range support and size. A server that answers it wit
 a 206 range downloads in parallel and can resume. A strong ETag guards every range
 through `If-Range`; without one, `Last-Modified` does (weak ETags are ignored);
 without either, only the exact size and range bounds are checked. Ranges reuse the
-probe's final URL after redirects, falling back to the original URL on a 4xx. Every
-range checks its exact bounds, total, status and validator. A server without range
+probe's final URL after redirects, resolving the original URL again on a 4xx or on a
+range's second 5xx there; the first range that lands through the new redirect pins its
+target. Every range checks its exact bounds, total, status and validator. Only an
+ETag, Last-Modified or total that differs on the URL the validators came from fails
+the task as "server changed the resource"; a 200 that ignores `Range` or a 206 with
+the wrong span is retried up to three attempts, and so is a validator difference on
+a range that a fresh redirect sent to another node. A server without range
 support uses a single sequential connection; its partial files cannot resume.
 
 Resume requires the same validator, hash, size, range size and storage root, not
@@ -242,9 +247,12 @@ memory in the title's one process heap. These are not total-memory bounds.
 
 The writer uses 64-bit-offset `pwrite`, and buffer exhaustion pauses network
 transfers until the writer returns blocks. Checkpoints run every five seconds
-and at completion/cancellation. Transient file transport failures and HTTP
-429/502/503/504 retry up to four total attempts per probe/range, with exponential delay,
-jitter and numeric Retry-After support. HTTP-date Retry-After is not supported.
+and at completion/cancellation. Connection failures (reset, timeout, refused,
+unresolved, truncated body) and HTTP 408/429/5xx are a busy server, not a damaged
+file: a range retries up to eight total attempts (a probe six), with exponential
+delay from 0.5 s to 30 s, jitter, and numeric Retry-After honored up to a minute.
+HTTP-date Retry-After is not supported. Each failed range logs its status,
+Content-Range, Content-Length, ETag, encoding and final URL.
 The default concurrency is a starting point, not a measured PS5 optimum.
 
 The FIFO queue accepts eight unconsumed tasks, with **one task active at a time**;
