@@ -557,6 +557,13 @@ bool storage_test() {
           info.device !== item.device || info.inode !== item.inode) return false;
       try { fs.readDir(testPath); return false; }
       catch (error) { if (!error.message.includes('fs.readDir')) return false; }
+      // readFile sizes its buffer from the file: exact for small, empty and multi-megabyte files.
+      if (fs.readFile(testPath) !== 'listing test') return false;
+      fs.writeFile(testPath, '', false);
+      if (fs.readFile(testPath) !== '') return false;
+      const large = 'x'.repeat(3 * 1024 * 1024 + 7);
+      fs.writeFile(testPath, large, false);
+      if (fs.readFile(testPath) !== large) return false;
     } finally { fs.remove(testPath); }
     // removeTree deletes the tree but only unlinks the symbolic link set up below, keeping its target.
     fs.removeTree('/download0/remove-tree-test');

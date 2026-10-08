@@ -127,16 +127,25 @@ JSValue fs_read_file(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
     close(fd);
     return JS_ThrowPlainError(ctx, "fs.readFile %s: File is larger than %zu bytes", path.app(), kMaxReadBytes);
   }
-  // Size from fstat is only a hint; special files report 0, so read until EOF within the cap.
-  char* buffer = static_cast<char*>(std::malloc(kMaxReadBytes + 1));
+  // Size from fstat is only a hint; special files report 0, so read until EOF within the cap. The
+  // buffer starts at the reported size, so reading a small file does not take the cap from the heap.
+  std::size_t capacity = st.st_size > 0 ? static_cast<std::size_t>(st.st_size) + 1 : kMaxReadBytes + 1;
+  char* buffer = static_cast<char*>(std::malloc(capacity));
+  std::size_t length = 0;
+  ssize_t count = 0;
+  while (buffer && length <= kMaxReadBytes && (count = read(fd, buffer + length, capacity - length)) > 0) {
+    length += static_cast<std::size_t>(count);
+    if (length == capacity && capacity <= kMaxReadBytes) {
+      char* grown = static_cast<char*>(std::realloc(buffer, kMaxReadBytes + 1));
+      if (!grown) std::free(buffer);
+      buffer = grown;
+      capacity = kMaxReadBytes + 1;
+    }
+  }
   if (!buffer) {
     close(fd);
     return JS_ThrowOutOfMemory(ctx);
   }
-  std::size_t length = 0;
-  ssize_t count = 0;
-  while (length <= kMaxReadBytes && (count = read(fd, buffer + length, kMaxReadBytes + 1 - length)) > 0)
-    length += static_cast<std::size_t>(count);
   JSValue result;
   if (count < 0) result = path.error("fs.readFile");
   else if (length > kMaxReadBytes)
