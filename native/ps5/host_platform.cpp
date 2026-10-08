@@ -9,6 +9,7 @@
 #include "host_platform.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
+#include <vector>
 #include "filesystem_access.hpp"
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/pad.hpp"
@@ -241,15 +242,16 @@ int list_mounts(MountEntry* mounts, int max) {
 }
 
 // sceKernelGetdents, as titles list directories; opendir from libSceLibcInternal
-// fails with EPERM inside a title sandbox.
+// fails with EPERM inside a title sandbox. The buffer holds a whole directory block: /data's are
+// 64 KiB, and a smaller buffer fails there with EINVAL (the sandbox's own folders take 8 KiB).
 bool read_dir(const char* real_path, void (*visit)(const char* name, void* user), void* user) {
   const int fd = sceKernelOpen(real_path, O_RDONLY | O_DIRECTORY, 0);
   if (sce_failed(fd)) return false;
-  char buffer[8192];
+  std::vector<char> buffer(64 * 1024);
   int read = 0;
-  while (!sce_failed(read = sceKernelGetdents(fd, buffer, sizeof buffer)) && read > 0) {
-    if (read > static_cast<int>(sizeof buffer) ||
-        !visit_directory_records(buffer, static_cast<std::size_t>(read), visit, user)) {
+  while (!sce_failed(read = sceKernelGetdents(fd, buffer.data(), buffer.size())) && read > 0) {
+    if (read > static_cast<int>(buffer.size()) ||
+        !visit_directory_records(buffer.data(), static_cast<std::size_t>(read), visit, user)) {
       errno = EIO;
       read = -1;
       break;
