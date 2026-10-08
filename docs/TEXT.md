@@ -15,6 +15,10 @@ places:
   keep their baked glyphs, so Latin text and digits inside a Japanese or Arabic
   sentence still use the app's font.
 
+`apps/text-lab` shows a sample in each of the thirteen most spoken languages
+(Latin, Cyrillic, CJK, Devanagari, Bengali, Arabic and Urdu), CJK wrapping and
+truncation, and a right-to-left box (`npm run dev -- --app text-lab`).
+
 ## Baked glyph sets
 
 A baked font covers printable ASCII plus the codepoints its `assets.config.js`
