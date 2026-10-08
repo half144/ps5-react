@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "archives.hpp"
+#include <clocale>
+#include <mutex>
 #include "archive_preflight.hpp"
 #include "digest.hpp"
 #include "thread_name.hpp"
@@ -320,7 +322,15 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
   if (digest.size() != 64 && !job.cancelled) return "Cannot verify extracted file.";
   return {};
 }
+// libarchive converts every entry name to the process locale. In the C locale a single non-ASCII
+// name ("PPSA15246 – USA ...") failed that conversion, and on the console it faulted at address 0
+// and killed the title. Under a UTF-8 locale a UTF-8 name needs no conversion.
+void use_utf8_names() {
+  static std::once_flag once;
+  std::call_once(once, [] { if (!std::setlocale(LC_CTYPE, "C.UTF-8")) std::setlocale(LC_CTYPE, "en_US.UTF-8"); });
+}
 archive* open_archive(const Request& request, std::string& error) {
+  use_utf8_names();
   auto* archive = archive_read_new();
   archive_read_support_filter_all(archive);
   archive_read_support_format_zip(archive);
@@ -341,8 +351,10 @@ std::string extract(Job& job, archive* archive, int root, const std::string& sta
   archive_entry* entry = nullptr;
   int result = ARCHIVE_OK;
   std::uint64_t declared_total = 0;
-  while (!job.cancelled && (result = archive_read_next_header(archive, &entry)) == ARCHIVE_OK) {
-    const char* name = archive_entry_pathname(entry);
+  // A warning is a header libarchive could only read in part, such as a name it could not convert.
+  while (!job.cancelled && ((result = archive_read_next_header(archive, &entry)) == ARCHIVE_OK || result == ARCHIVE_WARN)) {
+    const char* name = archive_entry_pathname_utf8(entry);
+    if (!name) return "Archive has a file name this console cannot read.";
     const auto type = archive_entry_filetype(entry);
     const bool link = archive_entry_symlink(entry) || archive_entry_hardlink(entry);
     const bool reserved = name && std::string(name).find(".ps5-react-") != std::string::npos;

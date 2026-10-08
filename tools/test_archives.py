@@ -49,6 +49,12 @@ def main():
   with zipfile.ZipFile(zip,"w",compression=zipfile.ZIP_DEFLATED) as z:z.writestr("nested/game.ffpfsc",DATA)
   assert run("zip",[zip])[0]=="completed"
   assert (root/"zip/game.ffpfsc").read_bytes()==DATA
+  # A non-ASCII name in a process left in the C locale, as on the console (the Teardown backport).
+  named=root/"named.zip"
+  with zipfile.ZipFile(named,"w") as z:z.writestr("PPSA15246 \u2013 USA/eboot.bin",DATA)
+  out=subprocess.check_output([str(binary),str(root/"named"),str(1024*1024),str(named)],text=True,timeout=20,env={"LC_ALL":"C"}).splitlines()
+  assert out[0]=="completed",out
+  assert (root/"named/PPSA15246 \u2013 USA/eboot.bin").read_bytes()==DATA
   tar=root/"fixture.tar"
   with tarfile.open(tar,"w") as t:
    entry=tarfile.TarInfo("nested/file.bin");entry.size=len(DATA);t.addfile(entry,io.BytesIO(DATA))
