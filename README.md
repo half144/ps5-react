@@ -549,7 +549,8 @@ mappings. Literal font sizes are discovered during bundling when the font's
 `sizes` array is not pinned in `assets.config.js`. An explicit nonempty array
 replaces automatic discovery; include every physical size you use. Declare
 runtime-selected sizes and extra glyphs there as well, and resolve font-baker
-warnings before shipping.
+warnings before shipping. For text in other languages, see
+[International text](docs/TEXT.md).
 
 Remote images load through native workers and a bounded cache:
 

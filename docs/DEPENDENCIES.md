@@ -87,6 +87,8 @@ gradient seen through the border ring (the web's shine border).
 process heap from the title's free flexible memory (1 GiB down to 128 MiB, the
 first that leaves 96 MiB outside it and maps) instead of a fixed 128 MiB, and
 adds `hui_heap_capacity()` to report the size obtained.
+`embeddedReact-european-glyphs.patch` (Apache-2.0 font baker and test; not yet
+proposed upstream) adds the `latin-ext`, `cyrillic` and `european` glyph sets.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.

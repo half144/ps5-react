@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — international text
+
+- Add the `latin-ext`, `cyrillic` and `european` baked glyph sets, so runtime
+  text in Spanish, French, German, Portuguese, Indonesian, Russian and the other
+  European languages renders without listing each letter (docs/TEXT.md).
+
 ## Unreleased — native archive extraction
 
 - Add cancellable `Archives.extract` with streaming ordered-volume extraction,
