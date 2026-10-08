@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "filesystem_access.hpp"
+#include "crash_log.hpp"
 #include "app_config.hpp"
 #include "host_platform.hpp"
 #include "platform/ps5/system.hpp"
@@ -163,6 +164,7 @@ void initialize_filesystem_access() {
   std::snprintf(cache_root, sizeof cache_root, "%s/cache", title_data);
   if (!ensure_directory("/data/ps5-react") || !ensure_directory(title_data) || !ensure_directory(cache_root) || !writable(cache_root))
     std::snprintf(cache_root, sizeof cache_root, "%s/.cache", data_root);
+  else crash_log::start(title_data);
   hui::sys::log("[PS5-REACT] filesystem roots app=%s data=%s temp=%s cache=%s", app_root, data_root, temp_root, cache_root);
 #endif
 }

@@ -72,6 +72,7 @@ pid_t getpid() { return 123; }
 
 elevation::Status status = elevation::Status::ok;
 elevation::Status elevation::request(Capability, const char*) noexcept { return status; }
+void crash_log::start(const char*) {}
 const char* elevation::path() noexcept { return "fixture"; }
 extern "C" int sceNetInit() { return 0; }
 extern "C" int sceNetTerm() { return 0; }
