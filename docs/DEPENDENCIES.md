@@ -83,6 +83,10 @@ through the border ring, with a native-driver `borderGradientAngle`.
 `embeddedReact-border-radial.patch` (Apache-2.0 engine and bridge files; not
 yet proposed upstream) adds `borderGradient` `type: 'radial'`, a moving radial
 gradient seen through the border ring (the web's shine border).
+`platform-heap-size.patch` (GPL-3.0-or-later `src/runtime/app_heap.c`) sizes the
+process heap from the title's free flexible memory (1 GiB down to 128 MiB, the
+first that leaves 96 MiB outside it and maps) instead of a fixed 128 MiB, and
+adds `hui_heap_capacity()` to report the size obtained.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.

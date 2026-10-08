@@ -43,6 +43,7 @@ extern "C" {
 void er_register_assets(void);
 std::uint64_t sceKernelReadTsc(void);
 std::uint64_t sceKernelGetTscFrequency(void);
+void hui_heap_capacity(std::size_t* size, std::size_t* flexible_before, std::size_t* flexible_after);
 extern const char proof_bundle[];
 extern const unsigned long proof_bundle_length;
 }
@@ -351,6 +352,13 @@ void* render_thread(void*) {
 
 int main() {
   hui::sys::log("[PS5-REACT] %s (%s)", PS5_REACT_NAME, PS5_REACT_TITLE);
+  std::size_t heap = 0, flexible_before = 0, flexible_after = 0;
+  hui_heap_capacity(&heap, &flexible_before, &flexible_after);
+  if (heap)
+    hui::sys::log("[PS5-REACT] heap: %zu MiB (flexible memory free %zu MiB before it, %zu MiB after)",
+                  heap >> 20, flexible_before >> 20, flexible_after >> 20);
+  else
+    hui::sys::log("[PS5-REACT] heap: none, system malloc (flexible memory free %zu MiB)", flexible_before >> 20);
   launch_us = hui::sys::monotonic_us();
   initialize_filesystem_access();
   pthread_attr_t attributes;
