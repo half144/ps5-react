@@ -4,6 +4,7 @@
 #include "network.hpp"
 #include "image_loader.hpp"
 #include "archives.hpp"
+#include "packages.hpp"
 #include "app_config.hpp"
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -140,6 +141,7 @@ struct Host {
   ~Host() {
     ps5_react_stop_images();
     archives::stop();
+    packages::stop();
   network::stop();
     if (runtime_started) er_runtime_shutdown();
     text_shaper::shutdown();

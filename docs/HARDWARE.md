@@ -102,6 +102,16 @@ modules, every filesystem operation, other firmware, or later rebuilt hashes.
 Generated build receipts continue to default to `hardware_tested: false`; use
 this record to identify the qualified artifacts.
 
+## PKG installation — 2026-10-08
+
+CFI-series console on firmware 13.60 (kernel `r229358/releases/13.60`), kstuff-lite,
+John Törnblom's ELF loader on port 9021. `pkg-installer.elf` sent from a Mac to the
+loader installed `CUSA04286` (BATTLESHIP, PS4 fake PKG, 1,246,167,040 bytes) from
+`/data/downloads/packages/`: `transferring` for 15 s, `promoting`, then `playable`
+at 16 s. A first build that imported `libSceAppInstUtil` never reached `main`; the
+library is loaded by path. The in-app route (engine to loader on 127.0.0.1) is
+recorded separately once tested.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

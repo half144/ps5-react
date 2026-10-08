@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — package installation
+
+- Add `Packages.install` (ABI v5 additive `packages.install/cancel/poll`): a
+  `.pkg` installs through the console's install service from a loader payload,
+  with the install stage and bytes reported once a second (docs/NATIVE-API.md).
+- Resolve image hosts a blocking DNS refuses over DoH, and name each image
+  origin's last failure in the stats line.
+
 ## Unreleased — international text
 
 - Add the `latin-ext`, `cyrillic` and `european` baked glyph sets, so runtime

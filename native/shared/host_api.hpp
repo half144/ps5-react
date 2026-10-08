@@ -51,6 +51,10 @@
 //                                  a decoder-memory refusal its headers so far justify; partial files ok
 //   archives.cancel(id)            requests cancellation; source volumes remain intact
 //   archives.poll()                state/error/written/entries/artifacts; consumes terminal results
+//   packages.install(path, name)   task ID; installs a .pkg under /data, /mnt/usb or /mnt/ext through the
+//                                  console's install service (PS5 only, needs the payload loader on 9021)
+//   packages.cancel(id)            stops reporting; an install the console accepted carries on
+//   packages.poll()                state/error/contentId/status/written/total; consumes terminal results
 //   network.version()              transport version string
 //   image.load(url, width, height, fit, prefetch) {id, state, name, width, height, error, color}; takes a
 //                                  reference; fit: 0 cover, 1 contain, 2 stretch, 3 none; prefetch
@@ -176,3 +180,5 @@ void ps5_react_stop_sound();
 
 // ABI v5 additive archive tasks: extract(sources, destination, maxBytes), inspect(sources), cancel(id), poll().
 JSValue ps5_react_archive_api(JSContext* ctx);
+// ABI v5 additive package installs: install(path, name), cancel(id), poll().
+JSValue ps5_react_package_api(JSContext* ctx);

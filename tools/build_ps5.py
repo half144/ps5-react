@@ -133,7 +133,7 @@ def main():
                ROOT / "native/ps5/filesystem_access.cpp",
                ROOT / "native/ps5/elevation_transport.cpp",
                ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/network.cpp",
-               ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/ps5/network_platform.cpp",
+               ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/shared/package_api.cpp", ROOT / "native/ps5/package_installer.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
                ROOT / "native/shared/gl_presenter.cpp",
@@ -190,6 +190,11 @@ def main():
     run([host_tool, "link", "--in", pie, "--out", elf, "--stub-dir", libs,
          *[flag for path in agc_stubs for flag in ("--stub", path)], "--module-sdk", "0x02000009",
          "--companion-sdk", "0x08050001", "--file-name", "eboot.elf"])
+    # The PKG installer runs as a loader payload: an app may not use the console's install service.
+    installer = BUILD / "pkg-installer.elf"
+    run([sdk / "bin/prospero-clang", "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-o", installer,
+         ROOT / "native/ps5/payloads/pkg_installer.c", "-lkernel_sys", "-lSceUserService"],
+        env=env, log=BUILD / "pkg-installer.log")
     if args.compile_only:
         print(f"PS5 ELF linked: {elf}; no application package generated")
         return
@@ -198,6 +203,7 @@ def main():
     (app / "sce_module").mkdir(exist_ok=True)
     run([host_tool, "self", "--sign", "--in", elf, "--out", app / "eboot.bin", "--magic", "0x1D3D154F"])
     shutil.copy2(runtime, app / "sce_module/libc.prx")
+    shutil.copy2(installer, app / "pkg-installer.elf")
     param = json.loads((hui / "sce_sys/param.json").read_text())
     param.update(titleId=TITLE, conceptId=TITLE[4:], contentId=config["contentId"], contentVersion=config["version"])
     param["localizedParameters"]["en-US"]["titleName"] = config["name"]

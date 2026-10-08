@@ -342,6 +342,18 @@ export const Archives = Object.freeze({
   inspect: sources => host().archives.inspect(sources),
 });
 
+/**
+ * PKG installation through the console's install service (PS5 only; it needs a payload loader on port
+ * 9021). The task's snapshot carries `written`/`total` bytes, the console's install `status` and the
+ * package's `contentId`; it completes once the title is playable. Cancelling stops reporting only.
+ */
+export const Packages = Object.freeze({
+  install({path, name = ''}) {
+    const id = host().packages.install(path, name);
+    return networkTask(id, 'Packages.install', path, 'packages');
+  },
+});
+
 const pendingImages = new Map();
 let stopImagePolling = null;
 

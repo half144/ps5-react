@@ -5,6 +5,7 @@
 
 #include "network.hpp"
 #include "archives.hpp"
+#include "packages.hpp"
 #include "thread_name.hpp"
 #include "app_config.hpp"
 #include "async_log.hpp"
@@ -359,6 +360,7 @@ bool run_proof() {
   if (!ok && runtime) async_log::write("[PS5-REACT] error=%s", er_runtime_last_error());
   ps5_react_stop_images();
   archives::stop();
+  packages::stop();
   network::stop();
   if (runtime) er_runtime_shutdown();
   text_shaper::shutdown();

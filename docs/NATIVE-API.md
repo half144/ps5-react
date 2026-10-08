@@ -376,6 +376,28 @@ directory or select **Refresh** to query again; focus changes do not query stora
 - The system on-screen keyboard (IME) for text input.
 - System save data; use `FileSystem.dataDir` for now.
 
+## Package installation
+
+```js
+import {Packages} from '@ps5-react/core';
+const task = Packages.install({path: '/data/downloads/packages/CUSA04286-game.pkg', name: 'BATTLESHIP'});
+const unsubscribe = task.subscribe(({status, written, total}) => console.log(status, written, total));
+try { await task.done; } finally { unsubscribe(); }
+```
+
+Installs a `.pkg` or `.fpkg` under `/data`, `/mnt/usb*` or `/mnt/ext*` through
+the console's install service (`sceAppInstUtilInstallByPackage`), PS4 and PS5
+packages alike. An app may not call that service, so each install sends
+`pkg-installer.elf`, built from `native/ps5/payloads/pkg_installer.c` and
+shipped in the app folder, to the payload loader on `127.0.0.1:9021`; a jailbroken
+console without that loader fails with an error naming the port. The snapshot
+carries the console's install `status` (`transferring`, `promoting`,
+`playable`), `written`/`total` bytes and the package's `contentId`; the task
+completes once the title is playable. One install runs at a time. `cancel()`
+stops reporting only: the console finishes an install it accepted. The preview
+fails each request. Fake packages need a kernel that accepts them (kstuff); on
+firmware above 11.60, PS5 fake game packages install but do not launch.
+
 ## Archive extraction
 
 ```js
