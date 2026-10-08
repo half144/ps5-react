@@ -1,6 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
+#include <csignal>
 #include "control.hpp"
 #include <cerrno>
 #include <cstdio>
@@ -23,6 +24,8 @@ Control::~Control() {
 }
 
 bool Control::start(const char* path) {
+  // A client that hangs up before its reply would otherwise end the preview with SIGPIPE.
+  std::signal(SIGPIPE, SIG_IGN);
   sockaddr_un address{};
   if (std::strlen(path) >= sizeof address.sun_path) return false;
   address.sun_family = AF_UNIX;

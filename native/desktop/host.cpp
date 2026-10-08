@@ -277,7 +277,10 @@ struct Host {
         if (known && !dispatch(arg.c_str())) return false;
         Control::reply(client, known ? "ok" : "unknown action: " + arg);
       } else if (verb == "shot") {
-        Control::reply(client, save_screenshot(arg.c_str()) ? arg : std::string("error: ") + std::strerror(errno));
+        // `shot <path> full` keeps the framebuffer's full resolution, for images meant to be shown.
+        const bool full = arg.size() > 5 && arg.ends_with(" full");
+        const std::string path = full ? arg.substr(0, arg.size() - 5) : arg;
+        Control::reply(client, save_screenshot(path.c_str(), full ? 1 : 2) ? path : std::string("error: ") + std::strerror(errno));
       } else if (verb == "snapshot") {
         Control::reply(client, call_js("__ps5ReactInspect", nullptr));
       } else if (verb == "focus") {
