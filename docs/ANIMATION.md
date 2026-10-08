@@ -233,10 +233,21 @@ const angle = useAnimatedValue(0);
 
 | `borderGradient` key | Meaning |
 | --- | --- |
-| `type` | `'conic'` |
+| `type` | `'conic'` or `'radial'` |
 | `width` | Ring thickness in render px |
-| `angle` | Start angle in degrees, CSS `conic-gradient(from …)`: 0 up, clockwise |
-| `stops` | Up to 6 `{color, offset}` around the circle; colours keep their alpha |
+| `angle` | Conic: start angle in degrees, CSS `conic-gradient(from …)`: 0 up, clockwise. Radial: loop position (below) |
+| `size` | Radial only: background size as a multiple of the box (CSS `background-size: 300%` is 3) |
+| `stops` | Up to 6 `{color, offset}` around the circle, or from the centre out; colours keep their alpha |
+
+`type: 'radial'` is Magic UI's ShineBorder: a CSS `radial-gradient` (ellipse,
+farthest-corner) on a background `size` times the box, its position looping
+`0% 0%` → `100% 100%` → `0% 0%`, seen through the border. One 360° turn of the
+angle is one loop, so the conic example's linear 0–360 timing drives it too:
+
+```jsx
+borderGradient: {type: 'radial', width: 3, size: 3, stops: [
+  {color: '#ffffff00', offset: 0.25}, {color: '#ffffff', offset: 0.5}, {color: '#ffffff00', offset: 0.75}]}
+```
 
 `borderGradientAngle` (degrees) overrides `angle` and animates on the native
 driver, repainting only the ring's bands like the sweep. A conic gradient turns

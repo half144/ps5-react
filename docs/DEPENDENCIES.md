@@ -80,6 +80,9 @@ travelling around a rounded border, with a native-driver phase.
 `embeddedReact-border-gradient.patch` (Apache-2.0 engine, bridge and test
 files; not yet proposed upstream) adds `borderGradient`, a conic gradient seen
 through the border ring, with a native-driver `borderGradientAngle`.
+`embeddedReact-border-radial.patch` (Apache-2.0 engine and bridge files; not
+yet proposed upstream) adds `borderGradient` `type: 'radial'`, a moving radial
+gradient seen through the border ring (the web's shine border).
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
