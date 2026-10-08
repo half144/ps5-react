@@ -70,7 +70,7 @@ const cases = {
     ['tracking-[2px]', {letterSpacing: 2}], ['text-xl tracking-[0.1em]', {fontSize: 20, lineHeight: 28, letterSpacing: 2}],
     ['text-xl tracking-wide tracking-[3px]', {fontSize: 20, lineHeight: 28, letterSpacing: 3}],
     ['text-center italic underline', {textAlign: 'center', fontStyle: 'italic', textDecorationLine: 'underline'}],
-    ['text-end not-italic line-through', {textAlign: 'right', fontStyle: 'normal', textDecorationLine: 'line-through'}],
+    ['text-end not-italic line-through', {textAlign: 'end', fontStyle: 'normal', textDecorationLine: 'line-through'}],
     ['font-thin', {fontWeight: 100}], ['font-black', {fontWeight: 900}], ['font-[550]', {fontWeight: 550}],
     ['font-[Inter]', {fontFamily: 'Inter'}],
     ['line-clamp-3', {numberOfLines: 3, ellipsizeMode: 'tail'}], ['truncate', {numberOfLines: 1, ellipsizeMode: 'tail'}],

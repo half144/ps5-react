@@ -17,6 +17,11 @@ ASCII = set(range(0x20, 0x7F))
 # Punctuation, CJK symbols and full-width forms shared by Chinese and Japanese text.
 CJK_COMMON = ASCII | set(range(0x2000, 0x2070)) | set(range(0x3000, 0x3040)) | set(range(0xFF00, 0xFFF0))
 KANA = set(range(0x3040, 0x3100)) | set(range(0x31F0, 0x3200))
+SHAPING = {0x00A0, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2010, 0x2013, 0x2014, 0x25CC}
+
+
+def span(first, last):
+    return set(range(first, last + 1))
 
 
 def euc_rows(codec, first, last):
@@ -37,6 +42,13 @@ SCRIPTS = {
     # JIS X 0208: kana and the 6,355 kanji of levels 1 and 2. Han characters outside it fall back
     # to the Chinese font when the app also lists "chinese".
     "japanese": ("NotoSansJP-Regular.otf", lambda: euc_rows("euc_jp", 1, 84) | KANA | CJK_COMMON),
+    # Whole blocks, with the joiners and the dotted circle HarfBuzz draws under a stray mark.
+    "devanagari": ("NotoSansDevanagari-Regular.ttf",
+                   lambda: ASCII | span(0x0900, 0x097F) | span(0xA8E0, 0xA8FF) | span(0x1CD0, 0x1CFF) | SHAPING),
+    "bengali": ("NotoSansBengali-Regular.ttf", lambda: ASCII | span(0x0980, 0x09FF) | {0x0964, 0x0965} | SHAPING),
+    # Arabic and Urdu letters, presentation forms and Arabic-Indic digits.
+    "arabic": ("NotoSansArabic-Regular.ttf", lambda: ASCII | span(0x0600, 0x06FF) | span(0x0750, 0x077F) |
+               span(0x08A0, 0x08FF) | span(0xFB50, 0xFDFF) | span(0xFE70, 0xFEFF) | SHAPING),
 }
 
 
@@ -46,6 +58,17 @@ def harfbuzz():
     source = DEPS / f"harfbuzz-{pinned['version']}"
     if not (source / "src/harfbuzz.cc").exists():
         archive = fetch(pinned["url"], DEPS / f"harfbuzz-{pinned['version']}.tar.xz", pinned["sha256"])
+        with tarfile.open(archive) as package:
+            package.extractall(DEPS, filter="data")
+    return source
+
+
+def sheenbidi():
+    """Source directory of the pinned SheenBidi release (Apache-2.0), the Unicode bidi algorithm."""
+    pinned = LOCK["sheenBidi"]
+    source = DEPS / f"SheenBidi-{pinned['version']}"
+    if not (source / "Source/SheenBidi.c").exists():
+        archive = fetch(pinned["url"], DEPS / f"SheenBidi-{pinned['version']}.tar.gz", pinned["sha256"])
         with tarfile.open(archive) as package:
             package.extractall(DEPS, filter="data")
     return source

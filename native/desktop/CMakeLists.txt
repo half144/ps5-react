@@ -32,6 +32,11 @@ target_compile_features(harfbuzz PRIVATE cxx_std_17)
 target_compile_definitions(harfbuzz PUBLIC HB_TINY HB_HAS_RASTER)
 target_compile_options(harfbuzz PRIVATE -fno-exceptions -fno-rtti -w)
 target_include_directories(harfbuzz PUBLIC "${HB_ROOT}/src")
+# SheenBidi (Apache-2.0): the Unicode bidirectional algorithm for right-to-left text.
+add_library(sheenbidi STATIC "${SB_ROOT}/Source/SheenBidi.c")
+target_compile_definitions(sheenbidi PRIVATE SB_CONFIG_UNITY)
+target_compile_options(sheenbidi PRIVATE -w)
+target_include_directories(sheenbidi PUBLIC "${SB_ROOT}/Headers" PRIVATE "${SB_ROOT}/Source")
 # Same engine options on desktop and PS5, rather than the upstream demo's profile.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ps5" runtime)
 add_executable(ps5-react-preview host.cpp host_platform.cpp network_platform.cpp ../shared/network.cpp ../shared/network_api.cpp ../shared/archives.cpp ../shared/archive_preflight.cpp ../shared/archive_api.cpp ../shared/image_loader.cpp ../shared/image_api.cpp ../shared/sound_api.cpp ../shared/host_api.cpp "${HUI_ROOT}/src/audio/mixer.cpp" ../shared/gl_presenter.cpp ../shared/frame_stats.cpp ../shared/js_heap.cpp ../shared/damage_tracker.cpp ../shared/input_script.cpp ../shared/screenshot.cpp ../shared/text_shaper.cpp control.cpp "${APP_GENERATED}/assets.generated.c" "${APP_GENERATED}/sounds.generated.c")
@@ -43,4 +48,4 @@ target_compile_definitions(ps5-react-preview PRIVATE PS5_REACT_FONT_DIR="${APP_G
 if(APPLE)
   target_compile_definitions(ps5-react-preview PRIVATE GL_SILENCE_DEPRECATION)
 endif()
-target_link_libraries(ps5-react-preview PRIVATE SDL2::SDL2 OpenGL::GL CURL::libcurl Threads::Threads LibArchive::LibArchive LibLZMA::LibLZMA er-bridge-quickjs er-software harfbuzz)
+target_link_libraries(ps5-react-preview PRIVATE SDL2::SDL2 OpenGL::GL CURL::libcurl Threads::Threads LibArchive::LibArchive LibLZMA::LibLZMA er-bridge-quickjs er-software harfbuzz sheenbidi)

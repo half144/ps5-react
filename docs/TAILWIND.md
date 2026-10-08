@@ -236,7 +236,7 @@ with any alpha the color already has. `bg-opacity-*` and similar are rejected.
 | `font-<family>`, `font-[<family>]` | `fontFamily` from `theme.fontFamily` |
 | `leading-*` | `lineHeight` |
 | `tracking-*` | `letterSpacing` |
-| `text-left`, `-center`, `-right`, `-start`, `-end` | `textAlign` (`start`/`end` map to left/right) |
+| `text-left`, `-center`, `-right`, `-start`, `-end` | `textAlign` (`start`/`end` follow the text direction) |
 | `italic`, `not-italic` | `fontStyle` |
 | `underline`, `line-through`, `no-underline` | `textDecorationLine` |
 | `truncate` | `numberOfLines: 1, ellipsizeMode: 'tail'` |
@@ -628,7 +628,8 @@ Rejected variants:
   dark-mode, responsive, or platform variants.
 - Lengths are scaled to the app's render width and rounded at build time.
 - Percentages work only for width, height, insets, and basis.
-- `start`/`end`, `ps`/`pe`, `ms`/`me`, and `text-start`/`text-end` assume LTR.
+- `start`/`end`, `ps`/`pe` and `ms`/`me` assume LTR; `text-start`/`text-end`
+  follow the text direction ([International text](TEXT.md)).
 - Colors with opacity become `#rrggbbaa`; there are no CSS variables.
 - Font weights collapse to regular or bold (600 and above).
 - Extensions not in Tailwind: `tint-*`, `pointer-events-box-none`,

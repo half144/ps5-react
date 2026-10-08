@@ -17,7 +17,7 @@ import zipfile
 
 from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
 from network_ports import ports, copy_notices
-from text_fonts import harfbuzz
+from text_fonts import harfbuzz, sheenbidi
 
 BUILD = ROOT / ".build/starter/ps5"
 TITLE = "PPSA99053"
@@ -144,9 +144,11 @@ def main():
     hb = harfbuzz() / "src"
     # HarfBuzz (MIT): OpenType shaping and outline rasterization for runtime text, single-threaded.
     harfbuzz_sources = [hb / "harfbuzz.cc", hb / "hb-raster-draw.cc", hb / "hb-raster-image.cc"]
-    sources.extend(harfbuzz_sources)
+    # SheenBidi (Apache-2.0): the Unicode bidirectional algorithm, as one translation unit.
+    sb = sheenbidi()
+    sources.extend([*harfbuzz_sources, sb / "Source/SheenBidi.c"])
     includes = [hui / "src", ROOT / "native/shared", ROOT / "native/ps5", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
-                er / "backends/software", er / "engine/text", hb, quickjs, stb_image(), archive_ports / "include"]
+                er / "backends/software", er / "engine/text", hb, sb / "Headers", sb / "Source", quickjs, stb_image(), archive_ports / "include"]
     if access_client:
         sources.append(access_client / "examples/sandbox-elevation/src/elevation.cpp")
         includes.append(access_client / "examples/sandbox-elevation")
@@ -160,7 +162,8 @@ def main():
         obj = BUILD / "obj" / f"{i}-{source.name}.o"
         cpp = source.suffix in (".cpp", ".cc")
         flags = ["-std=c++20", "-fno-exceptions", "-fno-rtti"] if cpp else ["-std=c11"]
-        warnings = ["-w", "-DHB_TINY", "-DHB_HAS_RASTER"] if source in harfbuzz_sources else ["-Wall", "-Wextra", "-Werror"]
+        warnings = (["-w", "-DHB_TINY", "-DHB_HAS_RASTER"] if source in harfbuzz_sources else
+                    ["-w", "-DSB_CONFIG_UNITY"] if source.name == "SheenBidi.c" else ["-Wall", "-Wextra", "-Werror"])
         run(["sh", hui / "tooling/prospero-clang18", *flags, "-O2", *warnings,
              "-DPROSPERO=1", "-DGL_GLEXT_PROTOTYPES=1", *shlex.split(definitions),
              *[flag for path in includes for flag in ("-I", path)], "-c", source, "-o", obj],
@@ -251,6 +254,7 @@ def main():
         "embedded-react-engine-LICENSE": er / "engine/LICENSE",
         "QuickJS-LICENSE": quickjs / "LICENSE",
         "harfbuzz-COPYING": hb.parent / "COPYING",
+        "SheenBidi-LICENSE": sb / "LICENSE",
         "Inter-LICENSE": hui / "assets/fonts/Inter-LICENSE.txt",
         "material-sounds-NOTICE.txt": ROOT / "licenses/material-sounds-NOTICE.txt",
         "ps5-opengl-LICENSE": gl.parent / "LICENSE",

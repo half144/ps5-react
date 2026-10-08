@@ -6,11 +6,14 @@ places:
 - **Baked fonts.** An imported TTF/OTF is rasterized at build time, at the
   sizes the app uses, into bitmap glyphs compiled into the executable. This is
   the fast path, and the only one for text the baked font fully covers.
-- **Runtime fonts.** Characters the baked font lacks are drawn from subset Noto
-  fonts the app packages with `textFonts`, shaped by HarfBuzz and rasterized on
-  demand (`native/shared/text_shaper.cpp`). A string goes to this path only
-  when it contains such a character; its baked characters keep their baked
-  glyphs, so Latin text inside a Japanese sentence still uses the app's font.
+- **Runtime fonts.** Characters the baked font lacks, and scripts that need
+  shaping (Devanagari, Bengali, Arabic), are drawn from subset Noto fonts the
+  app packages with `textFonts`: HarfBuzz shapes them, SheenBidi orders
+  right-to-left runs, and glyphs are rasterized on demand
+  (`native/shared/text_shaper.cpp`). A string goes to this path only when it
+  contains such a character or is laid out right to left; its baked characters
+  keep their baked glyphs, so Latin text and digits inside a Japanese or Arabic
+  sentence still use the app's font.
 
 ## Baked glyph sets
 
@@ -44,13 +47,19 @@ A codepoint the baked font lacks draws as `?`, unless a runtime font has it.
 List the scripts an app shows in `app.json`:
 
 ```json
-"textFonts": ["chinese", "japanese"]
+"textFonts": ["chinese", "japanese", "devanagari", "bengali", "arabic"]
 ```
 
-| Script | Font (subset) | Characters | Package |
-| --- | --- | --- | --- |
-| `chinese` | Noto Sans SC | GB 2312: 6,763 hanzi, CJK punctuation, full-width forms | 1.6 MB |
-| `japanese` | Noto Sans JP | JIS X 0208: kana, 6,355 kanji (levels 1 and 2), punctuation | 1.7 MB |
+| Script | Languages | Font (subset) | Characters | Package |
+| --- | --- | --- | --- | --- |
+| `chinese` | Chinese (Simplified) | Noto Sans SC | GB 2312: 6,763 hanzi, CJK punctuation, full-width forms | 1.6 MB |
+| `japanese` | Japanese | Noto Sans JP | JIS X 0208: kana, 6,355 kanji (levels 1 and 2), punctuation | 1.7 MB |
+| `devanagari` | Hindi, Marathi, Nepali | Noto Sans Devanagari | Devanagari, Devanagari Extended, Vedic Extensions | 0.16 MB |
+| `bengali` | Bengali, Assamese | Noto Sans Bengali | Bengali | 0.09 MB |
+| `arabic` | Arabic, Urdu, Persian | Noto Sans Arabic | Arabic, Supplement, Extended-A, presentation forms | 0.11 MB |
+
+All five add 3.7 MB to the package. Urdu is drawn in Noto Sans Arabic's Naskh
+style, not Nastaliq.
 
 The build pins each font in `dependencies.lock.json`, subsets it with HarfBuzz
 (`tools/font_subset.cpp`, cached in `.deps/fonts/subset/`) and packages it in
@@ -67,12 +76,13 @@ overrides it (see [Native API](NATIVE-API.md)).
 ### Memory
 
 Nothing is loaded until a string needs a runtime font. Then the font file is
-read whole and kept (1.6 MB for Chinese, 1.7 MB for Japanese). Rasterized
-glyphs live in one least-recently-used cache capped at 4 MiB, about 7,000 CJK
-glyphs at 24 px; the 32 most recent shaped strings are kept as well (a few KB
-each). An app showing both CJK scripts therefore holds at most about 7.5 MB
-for text, from the title heap, never the JavaScript heap. HarfBuzz adds about
-0.7 MB of code to the executable.
+read whole and kept (the package sizes above). Rasterized glyphs live in one
+least-recently-used cache capped at 4 MiB, about 7,000 CJK glyphs at 24 px; the
+128 most recent shaped strings are kept as well (about 1 KB each for a label).
+An app showing every script therefore holds at most about 8 MB for text (3.7 MB
+of fonts, 4 MiB of glyphs, up to 0.2 MB of layouts), from the title heap, never
+the JavaScript heap. HarfBuzz and SheenBidi add about 0.8 MB of code to the
+executable.
 
 ### Line breaking
 
@@ -82,3 +92,35 @@ following the basic kinsoku rules: closing punctuation (`。、，」』）`), s
 kana, `ー` and iteration marks never start a line, and opening brackets
 (`「『（`) never end one. `numberOfLines` truncates with `…` (from the baked
 font, or `...` when it lacks one).
+
+### Shaping
+
+Devanagari and Bengali conjuncts, reordered vowel signs and reph, and Arabic
+joining forms and ligatures (lam-alef) come from the fonts' OpenType tables
+through HarfBuzz's shapers. Their marks reach further below the baseline than
+Latin, so a string containing them gets a taller line box: about 14% for
+Devanagari and Bengali and 28% for Arabic over Inter's (CJK keeps Inter's). Joined scripts take no `letterSpacing`, and faux
+bold does not widen them, so their joins stay intact. Each node's text is
+limited to 255 bytes (`ER_TEXT_MAX`): about 85 CJK or Devanagari characters.
+
+## Right-to-left text
+
+Text containing Arabic or Hebrew letters is ordered by the Unicode
+bidirectional algorithm (SheenBidi), one paragraph per line feed: numbers and
+Latin names inside Arabic stay left to right (`PS5 تحميل 24.2 GB`), brackets
+are mirrored, and lines break in logical order before each line is reordered.
+
+| Style | On | Values | Effect |
+| --- | --- | --- | --- |
+| `direction` | any node, inherited | `'inherit'` (default), `'ltr'`, `'rtl'` | A right-to-left row lays its children out from the right edge and a column starts its cross axis at the right, as in Yoga. Text below it is right to left. |
+| `writingDirection` | `Text` | `'auto'` (default), `'ltr'`, `'rtl'` | The paragraph's base direction; `'auto'` takes the inherited `direction`, else the first strong character. |
+| `textAlign` | `Text` | `'auto'`/`'start'` (default), `'end'`, `'left'`, `'right'`, `'center'` | `start` and `end` follow the paragraph direction; `left` and `right` do not. |
+
+An Arabic or Urdu interface sets `direction: 'rtl'` once on its root view. A
+truncated right-to-left line keeps its start at the right and puts `…` at its
+left end. The `text-start` and `text-end` utilities follow the direction.
+
+Limits: a horizontal `ScrollView` keeps left-to-right order (reverse its data
+for right-to-left); margins, padding and `left`/`right` insets stay physical
+(there are no `marginStart`/`paddingEnd` styles); focus moves by laid-out
+position, so the D-pad follows the mirrored layout.

@@ -17,7 +17,8 @@ No proprietary Sony modules are redistributed.
 | Tailwind CSS palette and scales | v3.4.17 default colors and theme values copied into `tools/tailwind/`; MIT. Build-time data only; the `tailwindcss` package is not installed or used. |
 | stb_image | v2.30 single-file JPEG/PNG decoder for remote images; public domain or MIT (choice). Fetched from a pinned commit URL and verified by SHA-256 (`stbImage` in the lock file); builds copy its license to `notices/stb_image-LICENSE`. |
 | HarfBuzz | 14.6.0 (Old MIT license), SHA-256-pinned release archive (`harfbuzz` in the lock file). Linked into both hosts for runtime text: OpenType shaping and outline rasterization (`HB_TINY`, `hb-raster`); also built as the host-side font subsetter `tools/font_subset.cpp`. Builds copy `COPYING` to `notices/harfbuzz-COPYING`. |
-| Noto fonts | Noto Sans SC and JP 2.004 (SIL OFL 1.1), pinned by commit and SHA-256 (`notoFonts`). Packaged only for the scripts an app lists in `textFonts`, subset by `tools/text_fonts.py`; builds then copy `licenses/Noto-fonts-LICENSE.txt` to `notices/`. |
+| SheenBidi | 3.0.0 (Apache-2.0), SHA-256-pinned release archive (`sheenBidi`): the Unicode bidirectional algorithm for right-to-left text, compiled as one translation unit into both hosts. Builds copy its license to `notices/SheenBidi-LICENSE`. |
+| Noto fonts | Noto Sans SC and JP 2.004, Devanagari 2.007, Bengali 3.011 and Arabic 2.013 (SIL OFL 1.1), pinned by commit and SHA-256 (`notoFonts`). Packaged only for the scripts an app lists in `textFonts`, subset by `tools/text_fonts.py`; builds then copy `licenses/Noto-fonts-LICENSE.txt` to `notices/`. |
 | Material Design sound resources | The starter's interface sounds, (c) Google, CC BY 4.0: six files from the pack's `wav` set, mixed to mono, trimmed, faded and normalized by `tools/ui_sounds.mjs`. Attribution and changes: `licenses/material-sounds-NOTICE.txt`; builds copy it to `notices/material-sounds-NOTICE.txt`. Keep it with any app that ships these sounds. |
 | Inter / LLVM / payload SDK | Inter: SIL OFL. LLVM: Apache-2.0 with exceptions. The public SDK contains separately licensed components. |
 
@@ -28,7 +29,9 @@ Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
 [QuickJS-ng](https://github.com/quickjs-ng/quickjs),
 [stb](https://github.com/nothings/stb),
 [HarfBuzz](https://github.com/harfbuzz/harfbuzz),
+[SheenBidi](https://github.com/Tehreer/SheenBidi),
 [Noto CJK](https://github.com/notofonts/noto-cjk),
+[Noto fonts](https://github.com/notofonts/notofonts.github.io),
 [Material Design sound resources](https://m2.material.io/design/sound/sound-resources.html)
 (mirrored at [archive.org](https://archive.org/details/material-design-sound-resources)),
 [Tailwind CSS v3.4.17](https://github.com/tailwindlabs/tailwindcss/tree/v3.4.17).
@@ -96,6 +99,10 @@ proposed upstream) adds the `latin-ext`, `cyrillic` and `european` glyph sets.
 `embeddedReact-text-shaper.patch` (Apache-2.0 text renderer and compositor; not
 yet proposed upstream) lets a host shaper lay out and draw the text the baked
 fonts cannot, and keeps node text from ending in half a UTF-8 sequence.
+`embeddedReact-text-direction.patch` (Apache-2.0 engine, layout, bridge and
+type files; not yet proposed upstream) adds the inherited `direction` style with
+right-to-left flex layout, Text `writingDirection`, and `start`/`end` text
+alignment.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.

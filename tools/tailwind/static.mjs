@@ -27,7 +27,7 @@ export const STATIC = {
   ...map('content', 'alignContent', {...align, between: 'space-between', around: 'space-around'}),
   ...map('pointer-events', 'pointerEvents', {none: 'none', auto: 'auto', 'box-none': 'box-none',
     'box-only': 'box-only'}),
-  ...map('text', 'textAlign', {left: 'left', center: 'center', right: 'right', start: 'left', end: 'right'}),
+  ...map('text', 'textAlign', {left: 'left', center: 'center', right: 'right', start: 'start', end: 'end'}),
   italic: {fontStyle: 'italic'},
   'not-italic': {fontStyle: 'normal'},
   underline: {textDecorationLine: 'underline'},

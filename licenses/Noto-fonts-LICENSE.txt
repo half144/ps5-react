@@ -8,6 +8,15 @@ NotoSansSC-Regular.otf, NotoSansJP-Regular.otf (Noto Sans CJK 2.004)
   Name 'Source'.
   https://github.com/notofonts/noto-cjk
 
+NotoSansDevanagari-Regular.ttf (2.007)
+  Copyright 2022 The Noto Project Authors (https://github.com/notofonts/devanagari)
+
+NotoSansBengali-Regular.ttf (3.011)
+  Copyright 2025 The Noto Project Authors (https://github.com/notofonts/bengali)
+
+NotoSansArabic-Regular.ttf (2.013)
+  Copyright 2022 The Noto Project Authors (https://github.com/notofonts/arabic)
+
 All are licensed under the SIL Open Font License, Version 1.1:
 
 This Font Software is licensed under the SIL Open Font License,

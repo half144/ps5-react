@@ -25,7 +25,8 @@
       "patches/embeddedReact-border-gradient.patch",
       "patches/embeddedReact-border-radial.patch",
       "patches/embeddedReact-european-glyphs.patch",
-      "patches/embeddedReact-text-shaper.patch"
+      "patches/embeddedReact-text-shaper.patch",
+      "patches/embeddedReact-text-direction.patch"
     ]
   },
   "platform": {
@@ -97,6 +98,23 @@
     "NotoSansJP-Regular.otf": {
       "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf",
       "sha256": "dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073"
+    },
+    "NotoSansDevanagari-Regular.ttf": {
+      "url": "https://raw.githubusercontent.com/notofonts/notofonts.github.io/47acfd3806a2b2c7f2b8a7cc95030ead55d03c21/fonts/NotoSansDevanagari/unhinted/ttf/NotoSansDevanagari-Regular.ttf",
+      "sha256": "9c7d935139ea6a1e6ad9dbac4f6d27ece1e04bca8123c8888d00a0f9df4724cd"
+    },
+    "NotoSansBengali-Regular.ttf": {
+      "url": "https://raw.githubusercontent.com/notofonts/notofonts.github.io/47acfd3806a2b2c7f2b8a7cc95030ead55d03c21/fonts/NotoSansBengali/unhinted/ttf/NotoSansBengali-Regular.ttf",
+      "sha256": "5dceda02816fece18ea6796f474f5d3170f1d862f21b1e809cdc94b1caa4b6ec"
+    },
+    "NotoSansArabic-Regular.ttf": {
+      "url": "https://raw.githubusercontent.com/notofonts/notofonts.github.io/47acfd3806a2b2c7f2b8a7cc95030ead55d03c21/fonts/NotoSansArabic/unhinted/ttf/NotoSansArabic-Regular.ttf",
+      "sha256": "bd86ca02f087d7f3c3788ba458fb6b73744c7639ed276b8d870dba6def6c40d0"
     }
+  },
+  "sheenBidi": {
+    "version": "3.0.0",
+    "url": "https://github.com/Tehreer/SheenBidi/archive/refs/tags/v3.0.0.tar.gz",
+    "sha256": "86c56014034739ba39a24c23eb00323b0bf6f737354f665786015fca842af786"
   }
 }

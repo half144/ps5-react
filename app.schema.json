@@ -109,10 +109,13 @@
       "items": {
         "enum": [
           "chinese",
-          "japanese"
+          "japanese",
+          "devanagari",
+          "bengali",
+          "arabic"
         ]
       },
-      "description": "Scripts whose subset Noto font is packaged in fonts/ and rasterized at runtime when text needs it: chinese (GB 2312) and japanese (JIS X 0208). See docs/TEXT.md."
+      "description": "Scripts whose subset Noto font is packaged in fonts/ and shaped and rasterized at runtime when text needs it: chinese (GB 2312), japanese (JIS X 0208), devanagari (Hindi), bengali, arabic (Arabic and Urdu). See docs/TEXT.md."
     }
   },
   "additionalProperties": false,

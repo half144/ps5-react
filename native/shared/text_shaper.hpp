@@ -1,9 +1,10 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Runtime text for what the baked bitmap fonts cannot draw (docs/TEXT.md): CJK from subset Noto
-// fonts, rasterized on demand into a bounded glyph cache, with CJK line breaking. Installed into
-// Embedded React as its ERTextShaper; render thread only.
+// Runtime text for what the baked bitmap fonts cannot draw (docs/TEXT.md): CJK, Devanagari, Bengali
+// and Arabic from subset Noto fonts, shaped by HarfBuzz, ordered by the Unicode bidi algorithm
+// (SheenBidi) and rasterized on demand into a bounded glyph cache, with CJK line breaking.
+// Installed into Embedded React as its ERTextShaper; render thread only.
 #pragma once
 
 namespace text_shaper {

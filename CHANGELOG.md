@@ -11,6 +11,12 @@
   it. CJK text breaks between characters with basic kinsoku rules.
   `Fonts.setLanguage` (ABI v6) picks Japanese or Chinese Han forms; it defaults
   to the system language.
+- Shape Hindi (Devanagari), Bengali, Arabic and Urdu with HarfBuzz and order
+  right-to-left text with the Unicode bidi algorithm (SheenBidi 3.0.0); add
+  `textFonts` `devanagari`, `bengali` and `arabic`. The inherited `direction`
+  style lays rows out right to left, Text takes `writingDirection`, and
+  `textAlign` gains `start` (now the default) and `end`, which `text-start` and
+  `text-end` compile to.
 
 ## Unreleased — native archive extraction
 

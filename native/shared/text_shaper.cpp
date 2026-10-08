@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "text_shaper.hpp"
 
+#include <SheenBidi/SheenBidi.h>
 #include <hb-raster.h>
 #include <hb.h>
 
@@ -25,18 +26,27 @@ namespace {
 // Rasterized glyphs kept for reuse, least recently drawn evicted first: about 7,000 CJK glyphs at
 // 24 px. Fonts are loaded whole, on first use, and kept (docs/TEXT.md lists their sizes).
 constexpr std::size_t kGlyphCacheBytes = 4u << 20;
-// Shaped paragraphs kept for reuse: layout measures a node, wraps it, then the compositor draws it.
-constexpr std::size_t kLayoutCacheEntries = 32;
+// Shaped strings kept for reuse (layout measures a node, wraps it, then the compositor draws it):
+// about 1 KB each for a typical label.
+constexpr std::size_t kLayoutCacheEntries = 128;
 
-enum class Script : std::uint8_t { kOther, kHan, kKana };
+enum class Script : std::uint8_t { kOther, kHan, kKana, kDevanagari, kBengali, kArabic };
 
 struct FaceSpec {
   const char* file;
   Script script;
+  // Line box over and under the baseline, in thousandths of an em, at most: CJK uses its em box,
+  // Arabic its common letters rather than the stacked marks its hhea metrics make room for.
+  int ascent, descent;
+  // Joined scripts take no letter spacing or faux-bold advance, which would break their joins.
+  bool joined;
 };
 constexpr FaceSpec kFaces[] = {
-    {"NotoSansJP-Regular.otf", Script::kKana},
-    {"NotoSansSC-Regular.otf", Script::kHan},
+    {"NotoSansJP-Regular.otf", Script::kKana, 880, 120, false},
+    {"NotoSansSC-Regular.otf", Script::kHan, 880, 120, false},
+    {"NotoSansDevanagari-Regular.ttf", Script::kDevanagari, 1000, 450, true},
+    {"NotoSansBengali-Regular.ttf", Script::kBengali, 1000, 450, true},
+    {"NotoSansArabic-Regular.ttf", Script::kArabic, 1050, 500, true},
 };
 constexpr int kFaceCount = sizeof kFaces / sizeof kFaces[0];
 constexpr int kJapanese = 0, kChinese = 1;
@@ -91,6 +101,13 @@ std::uint32_t next_codepoint(const char* text, std::size_t length, std::size_t& 
 }
 
 Script script_of(std::uint32_t c) {
+  if ((c >= 0x0900 && c <= 0x0963) || (c >= 0x0966 && c <= 0x097F) || (c >= 0xA8E0 && c <= 0xA8FF) ||
+      (c >= 0x1CD0 && c <= 0x1CFF))
+    return Script::kDevanagari;
+  if (c >= 0x0980 && c <= 0x09FF) return Script::kBengali;
+  if ((c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F) || (c >= 0x0870 && c <= 0x08FF) ||
+      (c >= 0xFB50 && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF))
+    return Script::kArabic;
   if ((c >= 0x3040 && c <= 0x30FF) || (c >= 0x31F0 && c <= 0x31FF) || (c >= 0xFF66 && c <= 0xFF9F))
     return Script::kKana;
   if ((c >= 0x2E80 && c <= 0x2FDF) || (c >= 0x3000 && c <= 0x303F) || (c >= 0x3190 && c <= 0x33FF) ||
@@ -98,6 +115,20 @@ Script script_of(std::uint32_t c) {
       (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFFEF) || (c >= 0x20000 && c <= 0x3FFFF))
     return Script::kHan;
   return Script::kOther;
+}
+
+// Scripts that must be shaped (or reordered) even when a baked font has their characters: Hebrew to
+// Myanmar, Khmer, Mongolian and the Arabic presentation forms.
+bool needs_shaping(std::uint32_t c) {
+  return (c >= 0x0590 && c <= 0x109F) || (c >= 0x1780 && c <= 0x18AF) || (c >= 0xFB1D && c <= 0xFDFF) ||
+         (c >= 0xFE70 && c <= 0xFEFF);
+}
+
+// Strong right-to-left characters (Hebrew, Arabic, Syriac, Thaana, NKo and their extensions): text
+// without any, and without a right-to-left direction, skips the bidi algorithm.
+bool right_to_left(std::uint32_t c) {
+  return (c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF) ||
+         (c >= 0x10800 && c <= 0x10FFF) || (c >= 0x1E800 && c <= 0x1EFFF);
 }
 
 // Characters drawn as part of the one before them (combining marks, joiners, variation selectors).
@@ -189,6 +220,9 @@ int face_for(std::uint32_t cp, int previous) {
     const bool japanese = script == Script::kKana || state->prefer_japanese;
     order[count++] = japanese ? kJapanese : kChinese;
     order[count++] = japanese ? kChinese : kJapanese;
+  } else if (script != Script::kOther) {
+    for (int i = 0; i < kFaceCount; i++)
+      if (kFaces[i].script == script) order[count++] = i;
   } else {
     if (previous >= 0) order[count++] = previous;
     for (int i = 0; i < kFaceCount; i++) order[count++] = i;
@@ -303,18 +337,26 @@ struct Glyph {
 struct Run {
   std::uint32_t start, end;
   std::int8_t face;
+  std::uint8_t level;  // bidi embedding level: odd runs are right to left
   std::uint32_t first_glyph = 0, glyph_count = 0;
+};
+
+struct Paragraph {
+  std::uint32_t start;
+  std::uint8_t level;  // base level: 1 for a right-to-left paragraph
 };
 
 enum : std::uint8_t { kClusterStart = 1, kBreakBefore = 2, kSpace = 4, kNewline = 8 };
 
 struct Layout {
   std::string text, family;
-  int px = 0, letter_spacing = 0, bold = 0;
+  int px = 0, letter_spacing = 0, bold = 0, direction = 0;
   unsigned serial = 0;
   const BitmapFont* baked = nullptr;
   std::vector<Glyph> glyphs;
   std::vector<Run> runs;
+  std::vector<Paragraph> paragraphs;
+  std::vector<std::uint8_t> levels;   // per byte
   std::vector<std::int32_t> advance;  // per byte: the 26.6 advance of the cluster starting there
   std::vector<std::uint8_t> flags;    // per byte
   int ascent = 0, descent = 0, line_height = 0;  // pixels
@@ -326,6 +368,35 @@ struct LayoutCache {
 };
 LayoutCache* layouts = nullptr;
 
+// Embedding levels per byte (Unicode bidirectional algorithm, one paragraph per line feed), and
+// each paragraph's base level: from `direction`, else from its first strong character.
+void resolve_levels(Layout& layout) {
+  const char* text = layout.text.c_str();
+  const std::size_t length = layout.text.size();
+  const SBLevel base = layout.direction == ER_DIRECTION_RTL ? 1 : layout.direction == ER_DIRECTION_LTR ? 0
+                                                                                                       : SBLevelDefaultLTR;
+  layout.levels.assign(length + 1, 0);
+  bool bidi = layout.direction == ER_DIRECTION_RTL;
+  for (std::size_t at = 0; at < length && !bidi;) bidi = right_to_left(next_codepoint(text, length, at));
+  if (!bidi) {
+    layout.paragraphs.push_back({0, 0});
+    return;
+  }
+  SBCodepointSequence sequence{SBStringEncodingUTF8, const_cast<char*>(text), length};
+  SBAlgorithmRef algorithm = SBAlgorithmCreate(&sequence);
+  for (SBUInteger offset = 0; algorithm && offset < length;) {
+    SBParagraphRef paragraph = SBAlgorithmCreateParagraph(algorithm, offset, length - offset, base);
+    if (!paragraph) break;
+    const SBUInteger size = SBParagraphGetLength(paragraph);
+    std::memcpy(layout.levels.data() + offset, SBParagraphGetLevelsPtr(paragraph), size);
+    layout.paragraphs.push_back({static_cast<std::uint32_t>(offset), SBParagraphGetBaseLevel(paragraph)});
+    SBParagraphRelease(paragraph);
+    offset += size;
+  }
+  if (algorithm) SBAlgorithmRelease(algorithm);
+  if (layout.paragraphs.empty()) layout.paragraphs.push_back({0, 0});
+}
+
 void itemize(Layout& layout) {
   const char* text = layout.text.c_str();
   const std::size_t length = layout.text.size();
@@ -334,7 +405,7 @@ void itemize(Layout& layout) {
   while (at < length) {
     const std::size_t start = at;
     const std::uint32_t cp = next_codepoint(text, length, at);
-    bool baked = cp == '\n' || ignorable(cp) || baked_has(layout.baked, cp);
+    bool baked = cp == '\n' || ignorable(cp) || (baked_has(layout.baked, cp) && !needs_shaping(cp));
     while (at < length) {
       std::size_t peek = at;
       const std::uint32_t mark = next_codepoint(text, length, peek);
@@ -344,10 +415,12 @@ void itemize(Layout& layout) {
     }
     const int face = baked ? -1 : face_for(cp, previous_face);
     if (face >= 0) previous_face = face;
-    if (!layout.runs.empty() && layout.runs.back().face == face)
+    const std::uint8_t level = layout.levels[start];
+    if (!layout.runs.empty() && layout.runs.back().face == face && layout.runs.back().level == level)
       layout.runs.back().end = static_cast<std::uint32_t>(at);
     else
-      layout.runs.push_back({static_cast<std::uint32_t>(start), static_cast<std::uint32_t>(at), static_cast<std::int8_t>(face)});
+      layout.runs.push_back({static_cast<std::uint32_t>(start), static_cast<std::uint32_t>(at),
+                             static_cast<std::int8_t>(face), level});
   }
 }
 
@@ -371,30 +444,28 @@ void shape(Layout& layout) {
       hb_buffer_t* buffer = state->buffer;
       hb_buffer_clear_contents(buffer);
       hb_buffer_add_utf8(buffer, text, static_cast<int>(length), run.start, static_cast<int>(run.end - run.start));
-      hb_buffer_set_direction(buffer, HB_DIRECTION_LTR);
+      hb_buffer_set_direction(buffer, run.level & 1 ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
       hb_buffer_set_language(buffer, state->language);
       hb_buffer_guess_segment_properties(buffer);
       hb_shape(font_at(run.face, layout.px), buffer, nullptr, 0);
       unsigned count = 0;
       const hb_glyph_info_t* info = hb_buffer_get_glyph_infos(buffer, &count);
       const hb_glyph_position_t* position = hb_buffer_get_glyph_positions(buffer, nullptr);
-      const int extra = (layout.letter_spacing + layout.bold) * 64;
+      const int extra = kFaces[run.face].joined ? 0 : (layout.letter_spacing + layout.bold) * 64;
       for (unsigned i = 0; i < count; i++) {
         const bool first_of_cluster = i == 0 || info[i].cluster != info[i - 1].cluster;
         layout.glyphs.push_back({info[i].codepoint, position[i].x_advance + (first_of_cluster ? extra : 0),
                                  position[i].x_offset, position[i].y_offset, info[i].cluster, run.face});
       }
-      // CJK glyphs sit in the em box (0.88 em over the baseline, 0.12 under), so CJK text keeps the
-      // Latin line height; Noto CJK's hhea metrics would make its lines a quarter taller.
+      // CJK keeps the Latin line height this way (Noto CJK's hhea metrics would make its lines a
+      // quarter taller), and Arabic grows it by about a third rather than doubling it.
       hb_font_extents_t extents{};
-      if (kFaces[run.face].script == Script::kOther) {
-        hb_font_get_h_extents(font_at(run.face, layout.px), &extents);
-      } else {
-        extents.ascender = layout.px * 64 * 88 / 100;
-        extents.descender = -layout.px * 64 * 12 / 100;
-      }
-      layout.ascent = std::max(layout.ascent, static_cast<int>((extents.ascender + 63) >> 6));
-      layout.descent = std::max(layout.descent, static_cast<int>((-extents.descender + 63) >> 6));
+      hb_font_get_h_extents(font_at(run.face, layout.px), &extents);
+      const int em = layout.px * 64;
+      const int ascent = std::min<int>(extents.ascender, em * kFaces[run.face].ascent / 1000);
+      const int descent = std::min<int>(-extents.descender, em * kFaces[run.face].descent / 1000);
+      layout.ascent = std::max(layout.ascent, (ascent + 63) >> 6);
+      layout.descent = std::max(layout.descent, (descent + 63) >> 6);
     }
     run.glyph_count = static_cast<std::uint32_t>(layout.glyphs.size()) - run.first_glyph;
   }
@@ -421,13 +492,14 @@ void shape(Layout& layout) {
 }
 
 const Layout& layout_for(const char* text, const char* family, std::uint8_t font_size, int letter_spacing,
-                         std::uint8_t font_weight) {
+                         std::uint8_t font_weight, std::uint8_t direction) {
   const BitmapFont* baked = er_text_font(family, font_size);
   const int bold = font_weight ? 1 : 0;
   const char* family_name = family ? family : "";
   for (const Layout& layout : layouts->entries)
     if (layout.baked == baked && layout.serial == state->serial && layout.px == font_size &&
-        layout.letter_spacing == letter_spacing && layout.bold == bold && layout.text == text &&
+        layout.letter_spacing == letter_spacing && layout.bold == bold && layout.direction == direction &&
+        layout.text == text &&
         layout.family == family_name)
       return layout;
   Layout& layout = layouts->entries[layouts->next];
@@ -438,10 +510,12 @@ const Layout& layout_for(const char* text, const char* family, std::uint8_t font
   layout.px = font_size;
   layout.letter_spacing = letter_spacing;
   layout.bold = bold;
+  layout.direction = direction;
   layout.serial = state->serial;
   layout.baked = baked;
   layout.ascent = baked->baseline;
   layout.descent = baked->line_height - baked->baseline;
+  resolve_levels(layout);
   itemize(layout);
   shape(layout);
   return layout;
@@ -554,9 +628,42 @@ void draw_glyph(const Layout& layout, const Glyph& g, int x, int line_top, const
   }
 }
 
+std::uint8_t paragraph_level(const Layout& layout, std::uint32_t at) {
+  std::uint8_t level = 0;
+  for (const Paragraph& paragraph : layout.paragraphs)
+    if (paragraph.start <= at) level = paragraph.level;
+  return level;
+}
+
+// The runs of a line in display order: rule L2 of the bidi algorithm, reversing every sequence of
+// runs at or above each level from the highest down to the lowest odd one.
+std::vector<const Run*> visual_runs(const Layout& layout, const Line& line) {
+  std::vector<const Run*> runs;
+  std::uint8_t highest = 0, lowest_odd = 255;
+  for (const Run& run : layout.runs) {
+    if (run.end <= line.start || run.start >= line.end) continue;
+    runs.push_back(&run);
+    highest = std::max(highest, run.level);
+    if (run.level & 1) lowest_odd = std::min(lowest_odd, run.level);
+  }
+  for (int level = highest; level >= lowest_odd && level > 0; level--) {
+    for (std::size_t i = 0; i < runs.size();) {
+      if (runs[i]->level < level) {
+        i++;
+        continue;
+      }
+      std::size_t j = i;
+      while (j < runs.size() && runs[j]->level >= level) j++;
+      std::reverse(runs.begin() + i, runs.begin() + j);
+      i = j;
+    }
+  }
+  return runs;
+}
+
 void render(const ERTextRenderParams* params, const char* text, const std::uint8_t* span_map) {
   const Layout& layout = layout_for(text, params->font_family, er_text_clamp_font_size(params->font_size),
-                                    params->letter_spacing, params->font_weight);
+                                    params->letter_spacing, params->font_weight, params->direction);
   const ERRect& clip = params->clip;
   bool truncated = false;
   std::vector<Line> lines = break_lines(layout, clip.w, params->number_of_lines, truncated);
@@ -585,17 +692,31 @@ void render(const ERTextRenderParams* params, const char* text, const std::uint8
       line.end = end;
       line.width = width;
     }
+    const bool rtl = paragraph_level(layout, line.start) & 1;
     const int width = to_px(line.width) + (cut ? ellipsis_w : 0);
+    // A truncated line starts where its paragraph starts; the ellipsis goes at its end.
+    const std::uint8_t align = cut ? ER_TEXT_ALIGN_START : er_text_physical_align(params->text_align, rtl);
     int x = clip.x;
-    if (!cut && params->text_align == ER_TEXT_ALIGN_CENTER) x += std::max(0, (clip.w - width) / 2);
-    else if (!cut && params->text_align == ER_TEXT_ALIGN_RIGHT) x += std::max(0, clip.w - width);
+    if (align == ER_TEXT_ALIGN_CENTER) x += std::max(0, (clip.w - width) / 2);
+    else if (align == ER_TEXT_ALIGN_RIGHT || (align == ER_TEXT_ALIGN_START && rtl)) x += std::max(0, clip.w - width);
 
+    const Style base = style_at(params, nullptr, 0);
+    auto draw_ellipsis = [&](std::int32_t& pen) {
+      for (int k = 0; k < ellipsis_count; k++) {
+        draw_glyph(layout, Glyph{ellipsis_cp, 0, 0, 0, 0, -1}, (pen + 32) >> 6, line_top, clip, base);
+        pen += (font_glyph(layout.baked, ellipsis_cp)->advance + layout.letter_spacing + layout.bold) * 64;
+      }
+    };
     std::int32_t pen = x * 64;
-    for (const Run& run : layout.runs) {
-      if (run.end <= line.start || run.start >= line.end) continue;
-      for (std::uint32_t k = 0; k < run.glyph_count; k++) {
-        const Glyph& g = layout.glyphs[run.first_glyph + k];
+    if (cut && rtl) draw_ellipsis(pen);
+    for (const Run* run : visual_runs(layout, line)) {
+      // Shaped right-to-left runs come out of HarfBuzz in display order; baked ones are reversed
+      // here, with mirrored brackets.
+      const bool reverse = run->face < 0 && (run->level & 1);
+      for (std::uint32_t k = 0; k < run->glyph_count; k++) {
+        Glyph g = layout.glyphs[run->first_glyph + (reverse ? run->glyph_count - 1 - k : k)];
         if (g.cluster < line.start || g.cluster >= line.end) continue;
+        if (reverse) g.id = hb_unicode_mirroring(hb_unicode_funcs_get_default(), g.id);
         const Style style = style_at(params, span_map, g.cluster);
         const int gx = (pen + 32) >> 6;
         draw_glyph(layout, g, gx, line_top, clip, style);
@@ -607,20 +728,15 @@ void render(const ERTextRenderParams* params, const char* text, const std::uint8
         }
       }
     }
-    if (cut) {
-      const Style style = style_at(params, nullptr, 0);
-      int ex = (pen + 32) >> 6;
-      for (int k = 0; k < ellipsis_count; k++) {
-        draw_glyph(layout, Glyph{ellipsis_cp, 0, 0, 0, 0, -1}, ex, line_top, clip, style);
-        ex += font_glyph(layout.baked, ellipsis_cp)->advance + layout.letter_spacing + layout.bold;
-      }
-    }
+    if (cut && !rtl) draw_ellipsis(pen);
   }
 }
 
 // ---- Engine callbacks -----------------------------------------------------------------------
 
-bool claims(const char* text, const char* family, std::uint8_t font_size) {
+bool claims(const char* text, const char* family, std::uint8_t font_size, std::uint8_t direction) {
+  // Right-to-left text needs the bidi algorithm even when the baked font has every glyph.
+  if (direction == ER_DIRECTION_RTL) return true;
   if (!state->any_face) return false;
   const BitmapFont* baked = nullptr;
   const std::size_t length = std::strlen(text);
@@ -631,6 +747,7 @@ bool claims(const char* text, const char* family, std::uint8_t font_size) {
     }
     const std::uint32_t cp = next_codepoint(text, length, at);
     if (ignorable(cp)) continue;
+    if (needs_shaping(cp)) return true;
     if (!baked) baked = er_text_font(family, font_size);
     if (!baked_has(baked, cp)) return true;
   }
@@ -639,7 +756,7 @@ bool claims(const char* text, const char* family, std::uint8_t font_size) {
 
 void measure(const char* text, std::uint8_t font_size, const char* family, std::int16_t letter_spacing,
              std::uint8_t font_weight, int* out_width, int* out_height) {
-  const Layout& layout = layout_for(text, family, font_size, letter_spacing, font_weight);
+  const Layout& layout = layout_for(text, family, font_size, letter_spacing, font_weight, ER_DIRECTION_INHERIT);
   std::int32_t width = 0;
   for (std::size_t p = 0; p < layout.text.size(); p++) width += layout.advance[p];
   *out_width = to_px(width);
@@ -648,7 +765,7 @@ void measure(const char* text, std::uint8_t font_size, const char* family, std::
 
 int wrap(const char* text, std::uint8_t font_size, const char* family, std::int16_t letter_spacing,
          std::uint8_t font_weight, int max_w, int max_lines, int* out_width) {
-  const Layout& layout = layout_for(text, family, font_size, letter_spacing, font_weight);
+  const Layout& layout = layout_for(text, family, font_size, letter_spacing, font_weight, ER_DIRECTION_INHERIT);
   bool truncated = false;
   const std::vector<Line> lines = break_lines(layout, max_w, max_lines, truncated);
   *out_width = 0;
