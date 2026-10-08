@@ -80,7 +80,7 @@ task during cleanup if its lifetime belongs to that component.
 | `rangeBytes` | 32 MiB | Integer 1–256 MiB; at most 65,536 ranges |
 | `resume` | `true` | Reuses matching durable completed ranges; `false` refuses existing partial files |
 | `rejectHtml` | `false` | Rejects HTML content types and initial HTML signatures before a file can be published; provider pages are not binary downloads |
-| `recoverCompleted` | `false` | Writes a durable `.complete` receipt before publication; a later identical request verifies an owned final file instead of downloading it again |
+| `recoverCompleted` | `false` | Writes a durable `.complete` receipt before publication; a later identical request accepts its owned final file (re-hashing it only against a requested `sha256`) instead of downloading it again |
 | `sha256` | omitted | Trusted 64-digit SHA-256; verifies the complete file in the writer thread before publication |
 | `expectedBytes` | omitted | Exact positive safe-integer file size; rejects mismatched server sizes before downloading |
 | `storageRoot` | omitted | Allowed absolute directory containing the destination; guards device/inode identity during writes and before publication |
@@ -106,14 +106,17 @@ verification performs one final sequential file read because ranges arrive out o
 order. Matching validators are consistency checks, not cryptographic verification
 of local partial data.
 
-With `recoverCompleted: true`, the writer computes whole-file SHA-256 even when
-the provider supplies no hash. After verification and file sync, it persists
-`destination.complete` before publishing the final filename. Recovery matches
-the request (hashes and expected size; not URLs), selected-root identity, final inode
-and size, then re-reads the entire file to check the recorded SHA-256. It does
-not contact the provider or accept an existing file by name/size alone. This
-local digest proves continuity with the verified download, not publisher
-authenticity. Keep the receipt with the final file for crash recovery.
+With `recoverCompleted: true`, the writer persists `destination.complete` after
+verification and file sync, before publishing the final filename. The receipt
+records the request identity, the selected root, the final inode and size, and the
+SHA-256 when one was checked. Recovery matches the request (hashes and expected
+size; not URLs), selected-root identity, final inode and size. It re-reads the
+entire file only when the request carries a `sha256` (or piece SHA-1s) to check;
+otherwise the receipt is trusted, so recovering a finished file of tens of GB costs
+no read-back. Without a hash, verification proves the file is the one this task
+published, not its content. Recovery does not contact the provider or accept an
+existing file by name/size alone. Keep the receipt with the final file for crash
+recovery.
 
 A sequential partial without a checkpoint cannot resume. An app may offer an
 explicit restart that discards its exclusively owned partial and sidecars after

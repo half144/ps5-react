@@ -201,9 +201,13 @@ def main():
         # A re-resolved link names the same file; another expected hash is another request.
         assert run("/no-range", path, recover=True)["state"] == "completed"
         assert run("/file", path, recover=True, digest="0"*64)["state"] == "failed"
+        # Without an expected hash the receipt is trusted: no read-back of the whole file.
+        path = directory / "hashed-recovery"
+        digest = hashlib.sha256(DATA).hexdigest()
+        assert run("/file", path, recover=True, digest=digest)["state"] == "completed"
         with path.open("r+b") as completed:
-            completed.write(b"corrupt")  # Same inode and size still require content verification.
-        assert "SHA-256 mismatch" in run("/file", path, recover=True)["error"]
+            completed.write(b"corrupt")  # An expected hash is checked again: same inode and size are not enough.
+        assert "SHA-256 mismatch" in run("/file", path, recover=True, digest=digest)["error"]
         path = directory / "unowned-final"
         path.write_bytes(DATA)
         assert run("/file", path, recover=True)["state"] == "failed"

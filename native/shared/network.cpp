@@ -246,6 +246,7 @@ bool sync_parent(const std::string& path) {
 
 struct CompletionReceipt {
   char magic[8] = {'P', 'S', '5', 'D', 'O', 'N', 'E', '1'};
+  // Empty when the request had no hash to check: the file was not read back to make one.
   char identity[65]{}, sha256[65]{};
   std::uint64_t total = 0, device = 0, inode = 0;
 };
@@ -268,7 +269,7 @@ bool save_receipt(Job& job) {
   if (fstat(job.fd, &file) != 0) { job.fail(system_error("inspect completed file")); return false; }
   CompletionReceipt receipt;
   std::memcpy(receipt.identity, job.receipt_identity.c_str(), 64);
-  std::memcpy(receipt.sha256, job.verified_digest.c_str(), 64);
+  std::memcpy(receipt.sha256, job.verified_digest.data(), std::min<std::size_t>(64, job.verified_digest.size()));
   receipt.total = job.total; receipt.device = file.st_dev; receipt.inode = file.st_ino;
   const auto path = job.request.destination+".complete", temporary = path+".tmp";
   const int fd = open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
@@ -286,7 +287,7 @@ bool recover_file(Job& job) {
   const bool valid = meta >= 0 && read_all(meta, &receipt, sizeof receipt) &&
     !std::memcmp(receipt.magic, expected.magic, sizeof receipt.magic) &&
     !std::memcmp(receipt.identity, job.receipt_identity.c_str(), 65) && receipt.sha256[64] == '\0' &&
-    std::all_of(receipt.sha256, receipt.sha256+64, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+    (!receipt.sha256[0] || std::all_of(receipt.sha256, receipt.sha256+64, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }));
   if (meta >= 0) close(meta);
   struct stat file{};
   job.fd = open(job.request.destination.c_str(), O_RDONLY | O_NOFOLLOW);
@@ -299,7 +300,8 @@ bool recover_file(Job& job) {
     job.fd = -1;
     job.fail("existing destination has no matching completion receipt; preserve it and inspect it"); return false;
   }
-  job.request.sha256 = receipt.sha256;
+  // The receipt is trusted for its own file (same root, inode and size); the content is read again
+  // only to check a hash the request expects.
   job.total = job.committed = receipt.total; job.known = job.recovering = true;
   return true;
 }
@@ -362,7 +364,7 @@ bool checkpoint(Job& job, const std::vector<unsigned char>& completed) {
 bool verify_file(Job& job) {
   const bool piece_hashes = std::any_of(job.sources.begin(), job.sources.end(),
     [](const Source& source) { return !source.piece.sha1.empty(); });
-  if (job.request.sha256.empty() && !piece_hashes && !job.request.recover_completed) return true;
+  if (job.request.sha256.empty() && !piece_hashes) return true;
   { std::lock_guard lock(job.mutex); job.snapshot.state = "verifying"; }
   Hash hash;
   auto buffer = std::make_unique<char[]>(block_size);

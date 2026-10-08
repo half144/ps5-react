@@ -16,6 +16,9 @@
   the ranges, and before a resume without a strong ETag the last 64 KiB kept is re-read from the
   server and compared. HTTP 401/403 on a range now reports "provider denied the file" instead of a
   changed resource.
+- `recoverCompleted` no longer reads the whole file to hash it when the request has no `sha256`,
+  neither after the download nor when recovering it: the receipt's root, inode, size and request
+  identity name the file. A requested hash is still verified both times.
 - Up to 128 `<Svg>` nodes can be mounted at once, from 64 (288 KB more .bss). Overdrive with two dozen
   favorites mounted more than 64 icons and its legend glyphs drew nothing.
 - The idle collector keeps QuickJS's GC threshold at most 28 MiB, an eighth below the 32 MiB JS heap
