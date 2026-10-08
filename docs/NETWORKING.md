@@ -86,19 +86,30 @@ task during cleanup if its lifetime belongs to that component.
 | `storageRoot` | omitted | Allowed absolute directory containing the destination; guards device/inode identity during writes and before publication |
 | `headers` | omitted | Up to 32 string header values; see HTTP restrictions below |
 
-A one-byte GET probe checks range support and size. Parallel download and resume
-require a strong ETag or a supplied SHA-256. Ranges reuse the probe's final URL after redirects, falling back to the original URL on a 4xx. Every range checks its exact bounds,
-total, status and identity. Without those guarantees, downloading uses a single
-sequential connection; its partial files cannot resume. Resume requires the same
-URL, validator/hash, size and range size. Only completed, synced ranges survive
-resume; unfinished ranges download again. Hash verification performs one final
-sequential file read because ranges arrive out of order. Matching ETags are
-consistency checks, not cryptographic verification of local partial data.
+A one-byte GET probe checks range support and size. A server that answers it with
+a 206 range downloads in parallel and can resume. A strong ETag guards every range
+through `If-Range`; without one, `Last-Modified` does (weak ETags are ignored);
+without either, only the exact size and range bounds are checked. Ranges reuse the
+probe's final URL after redirects, falling back to the original URL on a 4xx. Every
+range checks its exact bounds, total, status and validator. A server without range
+support uses a single sequential connection; its partial files cannot resume.
+
+Resume requires the same validator, hash, size, range size and storage root, not
+the same URL: a signed link that expired can be resolved again and the partial
+continues. Without a strong ETag, a resume first downloads the last 64 KiB of the
+last completed range again and compares it with the partial file; a difference
+fails with "the server's file changed since this partial download". Only
+completed, synced ranges survive resume; unfinished ranges download again. With
+`rejectHtml`, HTTP 401/403 fails with "provider denied the file; link expired or
+browser verification required", so an app can resolve its source again. Hash
+verification performs one final sequential file read because ranges arrive out of
+order. Matching validators are consistency checks, not cryptographic verification
+of local partial data.
 
 With `recoverCompleted: true`, the writer computes whole-file SHA-256 even when
 the provider supplies no hash. After verification and file sync, it persists
 `destination.complete` before publishing the final filename. Recovery matches
-the request (URLs, hashes and expected size), selected-root identity, final inode
+the request (hashes and expected size; not URLs), selected-root identity, final inode
 and size, then re-reads the entire file to check the recorded SHA-256. It does
 not contact the provider or accept an existing file by name/size alone. This
 local digest proves continuity with the verified download, not publisher
@@ -137,7 +148,7 @@ pieces and optional whole-file SHA-256 in one sequential read before publication
 SHA-1 here checks legacy manifest integrity; it is not a modern authenticity proof.
 
 Each source needs a strong ETag, piece SHA-1, or whole-file SHA-256. The checkpoint
-identity includes every URL, offset, size, hash and validator. Changed manifests
+identity includes every offset, size, hash and validator, but no URL. Changed manifests
 or storage identities cannot reuse a checkpoint. Completed ranges of whole-piece
 fallbacks resume only once that entire piece has been durably written. Inputs
 must describe raw byte slices; independent RAR volumes are not such a manifest.

@@ -71,7 +71,8 @@ struct Job {
   struct stat root_stat{};
   // Read and written by every writer thread; 0 forces the next check.
   std::atomic<Clock::rep> storage_checked{0};
-  std::string etag, location, identity, response, receipt_identity, verified_digest;
+  // A strong ETag, else Last-Modified; without a strong ETag a resume first compares a sample (check_sample).
+  std::string etag, last_modified, location, identity, response, receipt_identity, verified_digest;
   std::vector<unsigned char> completed;
   std::vector<Source> sources;
   // Mirrors whose size and ETag matched the primary; one that fails a range is emptied.
@@ -109,7 +110,9 @@ struct Transfer {
   unsigned piece = 0, source = 0, retry_after = 0;
   unsigned mirror = 0; // 0 is the primary URL, n is Job::mirrors[n-1]
   long status = 0;
-  std::string etag, encoding, error, content_type, html_prefix;
+  std::string etag, last_modified, encoding, error, content_type, html_prefix, sample;
+  // A probe requests these bytes; only a sample check keeps them (in `sample`).
+  std::uint64_t probe_from = 0, probe_length = 1;
   std::vector<std::pair<std::string, std::string>> response_headers;
   std::uint64_t content_length = 0;
   bool length_known = false;
@@ -134,7 +137,14 @@ bool valid_file_response(const Transfer& t) {
   if (!job.ranged) return t.status == 200;
   return t.status == 206 && t.content_range && t.range_begin == t.begin &&
          t.range_end == t.begin+t.length-1 && t.range_total == job.total &&
-         (job.etag.empty() || t.etag == job.etag);
+         (job.etag.empty() || t.etag == job.etag) && (job.last_modified.empty() || t.last_modified == job.last_modified);
+}
+
+// Signed links expire mid-download; the app re-resolves the source page on this message.
+bool denied(Transfer& t) {
+  if (t.status != 401 && t.status != 403) return false;
+  t.error = "provider denied the file; link expired or browser verification required (HTTP " + std::to_string(t.status) + ")";
+  return true;
 }
 
 // Ranges skip the redirect hop by reusing the probe's final URL. Such a URL can
@@ -245,10 +255,11 @@ std::string receipt_identity(const Job& job) {
   const auto add = [&](const std::string& value) {
     return hash.update(value.data(), value.size()) && hash.update("\0", 1);
   };
-  if (!add(job.request.url) || !add(job.request.sha256) || !add(std::to_string(job.request.expected_bytes)) ||
+  // URLs are left out, like the checkpoint's: a re-resolved signed link still names the same file.
+  if (!add(job.request.sha256) || !add(std::to_string(job.request.expected_bytes)) ||
       !add(std::to_string(job.root_stat.st_dev)) || !add(std::to_string(job.root_stat.st_ino))) return {};
   for (const auto& piece : job.request.pieces)
-    if (!add(piece.url) || !add(piece.sha1) || !add(std::to_string(piece.offset)) || !add(std::to_string(piece.size))) return {};
+    if (!add(piece.sha1) || !add(std::to_string(piece.offset)) || !add(std::to_string(piece.size))) return {};
   return hash.finish();
 }
 
@@ -490,6 +501,7 @@ private:
   void run_job(const std::shared_ptr<Job>& job);
   bool prepare(Job& job);
   bool probe_source(Job& job, unsigned source);
+  bool check_sample(Job& job);
   void verify_mirrors(Job& job);
   CURLcode perform_probe(Transfer& probe);
   bool configure(Transfer& t);
@@ -636,7 +648,7 @@ std::size_t Service::header(char* data, std::size_t size, std::size_t count, voi
   t.header_bytes += length;
   std::string_view line(data, length);
   if (line.starts_with("HTTP/")) {
-    t.etag.clear(); t.encoding.clear(); t.content_range = false; t.length_known = false;
+    t.etag.clear(); t.last_modified.clear(); t.encoding.clear(); t.content_range = false; t.length_known = false;
     t.content_type.clear(); t.response_headers.clear();
     const auto space = line.find(' ');
     if (space != std::string_view::npos && line.size() >= space+4) {
@@ -664,6 +676,7 @@ std::size_t Service::header(char* data, std::size_t size, std::size_t count, voi
     else found->second.assign(value);
   }
   if (name == "etag") t.etag.assign(value);
+  if (name == "last-modified") t.last_modified.assign(value);
   if (name == "content-encoding") t.encoding.assign(value);
   if (name == "content-length") t.length_known = decimal(value, t.content_length);
   if (name == "retry-after") {
@@ -689,7 +702,8 @@ std::size_t Service::body(char* data, std::size_t size, std::size_t count, void*
   if (job.cancelled || job.failed) return 0;
   if (t.probe) {
     if (t.status != 206) return 0; // Ignore error/redirect bodies and unbounded responses to an ignored Range.
-    if (length > 1-t.accepted) { t.error = "invalid range probe body"; return 0; }
+    if (length > t.probe_length-t.accepted) { t.error = "invalid range probe body"; return 0; }
+    if (t.probe_length > 1) t.sample.append(data, length);
     t.accepted += length; return length;
   }
   if (!job.request.destination.empty()) {
@@ -703,6 +717,7 @@ std::size_t Service::body(char* data, std::size_t size, std::size_t count, void*
         t.error = "provider returned a web page; browser verification required"; return 0;
       }
     }
+    if (denied(t)) return 0;
     if (!valid_file_response(t)) {
       t.error = "server changed the resource or returned an invalid range/encoding/status"; return 0;
     }
@@ -728,7 +743,8 @@ bool Service::configure(Transfer& t) {
   curl_easy_reset(t.curl);
   if (t.headers) curl_slist_free_all(t.headers);
   t.headers = nullptr; t.status = 0; t.header_bytes = 0;
-  t.etag.clear(); t.encoding.clear(); t.error.clear(); t.content_type.clear(); t.response_headers.clear(); t.html_prefix.clear();
+  t.etag.clear(); t.last_modified.clear(); t.encoding.clear(); t.error.clear(); t.content_type.clear();
+  t.response_headers.clear(); t.html_prefix.clear(); t.sample.clear();
   t.content_range = false; t.length_known = false; t.paused = false; t.retry_after = 0;
   Job& job = *t.job;
   bool ok = true;
@@ -746,9 +762,9 @@ bool Service::configure(Transfer& t) {
   const std::string* mirror = !source && t.mirror ? &job.mirrors[t.mirror-1] : nullptr;
   t.redirected = !mirror && !t.probe && !location.empty();
   const auto& url = mirror ? *mirror : t.redirected ? location : origin;
-  const auto& etag = source ? source->etag : job.etag;
+  const auto& validator = source ? source->etag : job.etag.empty() ? job.last_modified : job.etag;
   const bool ranged = source ? source->ranged : job.ranged;
-  if (ranged && !t.probe && !etag.empty()) add("If-Range: " + etag);
+  if (ranged && !t.probe && !validator.empty()) add("If-Range: " + validator);
   // Custom application headers must never be forwarded to an unrelated redirect origin.
   if (!configure_transport(t.curl, url, job.request.follow_redirects && job.request.headers.empty())) ok = false;
   // body() copies each callback into one block, so curl must never hand over more than a block. Smaller
@@ -759,8 +775,10 @@ bool Service::configure(Transfer& t) {
   set(CURLOPT_HEADERFUNCTION, header); set(CURLOPT_HEADERDATA, &t);
   set(CURLOPT_XFERINFOFUNCTION, progress); set(CURLOPT_XFERINFODATA, &t);
   set(CURLOPT_NOPROGRESS, 0L); set(CURLOPT_PRIVATE, &t);
-  if (t.probe) set(CURLOPT_RANGE, "0-0");
-  else if (ranged) {
+  if (t.probe) {
+    const std::string range = std::to_string(t.probe_from)+"-"+std::to_string(t.probe_from+t.probe_length-1);
+    set(CURLOPT_RANGE, range.c_str());
+  } else if (ranged) {
     const auto begin = t.begin-(source ? source->piece.offset : 0);
     const std::string range = std::to_string(begin)+"-"+std::to_string(begin+t.length-1);
     set(CURLOPT_RANGE, range.c_str());
@@ -815,9 +833,7 @@ bool Service::probe_source(Job& job, unsigned source_index) {
     while (!job.cancelled && Clock::now() < retry_at) curl_multi_poll(multi_, nullptr, 0, 50, nullptr);
   }
   if (job.cancelled) return false;
-  if (job.request.reject_html && (probe.status == 401 || probe.status == 403)) {
-    job.fail("provider denied the file; browser verification required (HTTP " + std::to_string(probe.status) + ")"); return false;
-  }
+  if (job.request.reject_html && denied(probe)) { job.fail(probe.error); return false; }
   if (probe.status >= 400) {
     job.fail("range probe failed (HTTP " + std::to_string(probe.status) + ", " + curl_easy_strerror(result) + ")"); return false;
   }
@@ -831,7 +847,8 @@ bool Service::probe_source(Job& job, unsigned source_index) {
              probe.range_begin == 0 && probe.range_end == 0 && probe.accepted == 1) {
     job.known = true; job.total = probe.range_total;
     if (!probe.etag.empty() && !probe.etag.starts_with("W/")) job.etag = probe.etag;
-    job.ranged = !job.etag.empty() || !job.request.sha256.empty();
+    else job.last_modified = probe.last_modified;
+    job.ranged = true;
   } else if (result == CURLE_OK && probe.status == 200 && probe.length_known && probe.content_length == 0) {
     job.known = true; job.total = 0;
   } else {
@@ -880,6 +897,33 @@ void Service::verify_mirrors(Job& job) {
   probe.mirror = 0;
 }
 
+// Without a strong ETag the server cannot promise that kept ranges still match its file, so before
+// appending, the tail of the last completed range is downloaded again and compared with the partial.
+bool Service::check_sample(Job& job) {
+  std::size_t last = job.completed.size();
+  while (last && !job.completed[last-1]) --last;
+  if (!last) return true;
+  const auto end = std::min(job.total, last*job.request.range_bytes);
+  const auto length = std::min<std::uint64_t>(64*1024, end-(last-1)*job.request.range_bytes);
+  Transfer& probe = transfers_[0];
+  probe.probe = true; probe.source = 0; probe.mirror = 0; probe.accepted = 0;
+  probe.probe_from = end-length; probe.probe_length = length;
+  const bool fetched = configure(probe) && perform_probe(probe) == CURLE_OK && probe.status == 206 && probe.content_range &&
+    probe.range_begin == end-length && probe.range_end == end-1 && probe.range_total == job.total &&
+    probe.sample.size() == length && (job.last_modified.empty() || probe.last_modified == job.last_modified);
+  probe.probe_from = 0; probe.probe_length = 1;
+  if (job.cancelled) return false;
+  if (!fetched) { job.fail(probe.error.empty() ? "could not re-read the partial file's tail from the server" : probe.error); return false; }
+  std::string local(length, '\0');
+  if (pread(job.fd, local.data(), local.size(), static_cast<off_t>(end-length)) != static_cast<ssize_t>(length)) {
+    job.fail(system_error("read partial file")); return false;
+  }
+  if (local != probe.sample) {
+    job.fail("the server's file changed since this partial download; restart from zero"); return false;
+  }
+  return true;
+}
+
 bool Service::prepare(Job& job) {
   if (!job.request.storage_root.empty()) {
     job.root_fd = open(job.request.storage_root.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
@@ -903,7 +947,7 @@ bool Service::prepare(Job& job) {
   } else {
     for (const auto& piece : job.request.pieces) job.sources.push_back({piece, {}, {}, false});
     for (unsigned i = 0; i < job.sources.size(); ++i) {
-      job.etag.clear(); job.ranged = false; job.known = false; job.total = 0;
+      job.etag.clear(); job.last_modified.clear(); job.ranged = false; job.known = false; job.total = 0;
       if (!probe_source(job, i)) return false;
       const auto& source = job.sources[i];
       for (std::uint64_t local = 0; local < source.piece.size;) {
@@ -919,12 +963,15 @@ bool Service::prepare(Job& job) {
     const auto count = job.sources.empty() ? (job.total+job.request.range_bytes-1)/job.request.range_bytes : job.segments.size();
     if (count > max_ranges) { job.fail("too many ranges; increase rangeBytes (maximum 65536 ranges)"); return false; }
     job.completed.resize(static_cast<std::size_t>(count));
+    // No URL: signed links change on every resolution while the file stays the same. The validator,
+    // size and hashes identify the bytes; the storage root and the sidecar's path identify the place.
     Hash hash;
-    for (const auto& value : {job.request.url, job.etag, job.request.sha256}) {
+    const auto validator = !job.etag.empty() ? "etag:"+job.etag : !job.last_modified.empty() ? "modified:"+job.last_modified : "size";
+    for (const auto& value : {validator, job.request.sha256, std::to_string(job.total)}) {
       hash.update(value.data(), value.size()); hash.update("\0", 1);
     }
     for (const auto& source : job.sources) {
-      for (const auto& value : {source.piece.url, source.etag, source.piece.sha1,
+      for (const auto& value : {source.etag, source.piece.sha1,
                                std::to_string(source.piece.offset), std::to_string(source.piece.size)}) {
         hash.update(value.data(), value.size()); hash.update("\0", 1);
       }
@@ -960,6 +1007,7 @@ bool Service::prepare(Job& job) {
       if (end > static_cast<std::uint64_t>(existing.st_size)) { job.fail("partial file is shorter than its checkpoint"); return false; }
       job.committed += end-begin;
     }
+    if (job.committed && job.etag.empty() && job.sources.empty() && !check_sample(job)) return false;
   }
   if (job.fd < 0) { job.fail(system_error("open partial file (parent must exist; existing partial files require a valid checkpoint)")); return false; }
   struct stat partial_stat;
@@ -1117,7 +1165,7 @@ void Service::finish_transfer(Transfer& t) {
   Job& job = *t.job;
   if (t.block) flush(t);
   t.active = false; t.draining = true;
-  if (t.result == CURLE_OK && !job.request.destination.empty()) {
+  if (t.result == CURLE_OK && !job.request.destination.empty() && !denied(t)) {
     if (!valid_file_response(t)) t.error = "server changed the resource or returned an invalid range/encoding/status";
     else if ((job.ranged || job.known) && t.accepted != t.length) t.error = "truncated response";
     if (!job.known && !job.ranged) { job.total = t.accepted; job.known = true; }

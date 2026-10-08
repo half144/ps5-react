@@ -26,6 +26,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     requests = []
     guard = threading.Lock()
     retried = set()
+    # Signatures that now answer 403, like an expired signed CDN link.
+    expired = set()
+    modified = "Wed, 01 Jan 2025 00:00:00 GMT"
+    mutated = False
 
     def handle(self):
         try:
@@ -43,10 +47,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.respond()
 
     def respond(self, head=False):
-        path = self.path
+        path, _, query = self.path.partition("?")
         selected = self.headers.get("Range")
         with self.guard:
             self.requests.append((path, selected, self.headers.get("If-Range")))
+        if query in self.expired:
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/file")
@@ -77,6 +86,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         piece = re.search(r"/piece([0-2])$", path)
         payload = PIECES[int(piece[1])] if piece else DATA
+        if path.endswith("-mutable") and self.mutated:
+            payload = bytes(reversed(DATA))
         total = 4*1024**3 + 1024**2 if path == "/large-offset" else len(payload)
         start, end, status = 0, total-1, 200
         if selected and path not in ("/no-range", "/slow-no-range", "/multipart-no-range/piece1"):
@@ -101,7 +112,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             status = 200
         self.send_response(status)
         self.send_header("Content-Length", str(end-start+1))
-        if path not in ("/no-validator", "/slow-no-validator") and not path.startswith("/multipart-no-validator"):
+        if "modified" in path:
+            self.send_header("Last-Modified", self.modified)
+            self.send_header("ETag", 'W/"weak"')
+        elif "no-validator" not in path:
             self.send_header("ETag", '"fixture-v1"' if path != "/changed" else '"fixture-v2"')
         if status == 206:
             reported = start+1 if path == "/bad-range" and selected != "bytes=0-0" else start
@@ -184,7 +198,9 @@ def main():
         recovered = run("/file", path, recover=True)
         assert recovered["state"] == "completed" and recovered["written"] == len(DATA), recovered
         assert len(Handler.requests) == before
-        assert run("/no-range", path, recover=True)["state"] == "failed"  # Different request identity.
+        # A re-resolved link names the same file; another expected hash is another request.
+        assert run("/no-range", path, recover=True)["state"] == "completed"
+        assert run("/file", path, recover=True, digest="0"*64)["state"] == "failed"
         with path.open("r+b") as completed:
             completed.write(b"corrupt")  # Same inode and size still require content verification.
         assert "SHA-256 mismatch" in run("/file", path, recover=True)["error"]
@@ -195,7 +211,7 @@ def main():
         path = directory / "sequential-recovery"
         assert run("/no-range", path, recover=True)["state"] == "completed"
         assert run("/no-range", path, recover=True)["state"] == "completed"
-        for endpoint in ("/slow-no-range", "/slow-no-validator"):
+        for endpoint in ("/slow-no-range",):
             path = directory / endpoint.removeprefix("/")
             assert run(endpoint, path, cancel=180, recover=True)["state"] == "cancelled"
             assert run(endpoint, path, recover=True)["state"] == "failed"
@@ -271,7 +287,7 @@ def main():
         # without transferring or allocating gigabytes on the development machine.
         with Path(str(path)+".part").open("wb") as partial:
             partial.truncate(4*1024**3)
-        identity = hashlib.sha256((origin+"/large-offset"+'\0"fixture-v1"\0\0').encode()).hexdigest().encode()+b"\0"
+        identity = hashlib.sha256(f'etag:"fixture-v1"\0\0{size}\0'.encode()).hexdigest().encode()+b"\0"
         meta = struct.pack("<8sQQI65s3x", b"P5RDL001", size, 1024**2, 4097, identity)
         Path(str(path)+".resume").write_bytes(meta + b"\1"*4096 + b"\0")
         assert run("/large-offset", path)["state"] == "completed"
@@ -313,6 +329,53 @@ def main():
         assert len([item for item in requests if item[1] != "bytes=0-0"]) < 16, requests
         assert all(item[2] == '"fixture-v1"' for item in requests if item[1] != "bytes=0-0")
         path.unlink()
+        # A signed link that expires mid-download resumes from a freshly resolved one: the checkpoint
+        # names the bytes (validator, size), not the URL.
+        path = directory / "signed"
+        assert run("/slow-signed?sig=old", path, cancel=180)["state"] == "cancelled"
+        Handler.expired.add("sig=old")
+        expired = run("/slow-signed?sig=old", path)
+        assert expired["state"] == "failed" and "HTTP 403" in expired["error"], expired
+        before = len(Handler.requests)
+        resumed = run("/slow-signed?sig=new", path)
+        assert resumed["state"] == "completed", resumed
+        assert path.read_bytes() == DATA
+        assert len([r for r in Handler.requests[before:] if r[1] != "bytes=0-0"]) < 16
+        path.unlink()
+        # Without a strong ETag, Last-Modified guards ranges and resumes; the kept tail is re-read first.
+        path = directory / "slow-modified"
+        assert run("/slow-modified", path, cancel=180)["state"] == "cancelled"
+        before = len(Handler.requests)
+        resumed = run("/slow-modified", path)
+        assert resumed["state"] == "completed", resumed
+        assert path.read_bytes() == DATA
+        requests = Handler.requests[before:]
+        def span(request):
+            first, last = map(int, request[1][6:].split("-"))
+            return last-first+1
+        ranged = [r for r in requests if r[1] and r[1] != "bytes=0-0"]
+        assert any(span(r) == 65536 and r[2] is None for r in ranged), requests  # The tail check.
+        assert all(r[2] == Handler.modified for r in ranged if span(r) != 65536), requests
+        assert len([r for r in requests if r[1] != "bytes=0-0"]) < 17, requests
+        path.unlink()
+        assert run("/slow-modified", path, cancel=180)["state"] == "cancelled"
+        Handler.modified = "Thu, 02 Jan 2025 00:00:00 GMT"
+        changed = run("/slow-modified", path)
+        assert changed["state"] == "failed" and "checkpoint" in changed["error"], changed
+        # No validator at all: ranges still resume once the server's tail matches the partial's.
+        for endpoint in ("/slow-no-validator", "/slow-no-validator-mutable"):
+            path = directory / endpoint.removeprefix("/")
+            Handler.mutated = False
+            assert run(endpoint, path, cancel=180)["state"] == "cancelled"
+            Handler.mutated = endpoint.endswith("mutable")
+            out = run(endpoint, path)
+            if Handler.mutated:
+                assert out["state"] == "failed" and "changed since this partial" in out["error"], out
+                assert not path.exists()
+            else:
+                assert out["state"] == "completed", out
+                assert path.read_bytes() == DATA
+        Handler.mutated = False
         path = directory / "hash"
         assert run("/file", path, digest="0"*64)["state"] == "failed"
         assert not path.exists()

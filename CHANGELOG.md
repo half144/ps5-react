@@ -10,6 +10,12 @@
 
 ## Unreleased
 
+- Download checkpoints and completion receipts no longer include URLs: a signed link that expired
+  can be resolved again and the partial resumes, as long as the size, hash and validator match.
+  Servers without a strong ETag download in parallel ranges and resume too: `Last-Modified` guards
+  the ranges, and before a resume without a strong ETag the last 64 KiB kept is re-read from the
+  server and compared. HTTP 401/403 on a range now reports "provider denied the file" instead of a
+  changed resource.
 - Up to 128 `<Svg>` nodes can be mounted at once, from 64 (288 KB more .bss). Overdrive with two dozen
   favorites mounted more than 64 icons and its legend glyphs drew nothing.
 - The idle collector keeps QuickJS's GC threshold at most 28 MiB, an eighth below the 32 MiB JS heap
