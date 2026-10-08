@@ -306,7 +306,7 @@ rotate, scale. A variant such as `focused:scale-105` keeps the element's base
 `Svg`, `Path`, `Circle`, `Rect`, `Line`, and `G` are exported from
 `@ps5-react/core` for icons and other vector shapes; they take the Embedded
 React SVG props (`d`, `stroke`, `strokeWidth`, `fill`) rather than classes. Up
-to 64 `<Svg>` nodes can be mounted at once (`ERUI_MAX_VECTOR_NODES`); further
+to 128 `<Svg>` nodes can be mounted at once (`ERUI_MAX_VECTOR_NODES`); further
 ones draw nothing. The 32 most recent static ones skip re-flattening on repaint
 (`ERUI_VECTOR_CACHE_NODES`).
 

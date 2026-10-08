@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+- Up to 128 `<Svg>` nodes can be mounted at once, from 64 (288 KB more .bss). Overdrive with two dozen
+  favorites mounted more than 64 icons and its legend glyphs drew nothing.
 - The idle collector keeps QuickJS's GC threshold at most 28 MiB, an eighth below the 32 MiB JS heap
   limit. QuickJS sets the threshold to 1.5 times what survived a collection and fails an allocation
   past the limit without collecting, so an app with over 21 MiB live (Overdrive's catalog) threw
