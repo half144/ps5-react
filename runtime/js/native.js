@@ -73,6 +73,9 @@ export const FileSystem = {
   mkdir: (path, {recursive = false} = {}) => host().fs.mkdir(path, recursive),
   /** Removes a file or an empty directory. @param {string} path */
   remove: path => host().fs.remove(path),
+  /** Removes a file, or a directory with everything in it, without following symbolic links.
+   * Synchronous: meant for small app-owned trees. @param {string} path */
+  removeTree: path => host().fs.removeTree(path),
   /** @param {string} from @param {string} to */
   rename: (from, to) => host().fs.rename(from, to),
   /** Mounted filesystems visible to the host process. Console access requires

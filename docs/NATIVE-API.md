@@ -91,6 +91,7 @@ inside it can be read by path. Paths containing `..` components are rejected.
 | `appendFile(path, text)` | — | Creates or appends |
 | `mkdir(path, {recursive})` | — | `recursive` defaults to `false` |
 | `remove(path)` | — | A file or an empty directory |
+| `removeTree(path)` | — | A file, or a directory and everything in it; symbolic links are unlinked, never followed. Synchronous: for small app-owned trees |
 | `rename(from, to)` | — | Both are app paths |
 | `mounts()` | `{device, path, type}[]` | Up to 64 mounted filesystems visible to this process, as host paths; see [Hardware status](#hardware-status) |
 | `diskUsage(path)` | `{total, free}` | Bytes for the filesystem holding `path`; `free` is available to the app, clamped to `0..total` |

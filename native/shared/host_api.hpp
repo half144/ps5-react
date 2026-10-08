@@ -19,6 +19,8 @@
 //   fs.writeFile(path, text, append)
 //   fs.mkdir(path, recursive)
 //   fs.remove(path)                file or empty directory
+//   fs.removeTree(path)            a file, or a directory and everything in it; symbolic links are
+//                                  unlinked, never followed; synchronous, for small app-owned trees
 //   fs.rename(from, to)
 //   fs.mounts()                    [{device, path, type}], visible to the process
 //                                  console access is opt-in via app.json

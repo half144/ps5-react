@@ -17,6 +17,7 @@ extern "C" {
 #include <ctime>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace {
 bool exit_requested = false;
@@ -195,6 +196,25 @@ JSValue fs_remove(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   if (!path || lstat(path.real(), &st) != 0) return path.error("fs.remove");
   const int status = S_ISDIR(st.st_mode) ? rmdir(path.real()) : unlink(path.real());
   return status == 0 ? JS_UNDEFINED : path.error("fs.remove");
+}
+
+// A symbolic link is unlinked, never entered, so nothing outside the tree can be reached.
+bool remove_tree(const std::string& path, unsigned depth) {
+  struct stat st;
+  if (lstat(path.c_str(), &st) != 0) return false;
+  if (!S_ISDIR(st.st_mode)) return unlink(path.c_str()) == 0;
+  if (depth == 64) { errno = ELOOP; return false; }
+  std::vector<std::string> names;
+  const auto collect = [](const char* name, void* user) { static_cast<std::vector<std::string>*>(user)->emplace_back(name); };
+  if (!host::read_dir(path.c_str(), collect, &names)) return false;
+  for (const auto& name : names) if (!remove_tree(path + "/" + name, depth + 1)) return false;
+  return rmdir(path.c_str()) == 0;
+}
+
+JSValue fs_remove_tree(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  Path path(ctx, argv[0]);
+  if (!path || !remove_tree(path.real(), 0)) return path.error("fs.removeTree");
+  return JS_UNDEFINED;
 }
 
 JSValue fs_rename(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
@@ -396,6 +416,7 @@ JSValue namespace_object(JSContext* ctx, const char* space, const Function (&fun
 constexpr Function kFs[] = {
   {"readDir", fs_read_dir, 1}, {"stat", fs_stat, 1}, {"readFile", fs_read_file, 1},
   {"writeFile", fs_write_file, 3}, {"mkdir", fs_mkdir, 2}, {"remove", fs_remove, 1},
+  {"removeTree", fs_remove_tree, 1},
   {"rename", fs_rename, 2}, {"mounts", fs_mounts, 0}, {"diskUsage", fs_disk_usage, 1},
 };
 constexpr Function kDevice[] = {{"info", device_info, 0}};

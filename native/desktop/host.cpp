@@ -44,6 +44,8 @@ void er_register_assets(void);
 #include <string>
 #include <utility>
 #include <vector>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 // Render at twice the logical resolution so rounded edges remain smooth on Retina.
@@ -556,6 +558,12 @@ bool storage_test() {
       try { fs.readDir(testPath); return false; }
       catch (error) { if (!error.message.includes('fs.readDir')) return false; }
     } finally { fs.remove(testPath); }
+    // removeTree deletes the tree but only unlinks the symbolic link set up below, keeping its target.
+    fs.removeTree('/download0/remove-tree-test');
+    if (fs.stat('/download0/remove-tree-test') || !fs.stat('/download0/remove-tree-target/keep.txt')) return false;
+    fs.removeTree('/download0/remove-tree-target');
+    try { fs.removeTree('/download0/remove-tree-test'); return false; }
+    catch (error) { if (!error.message.includes('fs.removeTree')) return false; }
     const usage = fs.diskUsage('/download0');
     if (!Number.isFinite(usage.total) || usage.total <= 0 ||
         usage.free < 0 || usage.free > usage.total) return false;
@@ -569,6 +577,22 @@ bool storage_test() {
              error.message.includes('/missing-storage-test-path');
     }
   })())JS";
+  char tree[PATH_MAX], target[PATH_MAX];
+  if (!host::resolve_path("/download0/remove-tree-test", tree, sizeof tree) ||
+      !host::resolve_path("/download0/remove-tree-target", target, sizeof target)) return false;
+  const std::string tree_path = tree, target_path = target;
+  // A previous run that stopped early may have left the fixture behind.
+  const auto directory = [](const std::string& path) { return mkdir(path.c_str(), 0755) == 0 || errno == EEXIST; };
+  unlink((tree_path + "/nested/link").c_str());
+  std::FILE* kept = nullptr;
+  if (!directory(target_path) || !(kept = std::fopen((target_path + "/keep.txt").c_str(), "w")) ||
+      !directory(tree_path) || !directory(tree_path + "/nested") ||
+      symlink(target, (tree_path + "/nested/link").c_str()) != 0) {
+    if (kept) std::fclose(kept);
+    return false;
+  }
+  std::fclose(kept);
+  if (std::FILE* file = std::fopen((tree_path + "/nested/file.txt").c_str(), "w")) std::fclose(file);
   JSContext* ctx = er_runtime_context();
   // The first sound the app baked, whatever it is named; none leaves only the unknown-name check.
   JSValue global = JS_GetGlobalObject(ctx);
