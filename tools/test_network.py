@@ -316,6 +316,27 @@ def main():
         failed = run("/file", path, file_limit=512*1024)
         assert failed["state"] == "failed" and "write partial file" in failed["error"], failed
         assert not path.exists()
+        # Once space is freed, the partial resumes: ranges completed before the disk filled are kept.
+        failed = run("/file", path, file_limit=4*1024*1024)
+        assert failed["state"] == "failed" and "write partial file" in failed["error"], failed
+        before = len(Handler.requests)
+        assert run("/file", path)["state"] == "completed"
+        assert path.read_bytes() == DATA
+        assert len([r for r in Handler.requests[before:] if r[1] != "bytes=0-0"]) < 16
+        path.unlink()
+        # A killed process leaves a partial longer than its last checkpoint; unfinished ranges download again.
+        path = directory / "killed"
+        client = subprocess.Popen([str(binary), origin+"/slow", str(path), "4", str(1024*1024), "0", "", "GET", "0", "0", "single"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic()+5
+        while not Path(str(path)+".resume").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.1)
+        client.kill(); client.wait()
+        assert Path(str(path)+".part").exists() and Path(str(path)+".resume").exists()
+        assert run("/slow", path)["state"] == "completed"
+        assert path.read_bytes() == DATA
+        path.unlink()
         path = directory / "shutdown"
         assert run("/slow", path, stop=180)["state"] == "stopped"
         assert run("/slow", path)["state"] == "completed"
@@ -405,8 +426,9 @@ def main():
         assert run("/file", existing)["state"] == "failed"
         assert existing.read_bytes() == b"preserve"
         print("Native networking: HTTP methods/status/limits, exact ranges, bounded buffering, redirects, "
-              "sequential fallbacks, truncation, 64-bit offsets, retries, cancellation/resume, hashes, TLS verification "
-              "and destination preservation passed.")
+              "sequential fallbacks, truncation, 64-bit offsets, retries, cancellation/resume, re-resolved and expired "
+              "links, Last-Modified and validator-less resume, full-disk and killed-process resume, hashes, "
+              "TLS verification and destination preservation passed.")
     server.shutdown()
 
 
