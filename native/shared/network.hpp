@@ -41,6 +41,8 @@ void stop();
 std::uint32_t enqueue(Request request, std::string& error);
 void cancel(std::uint32_t id);
 std::vector<Snapshot> poll();
+// True while a download to a file runs; image loading yields connections and memory to it.
+bool downloading();
 const char* version();
 // Applies the transport policy every request shares (protocols, redirects, TLS trust, timeouts,
 // identity encoding and the PS5 socket options) to a libcurl easy handle.

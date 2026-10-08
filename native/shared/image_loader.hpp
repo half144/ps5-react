@@ -17,7 +17,8 @@ enum class Fit : std::uint8_t { cover, contain, stretch, none };
 // are never evicted, so a screen that shows more than this exceeds it.
 constexpr std::size_t kCacheBytes = 24 * 1024 * 1024;
 constexpr std::size_t kCacheEntries = 128;
-constexpr std::size_t kMaxEncodedBytes = 8 * 1024 * 1024;
+// Larger responses fail. Store covers and 1920x1080 screenshots measure under 2 MiB.
+constexpr std::size_t kMaxEncodedBytes = 4 * 1024 * 1024;
 // Encoded bytes kept by URL, so the same image drawn at another size decodes without a fetch.
 constexpr std::size_t kEncodedCacheBytes = 4 * 1024 * 1024;
 // Encoded responses kept on disk between launches; entries older than a week are fetched again.
@@ -56,4 +57,7 @@ void warm(std::vector<std::string> urls);
 std::vector<Result> poll(void (*evict)(std::uint32_t id));
 // Turns a ready image the caller could not use into a failure, freeing its pixels.
 void discard(std::uint32_t id, const std::string& reason);
+// Heap the loader holds now: encoded bytes (transfers, decode queue, encoded cache) and decoded pixels.
+struct Memory { std::size_t encoded = 0, decoded = 0; };
+Memory memory();
 } // namespace images

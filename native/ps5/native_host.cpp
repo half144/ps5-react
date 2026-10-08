@@ -15,6 +15,7 @@
 #include "damage_tracker.hpp"
 #include "frame_stats.hpp"
 #include "gl_presenter.hpp"
+#include "image_loader.hpp"
 #include "host_api.hpp"
 #include "host_platform.hpp"
 #include "actions.hpp"
@@ -44,6 +45,7 @@ void er_register_assets(void);
 std::uint64_t sceKernelReadTsc(void);
 std::uint64_t sceKernelGetTscFrequency(void);
 void hui_heap_capacity(std::size_t* size, std::size_t* flexible_before, std::size_t* flexible_after);
+void hui_heap_stats(std::size_t* live_bytes, std::size_t* peak_bytes, std::size_t* blocks, std::size_t* failures);
 extern const char proof_bundle[];
 extern const unsigned long proof_bundle_length;
 }
@@ -52,6 +54,15 @@ namespace {
 // Startup steps log their time since main(), to show where launch time goes.
 std::int64_t launch_us = 0;
 long long since_launch_ms() { return (hui::sys::monotonic_us() - launch_us) / 1000; }
+
+void log_memory() {
+  std::size_t live = 0, peak = 0, blocks = 0, failures = 0, size = 0;
+  hui_heap_stats(&live, &peak, &blocks, &failures);
+  hui_heap_capacity(&size, nullptr, nullptr);
+  const images::Memory image = images::memory();
+  async_log::write("[PS5-REACT] memory: heap=%zu/%zuMiB peak=%zuMiB failed=%zu img encoded=%zuKiB decoded=%zuKiB",
+                   live >> 20, size >> 20, peak >> 20, failures, image.encoded >> 10, image.decoded >> 10);
+}
 
 // A file in the app folder's dev/ directory. After console filesystem elevation /app0 is only a
 // logical path, so it is resolved like the native API's paths.
@@ -203,6 +214,7 @@ bool run_proof() {
   hui::InputTracker tracker;
   hui::PadSample samples[64];
   FrameStats stats;
+  unsigned summaries = 0;
   bool runtime = false, software = false;
   bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT);
   async_log::write("[PS5-REACT] display=%d at %lldms", ok, since_launch_ms());
@@ -262,7 +274,11 @@ bool run_proof() {
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
-      if (const char* line = stats.start_frame(now)) async_log::write("[PS5-REACT] %s", line);
+      if (const char* line = stats.start_frame(now)) {
+        async_log::write("[PS5-REACT] %s", line);
+        // Every fifth summary, about ten seconds apart.
+        if (++summaries % 5 == 1) log_memory();
+      }
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
       if (input.is_pressed(hui::Action::menu)) break;

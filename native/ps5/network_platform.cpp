@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "network.hpp"
+#include "image_loader.hpp"
 #include "app_config.hpp"
 #include "filesystem_access.hpp"
 #include "platform/ps5/system.hpp"
@@ -43,7 +44,9 @@ void platform_log(const char* line) {
   std::size_t live = 0, peak = 0, blocks = 0, failures = 0, size = 0;
   hui_heap_stats(&live, &peak, &blocks, &failures);
   hui_heap_capacity(&size, nullptr, nullptr);
-  hui::sys::log("[PS5-REACT] %s heap=%zu/%zuMiB peak=%zuMiB failed=%zu", line, live >> 20, size >> 20, peak >> 20, failures);
+  const images::Memory image = images::memory();
+  hui::sys::log("[PS5-REACT] %s heap=%zu/%zuMiB peak=%zuMiB failed=%zu img=%zu+%zuMiB", line, live >> 20, size >> 20,
+                peak >> 20, failures, image.encoded >> 20, image.decoded >> 20);
 }
 }
 #endif

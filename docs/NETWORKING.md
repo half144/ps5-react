@@ -238,7 +238,7 @@ HTTP/1.1 limits buffering associated with paused multiplexed streams. A 16 MiB
 pool of 32 × 256 KiB blocks bounds application file buffers, independently of
 file size and concurrency. A network worker and a disk writer each use a 1 MiB
 stack; TLS, curl internals, response strings and metadata consume additional
-memory in the existing 128 MiB process heap. These are not total-memory bounds.
+memory in the title's one process heap. These are not total-memory bounds.
 
 The writer uses 64-bit-offset `pwrite`, and buffer exhaustion pauses network
 transfers until the writer returns blocks. Checkpoints run every five seconds

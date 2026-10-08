@@ -51,6 +51,8 @@ BODIES = {
     "/red.png": ("image/png", encoded(Image.new("RGB", (60, 90), (160, 20, 30)), "PNG")),
     "/grey.png": ("image/png", encoded(Image.new("RGB", (60, 90), (120, 120, 124)), "PNG")),
     "/text": ("text/plain", b"not an image"),
+    # Noise does not compress: a body over the 128 KiB the allocation-failure runs refuse.
+    "/noise.jpg": ("image/jpeg", encoded(Image.effect_noise((800, 600), 80).convert("RGB"), "JPEG", quality=95)),
 }
 
 
@@ -126,16 +128,16 @@ def main():
         directory = Path(temporary)
         binary = compile_client(directory)
 
-        def run(*arguments, cache=""):
+        def run(*arguments, cache="", fail_large_ms=0):
             result = subprocess.run([str(binary), *map(str, arguments)], capture_output=True, text=True, timeout=30,
-                                    env={**os.environ, "IMAGE_CACHE": cache})
+                                    env={**os.environ, "IMAGE_CACHE": cache, "IMAGE_FAIL_LARGE_MS": str(fail_large_ms)})
             if result.returncode or not result.stdout.strip():
                 raise AssertionError(result.stderr or f"client exited {result.returncode}")
             return json.loads(result.stdout)
 
-        def load(path, width, height, fit):
+        def load(path, width, height, fit, fail_large_ms=0):
             out = directory / "pixels"
-            result = run("load", origin + path, width, height, fit, out)
+            result = run("load", origin + path, width, height, fit, out, fail_large_ms=fail_large_ms)
             return result, (argb(out, result["width"], result["height"]) if result["ready"] else None)
 
         source = photo(1600, 1200)
@@ -169,9 +171,17 @@ def main():
         assert result["color"] == -1, result
         # Errors name the call and the URL.
         for path, reason in (("/missing.jpg", "HTTP 404"), ("/text", "not a decodable JPEG or PNG"),
-                             ("/huge.png", "5-megapixel"), ("/large", "exceeds 8 MiB")):
+                             ("/huge.png", "5-megapixel"), ("/large", "exceeds 4 MiB")):
             result, _ = load(path, 64, 64, COVER)
             assert result["failed"] and result["error"].startswith(f"Image.load {origin}{path}") and reason in result["error"], result
+        # An exhausted heap fails the load after its retries instead of aborting: first the response
+        # body cannot be held, then (with a small body) stb_image cannot decode.
+        for path, reason in (("/noise.jpg?oom", "out of memory for the response"), ("/photo.png?oom", "out of memory to decode")):
+            result, _ = load(path, 64, 64, COVER, fail_large_ms=-1)
+            assert result["failed"] and reason in result["error"], result
+        # Memory that frees up within the retries lets the same load finish.
+        result, _ = load("/noise.jpg?recovers", 64, 64, COVER, fail_large_ms=800)
+        assert result["ready"], result
         before = len(Handler.requests)
         assert run("shared", origin + "/photo.jpg") == {"same": True, "immediate": True}
         assert len(Handler.requests) == before + 1
@@ -188,7 +198,7 @@ def main():
         again = run("load", origin + "/photo.jpg?disk", 32, 32, COVER, directory / "pixels", cache=cache)
         assert first["ready"] and again["ready"] and len(Handler.requests) == before + 1, (first, again)
         print("Remote images: cover/contain/stretch fitting without enlargement, box-filter quality, premultiplied "
-              "alpha, error messages, shared fetches, cancellation, LRU eviction and the disk cache passed.")
+              "alpha, error messages, allocation failure and recovery, shared fetches, cancellation, LRU eviction and the disk cache passed.")
     server.shutdown()
 
 

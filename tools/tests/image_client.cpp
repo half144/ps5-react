@@ -5,6 +5,7 @@
 #include "image_loader.hpp"
 #include "network.hpp"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +14,28 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <malloc/malloc.h>
+
+// The loader's own allocations (bodies, stb_image buffers, pixels) bind to these, not libc's, so
+// IMAGE_FAIL_LARGE_MS can refuse every allocation of 128 KiB or more for that many milliseconds
+// (-1: always), as an exhausted console heap does. libcurl and libc++ keep the system allocator.
+namespace {
+std::atomic<long long> fail_until_ms{0};
+long long now_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+bool refused(std::size_t size) {
+  const long long until = fail_until_ms.load();
+  return size >= 128 * 1024 && (until < 0 || (until > 0 && now_ms() < until));
+}
+} // namespace
+extern "C" void* malloc(std::size_t size) { return refused(size) ? nullptr : malloc_zone_malloc(malloc_default_zone(), size); }
+extern "C" void* calloc(std::size_t count, std::size_t size) {
+  return refused(count * size) ? nullptr : malloc_zone_calloc(malloc_default_zone(), count, size);
+}
+extern "C" void* realloc(void* address, std::size_t size) {
+  return refused(size) ? nullptr : malloc_zone_realloc(malloc_default_zone(), address, size);
+}
 
 namespace {
 std::vector<std::uint32_t> evicted;
@@ -44,6 +67,10 @@ std::uint32_t load(const std::string& url, int w, int h, int fit, images::Result
 int main(int argc, char** argv) {
   if (argc < 3 || !network::start() || !images::start(std::getenv("IMAGE_CACHE") ? std::getenv("IMAGE_CACHE") : "")) return 3;
   const std::string mode = argv[1], url = argv[2];
+  if (const char* fail = std::getenv("IMAGE_FAIL_LARGE_MS")) {
+    const long long ms = std::atoll(fail);
+    fail_until_ms = ms < 0 ? -1 : now_ms() + ms;
+  }
   images::Result now;
   if (mode == "load" && argc >= 7) {
     load(url, std::atoi(argv[3]), std::atoi(argv[4]), std::atoi(argv[5]), now);

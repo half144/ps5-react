@@ -60,15 +60,15 @@ fetched again) and samples at most about 16k pixels: use it for an accent or
 | Limit | Value |
 | --- | --- |
 | Formats | JPEG (baseline and progressive) and PNG, decoded by stb_image 2.30; others fail with an actionable error |
-| Encoded size | 8 MiB per response |
+| Encoded size | 4 MiB per response (store covers and 1920 × 1080 screenshots measure under 2 MiB) |
 | Source size | 5 megapixels (for example 3840 × 1300) |
 | Request | GET, 30-second total timeout, the shared transport policy of [NETWORKING.md](NETWORKING.md) (verified TLS, at most five redirects, identity encoding) |
-| Retries | Two more attempts after connection failures, timeouts and HTTP 429/502/503/504 |
+| Retries | Two more attempts after connection failures, timeouts, HTTP 429/502/503/504 and running out of heap (for the response or the decode) |
 
 ## Memory and threads
 
 Two native workers own the work: one fetches over a dedicated libcurl multi
-handle (up to twelve connections, separate from the download queue, so images
+handle (its own connections, separate from the download queue, so images
 never wait behind a large file), one decodes. Images that an element draws are
 fetched and decoded before prefetches, in request order. Workers never touch JavaScript or
 the engine. The render thread only submits, releases and polls once per frame
@@ -79,10 +79,16 @@ while loads are pending, then registers finished pixels with the engine.
 | Decoded cache | 24 MiB and at most 128 images. Images in use are never evicted, so a screen that draws more than that exceeds it; unused ones are evicted least recently used first |
 | Encoded cache | 4 MiB of recently fetched bytes by URL, so the same image at another size decodes without a second fetch. Loads of a URL already being fetched join that request |
 | Decode | One image at a time; a decode holds about 4.5 bytes per source pixel for JPEG and 8 for PNG (up to 40 MiB at the source limit) until it finishes |
+| In flight | No new fetch starts while encoded bytes held anywhere (responses, decode queue, encoded cache) pass 16 MiB; up to 32 connections, 8 while a download to a file runs |
 | Threads | Two, with 1 MiB stacks |
 
-All of it comes from the 128 MiB process heap shared with QuickJS, the
-framebuffer and the download buffers. Hosts stop the image workers and free
+All of it comes from the process heap shared with QuickJS, the framebuffer and
+the download buffers (128 MiB at the least on the PS5; see
+[DOWNLOAD-PERFORMANCE.md](DOWNLOAD-PERFORMANCE.md#framework-constraints)).
+Responses and decodes allocate with `malloc` and check the result, so running
+out of heap fails or retries one image instead of aborting the title. The PS5
+host logs `[PS5-REACT] memory: heap=live/size … img encoded=… decoded=…` about
+every ten seconds. Hosts stop the image workers and free
 every image before shutting the runtime down.
 
 Fetched bytes are also kept on disk in the app's data directory

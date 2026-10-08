@@ -30,7 +30,24 @@
 #include <pthread.h>
 #include <unordered_map>
 
-// stb_image reports failures through one global string; only the decode thread decodes.
+// stb_image reports failures through one global string; only the decode thread decodes. Some of its
+// allocation failures leave that string stale, so they are noted here instead.
+namespace {
+bool stb_out_of_memory = false;
+void* stb_malloc(std::size_t size) {
+  void* p = std::malloc(size);
+  stb_out_of_memory = stb_out_of_memory || !p;
+  return p;
+}
+void* stb_realloc(void* address, std::size_t size) {
+  void* p = std::realloc(address, size);
+  stb_out_of_memory = stb_out_of_memory || !p;
+  return p;
+}
+} // namespace
+#define STBI_MALLOC stb_malloc
+#define STBI_REALLOC stb_realloc
+#define STBI_FREE std::free
 #define STBI_NO_THREAD_LOCALS
 #define STBI_NO_STDIO
 #define STBI_NO_HDR
@@ -52,6 +69,42 @@ namespace images {
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr unsigned kConnections = 32, kAttempts = 3;
+// While a download runs it holds up to 64 connections and their TLS state; images take fewer.
+constexpr unsigned kDownloadConnections = 8;
+// New fetches wait while encoded bytes held anywhere (transfers, the decode queue, the encoded
+// cache) exceed this; transfers in flight still finish. Responses are rarely over 2 MiB.
+constexpr std::size_t kEncodedBudget = kEncodedCacheBytes + 12 * 1024 * 1024;
+constexpr std::size_t kMinBodyCapacity = 64 * 1024;
+std::atomic<std::size_t> encoded_bytes{0}, decoded_bytes{0};
+
+// Encoded bytes in one malloc'd block: running out of heap fails one load (and retries it) instead
+// of aborting the title the way a throwing std::string allocation does without exceptions.
+struct Bytes {
+  Bytes() = default;
+  Bytes(Bytes&& other) noexcept { *this = std::move(other); }
+  Bytes& operator=(Bytes&& other) noexcept {
+    clear();
+    std::swap(data, other.data); std::swap(size, other.size); std::swap(capacity, other.capacity);
+    return *this;
+  }
+  ~Bytes() { clear(); }
+  bool reserve(std::size_t want) {
+    if (want <= capacity) return true;
+    void* grown = std::realloc(data, want);
+    if (!grown) return false;
+    encoded_bytes += want - capacity;
+    data = static_cast<char*>(grown); capacity = want;
+    return true;
+  }
+  void clear() {
+    std::free(data);
+    encoded_bytes -= capacity;
+    data = nullptr; size = capacity = 0;
+  }
+  char* data = nullptr;
+  std::size_t size = 0, capacity = 0;
+};
+using Body = std::shared_ptr<const Bytes>;
 constexpr std::uint64_t kDrawn = std::uint64_t{1} << 62;
 // Warming fills the disk cache in the background: a few connections, only while no load waits, and
 // only files small enough that many fit.
@@ -59,7 +112,12 @@ constexpr unsigned kWarmConnections = 4;
 constexpr std::size_t kWarmMaxBytes = 512 * 1024;
 
 struct Entry {
-  ~Entry() { std::free(pixels); }
+  ~Entry() { free_pixels(); }
+  void free_pixels() {
+    if (pixels) decoded_bytes -= static_cast<std::size_t>(width) * height * 4;
+    std::free(pixels);
+    pixels = nullptr;
+  }
   std::uint32_t id = 0;
   std::string key, url;
   int box_width = 0, box_height = 0;
@@ -70,7 +128,7 @@ struct Entry {
   // key scrolls past hundreds of covers; serving them oldest first left the ones on screen waiting.
   std::atomic<std::uint64_t> rank{0};
   // Written by the workers before the entry is handed to poll() under the service mutex.
-  std::shared_ptr<const std::string> body;
+  Body body;
   std::uint32_t* pixels = nullptr;
   int width = 0, height = 0;
   bool opaque = true;
@@ -88,9 +146,10 @@ using EntryPtr = std::shared_ptr<Entry>;
 // One request per URL: loads of the same URL for other boxes join it and decode its bytes.
 struct Transfer {
   CURL* curl = nullptr;
-  std::string url, body;
+  std::string url;
+  Bytes body;
   std::vector<EntryPtr> entries;
-  bool overflow = false;
+  bool overflow = false, out_of_memory = false;
   // Started by warm(): written to the disk cache; loads of its URL join it.
   bool warm = false;
 };
@@ -98,7 +157,7 @@ struct Transfer {
 // Recently fetched encoded bytes by URL, so another box for the same image decodes without a fetch.
 struct Encoded {
   std::string url;
-  std::shared_ptr<const std::string> body;
+  Body body;
   std::uint64_t used = 0;
 };
 
@@ -186,6 +245,7 @@ bool resample(const unsigned char* source, int width, int channels, const Plan& 
     }
   }
   entry.pixels = out; entry.width = p.out_width; entry.height = p.out_height; entry.opaque = opaque;
+  decoded_bytes += count * sizeof(std::uint32_t);
   return true;
 }
 
@@ -224,9 +284,10 @@ std::int32_t vivid_color(const std::uint32_t* pixels, int width, int height) {
   return channel(red[best]) << 16 | channel(green[best]) << 8 | channel(blue[best]);
 }
 
-void decode(Entry& entry) {
-  const auto* bytes = reinterpret_cast<const stbi_uc*>(entry.body->data());
-  const int size = static_cast<int>(entry.body->size());
+// Returns false when the heap ran out, so the load can be tried again later.
+bool decode(Entry& entry) {
+  const auto* bytes = reinterpret_cast<const stbi_uc*>(entry.body->data);
+  const int size = static_cast<int>(entry.body->size);
   int width = 0, height = 0, components = 0;
   if (!stbi_info_from_memory(bytes, size, &width, &height, &components)) {
     entry.error = message(entry, std::string("not a decodable JPEG or PNG (") + stbi_failure_reason() + ")");
@@ -234,15 +295,22 @@ void decode(Entry& entry) {
     entry.error = message(entry, std::to_string(width) + "x" + std::to_string(height) +
                           " exceeds the 5-megapixel source limit");
   }
-  if (!entry.error.empty()) { entry.body.reset(); return; }
+  if (!entry.error.empty()) { entry.body.reset(); return true; }
   const int channels = components == 2 || components == 4 ? 4 : 3;
+  stb_out_of_memory = false;
   stbi_uc* source = stbi_load_from_memory(bytes, size, &width, &height, &components, channels);
   entry.body.reset();
-  if (!source) { entry.error = message(entry, std::string("decode failed (") + stbi_failure_reason() + ")"); return; }
+  if (!source) {
+    entry.error = message(entry, stb_out_of_memory ? std::string("out of memory to decode")
+                                                   : std::string("decode failed (") + stbi_failure_reason() + ")");
+    return !stb_out_of_memory;
+  }
   const Plan p = plan(width, height, entry.box_width, entry.box_height, entry.fit);
-  if (!resample(source, width, channels, p, entry)) entry.error = message(entry, "out of memory for decoded pixels");
-  else entry.color = vivid_color(entry.pixels, entry.width, entry.height);
+  const bool resampled = resample(source, width, channels, p, entry);
   stbi_image_free(source);
+  if (!resampled) { entry.error = message(entry, "out of memory for decoded pixels"); return false; }
+  entry.color = vivid_color(entry.pixels, entry.width, entry.height);
+  return true;
 }
 
 // Encoded responses kept on disk between launches, keyed by a hash of the URL. Each file holds a
@@ -267,31 +335,37 @@ public:
 
   bool has(const std::string& url) { return !directory_.empty() && find(key(url)); }
 
-  std::shared_ptr<const std::string> read(const std::string& url) {
+  // Null when missing, stale, corrupt or when the heap cannot hold it.
+  Body read(const std::string& url) {
     if (directory_.empty()) return nullptr;
     const std::string name = key(url);
     File* file = find(name);
     if (!file) return nullptr;
-    const int fd = ::open(path(name).c_str(), O_RDONLY);
-    std::string bytes(file->size, '\0');
-    const bool whole = fd >= 0 && ::read(fd, bytes.data(), bytes.size()) == static_cast<ssize_t>(bytes.size());
-    if (fd >= 0) close(fd);
     Header header{};
-    if (!whole || bytes.size() < sizeof header) return nullptr;
-    std::memcpy(&header, bytes.data(), sizeof header);
-    const std::size_t start = sizeof header + header.url_size;
-    if (std::memcmp(header.magic, kMagic, sizeof header.magic) || start > bytes.size() ||
-        bytes.compare(sizeof header, header.url_size, url) || std::time(nullptr) - header.fetched > kMaxAgeSeconds) {
-      remove(name);
-      return nullptr;
-    }
+    const std::size_t start = sizeof header + url.size();
+    if (file->size < start || file->size - start > kMaxEncodedBytes) { remove(name); return nullptr; }
+    const int fd = ::open(path(name).c_str(), O_RDONLY);
+    if (fd < 0) return nullptr;
+    std::string stored(url.size(), '\0');
+    const bool valid = ::read(fd, &header, sizeof header) == static_cast<ssize_t>(sizeof header) &&
+      !std::memcmp(header.magic, kMagic, sizeof header.magic) && header.url_size == url.size() &&
+      ::read(fd, stored.data(), stored.size()) == static_cast<ssize_t>(stored.size()) && stored == url &&
+      std::time(nullptr) - header.fetched <= kMaxAgeSeconds;
+    Bytes body;
+    const std::size_t size = file->size - start;
+    const bool held = valid && body.reserve(std::max<std::size_t>(size, 1));
+    const bool whole = held && ::read(fd, body.data, size) == static_cast<ssize_t>(size);
+    close(fd);
+    if (valid && !held) return nullptr;
+    if (!whole) { remove(name); return nullptr; }
+    body.size = size;
     file->used = std::time(nullptr);
     utimes(path(name).c_str(), nullptr);
-    return std::make_shared<const std::string>(bytes.substr(start));
+    return std::make_shared<const Bytes>(std::move(body));
   }
 
-  void write(const std::string& url, const std::string& body) {
-    if (directory_.empty() || body.size() > kDiskCacheBytes / 4) return;
+  void write(const std::string& url, const Bytes& body) {
+    if (directory_.empty()) return;
     const std::string name = key(url), temporary = path(name + ".tmp");
     Header header{};
     std::memcpy(header.magic, kMagic, sizeof header.magic);
@@ -301,9 +375,9 @@ public:
     if (fd < 0) return;
     const bool ok = ::write(fd, &header, sizeof header) == static_cast<ssize_t>(sizeof header) &&
       ::write(fd, url.data(), url.size()) == static_cast<ssize_t>(url.size()) &&
-      ::write(fd, body.data(), body.size()) == static_cast<ssize_t>(body.size());
+      ::write(fd, body.data, body.size) == static_cast<ssize_t>(body.size);
     if (close(fd) != 0 || !ok || rename(temporary.c_str(), path(name).c_str()) != 0) { unlink(temporary.c_str()); return; }
-    const std::size_t size = sizeof header + url.size() + body.size();
+    const std::size_t size = sizeof header + url.size() + body.size;
     if (File* old = find(name)) { total_ -= old->size; old->size = size; old->used = header.fetched; }
     else files_.push_back({name, size, header.fetched});
     total_ += size;
@@ -431,8 +505,7 @@ public:
     const auto found = by_id_.find(id);
     if (found == by_id_.end()) return;
     Entry& entry = *found->second;
-    std::free(entry.pixels);
-    entry.pixels = nullptr;
+    entry.free_pixels();
     entry.error = message(entry, reason);
   }
 
@@ -501,12 +574,26 @@ private:
     { std::lock_guard lock(mutex_); finished_.push_back(entry); }
   }
 
+  // Grows the body to the announced length at once when there is one, else by doubling, never
+  // past the limit.
   static std::size_t body(char* data, std::size_t size, std::size_t count, void* opaque) {
     auto& t = *static_cast<Transfer*>(opaque);
     const std::size_t length = size * count;
     const std::size_t limit = t.entries.empty() ? kWarmMaxBytes : kMaxEncodedBytes;
-    if (length > limit - t.body.size()) { t.overflow = true; return 0; }
-    t.body.append(data, length);
+    curl_off_t announced = -1;
+    curl_easy_getinfo(t.curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &announced);
+    if (length > limit - t.body.size || (announced > 0 && static_cast<std::uint64_t>(announced) > limit)) {
+      t.overflow = true;
+      return 0;
+    }
+    const std::size_t needed = t.body.size + length;
+    if (needed > t.body.capacity) {
+      const std::size_t want = announced > 0 && static_cast<std::size_t>(announced) >= needed
+        ? static_cast<std::size_t>(announced) : std::max({needed, kMinBodyCapacity, t.body.capacity * 2});
+      if (!t.body.reserve(std::min(want, limit))) { t.out_of_memory = true; return 0; }
+    }
+    std::memcpy(t.body.data + t.body.size, data, length);
+    t.body.size = needed;
     return length;
   }
 
@@ -523,7 +610,7 @@ private:
     finish(entry);
   }
 
-  void decode_later(std::vector<EntryPtr> entries, const std::shared_ptr<const std::string>& body) {
+  void decode_later(std::vector<EntryPtr> entries, const Body& body) {
     {
       std::lock_guard lock(mutex_);
       for (EntryPtr& entry : entries) if (!entry->cancelled) { entry->body = body; decodes_.push_back(std::move(entry)); }
@@ -531,18 +618,18 @@ private:
     wake_.notify_all();
   }
 
-  std::shared_ptr<const std::string> cached(const std::string& url) {
+  Body cached(const std::string& url) {
     for (Encoded& e : encoded_) if (e.url == url) { e.used = ++fetch_clock_; return e.body; }
     return nullptr;
   }
 
-  void remember(const std::string& url, std::shared_ptr<const std::string> body) {
-    std::size_t total = body->size();
-    for (const Encoded& e : encoded_) total += e.body->size();
+  void remember(const std::string& url, Body body) {
+    std::size_t total = body->size;
+    for (const Encoded& e : encoded_) total += e.body->size;
     while (total > kEncodedCacheBytes && !encoded_.empty()) {
       auto oldest = std::min_element(encoded_.begin(), encoded_.end(),
                                      [](const Encoded& a, const Encoded& b) { return a.used < b.used; });
-      total -= oldest->body->size();
+      total -= oldest->body->size;
       encoded_.erase(oldest);
     }
     if (total <= kEncodedCacheBytes) encoded_.push_back({url, std::move(body), ++fetch_clock_});
@@ -572,7 +659,7 @@ private:
   Transfer* begin(const std::string& url, bool warm) {
     Transfer* t = nullptr;
     for (Transfer& candidate : transfers_) if (!busy(candidate)) { t = &candidate; break; }
-    t->url = url; t->body.clear(); t->overflow = false; t->warm = warm;
+    t->url = url; t->body.clear(); t->overflow = t->out_of_memory = false; t->warm = warm;
     return t;
   }
 
@@ -615,17 +702,18 @@ private:
     std::erase_if(entries, [](const EntryPtr& e) { return e->cancelled.load(); });
     long status = 0;
     curl_easy_getinfo(t.curl, CURLINFO_RESPONSE_CODE, &status);
-    const bool transient = result == CURLE_COULDNT_CONNECT || result == CURLE_OPERATION_TIMEDOUT ||
+    const bool transient = t.out_of_memory || result == CURLE_COULDNT_CONNECT || result == CURLE_OPERATION_TIMEDOUT ||
       result == CURLE_RECV_ERROR || result == CURLE_SEND_ERROR || result == CURLE_PARTIAL_FILE ||
       status == 429 || status == 502 || status == 503 || status == 504;
     std::string reason;
-    if (t.overflow) reason = "response exceeds 8 MiB";
+    if (t.overflow) reason = "response exceeds " + std::to_string(kMaxEncodedBytes >> 20) + " MiB";
+    else if (t.out_of_memory) reason = "out of memory for the response";
     else if (result != CURLE_OK) reason = curl_easy_strerror(result);
     else if (status != 200) reason = "HTTP " + std::to_string(status);
     if (reason.empty() && entries.empty()) {
       disk_.write(t.url, t.body);
     } else if (reason.empty()) {
-      auto body = std::make_shared<const std::string>(std::move(t.body));
+      Body body = std::make_shared<const Bytes>(std::move(t.body));
       remember(t.url, body);
       disk_.write(t.url, *body);
       decode_later(std::move(entries), body);
@@ -641,7 +729,7 @@ private:
         }
       }
     }
-    std::string().swap(t.body);
+    t.body.clear();
   }
 
   void fetch_loop() {
@@ -651,6 +739,7 @@ private:
     while (true) {
       std::vector<EntryPtr> starting;
       bool idle = false;
+      const unsigned connections = network::downloading() ? kDownloadConnections : kConnections;
       {
         std::lock_guard lock(mutex_);
         if (stopping_) break;
@@ -658,7 +747,8 @@ private:
         std::erase_if(fetches_, [](const EntryPtr& e) { return e->cancelled.load(); });
         std::stable_sort(fetches_.begin(), fetches_.end(), [](const EntryPtr& a, const EntryPtr& b) { return a->rank > b->rank; });
         // Loads joining a transfer or served from cache take no connection; this bound is loose.
-        for (auto it = fetches_.begin(); it != fetches_.end() && active + starting.size() < kConnections;) {
+        for (auto it = fetches_.begin(); it != fetches_.end() && active + starting.size() < connections &&
+                                          encoded_bytes < kEncodedBudget;) {
           if ((*it)->retry_at > now) { ++it; continue; }
           starting.push_back(std::move(*it));
           it = fetches_.erase(it);
@@ -666,7 +756,7 @@ private:
         idle = fetches_.empty();
       }
       for (EntryPtr& entry : starting) start_fetch(std::move(entry), active);
-      while (idle && active < kConnections && warming < kWarmConnections) {
+      while (idle && active < connections && warming < kWarmConnections && encoded_bytes < kEncodedBudget) {
         const unsigned before = warming;
         start_warm(active, warming);
         if (warming == before) break;
@@ -701,8 +791,12 @@ private:
         decodes_.erase(next);
       }
       if (entry->cancelled) continue;
-      decode(*entry);
-      finish(entry);
+      if (decode(*entry) || ++entry->attempts >= kAttempts) { finish(entry); continue; }
+      // Out of heap: fetched again (usually from the encoded or disk cache) once memory may be free.
+      entry->error.clear();
+      entry->retry_at = Clock::now() + std::chrono::seconds(entry->attempts);
+      { std::lock_guard lock(mutex_); fetches_.push_back(std::move(entry)); }
+      curl_multi_wakeup(multi_);
     }
   }
 
@@ -739,6 +833,7 @@ std::uint32_t load(const std::string& url, int width, int height, Fit fit, bool 
 void release(std::uint32_t id, bool prefetch) { service.release(id, prefetch); }
 void warm(std::vector<std::string> urls) { service.warm(std::move(urls)); }
 std::vector<Result> poll(void (*evict)(std::uint32_t)) { return service.poll(evict); }
+Memory memory() { return {encoded_bytes.load(), decoded_bytes.load()}; }
 } // namespace images
 #else
 namespace images {
@@ -751,5 +846,6 @@ std::uint32_t load(const std::string& url, int, int, Fit, bool, Result&, std::st
 void release(std::uint32_t, bool) {}
 void warm(std::vector<std::string>) {}
 std::vector<Result> poll(void (*)(std::uint32_t)) { return {}; }
+Memory memory() { return {}; }
 } // namespace images
 #endif

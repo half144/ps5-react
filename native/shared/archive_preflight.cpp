@@ -18,7 +18,8 @@
 namespace archives {
 namespace {
 // libarchive sizes its decoder windows from the archive and has no memory limit option, while the title
-// shares one fixed 128 MiB heap and a failed allocation aborts the app. 64 MiB fits because an app's
+// shares one heap (128 MiB on a console that leaves little flexible memory) and a failed allocation
+// inside libarchive aborts the app. 64 MiB fits that floor because an app's
 // queue never downloads while it extracts (downloads alone peak past 100 MiB), and it admits 7-Zip ultra
 // and WinRAR 7's default 32 MB dictionary, which libarchive doubles. Only archive-declared windows count;
 // fixed decoder state (bzip2's 3.6 MiB, LZMA's 30 KiB) does not.

@@ -39,10 +39,11 @@ using Clock = std::chrono::steady_clock;
 constexpr std::size_t block_size = 128 * 1024, block_count = 128;
 constexpr unsigned max_connections = 64, max_jobs = 8, max_ranges = 65536;
 // Two writers keep one large write going while the next batch is copied; more did not raise PS5 storage
-// throughput. Every buffer here comes out of the title's fixed 128 MiB heap, shared with images and JS.
+// throughput. Every buffer here comes out of the title's one heap (128 MiB at the least), shared with images and JS.
 constexpr unsigned writer_count = 2;
 static_assert(sizeof(off_t) >= 8, "Large downloads require 64-bit file offsets");
 constexpr std::uint64_t safe_integer = 9007199254740991ULL;
+std::atomic<bool> downloading_file{false};
 
 // Used for optional final-file verification and checkpoint identity, off the JS thread.
 using integrity::Hash;
@@ -770,7 +771,7 @@ bool Service::configure(Transfer& t) {
   // Custom application headers must never be forwarded to an unrelated redirect origin.
   if (!configure_transport(t.curl, url, job.request.follow_redirects && job.request.headers.empty())) ok = false;
   // body() copies each callback into one block, so curl must never hand over more than a block. Smaller
-  // still: older curl gives every one of the 64 transfers its own buffer, out of the 128 MiB heap.
+  // still: older curl gives every one of the 64 transfers its own buffer, out of the title's heap.
   set(CURLOPT_BUFFERSIZE, 64L * 1024);
   set(CURLOPT_HTTPHEADER, t.headers);
   set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, &t);
@@ -1181,6 +1182,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
   }
   { std::lock_guard lock(job->mutex); job->snapshot.state = "connecting"; }
   const bool file = !job->request.destination.empty();
+  downloading_file = file;
   const bool prepared = !file || prepare(*job);
   for (Transfer& t : transfers_) t.probe = false;
   if (prepared && !job->cancelled && !job->recovering) {
@@ -1327,6 +1329,7 @@ void Service::network_loop() {
       job = waiting_.front(); waiting_.pop_front();
     }
     run_job(job);
+    downloading_file = false;
   }
 }
 } // namespace
@@ -1335,6 +1338,7 @@ void stop() { service.stop(); }
 std::uint32_t enqueue(Request request, std::string& error) { return service.enqueue(std::move(request), error); }
 void cancel(std::uint32_t id) { service.cancel(id); }
 std::vector<Snapshot> poll() { return service.poll(); }
+bool downloading() { return downloading_file; }
 const char* version() { return curl_version(); }
 } // namespace network
 #else
@@ -1346,6 +1350,7 @@ std::uint32_t enqueue(Request, std::string& error) {
 }
 void cancel(std::uint32_t) {}
 std::vector<Snapshot> poll() { return {}; }
+bool downloading() { return false; }
 const char* version() { return "disabled"; }
 bool configure_transport(void*, const std::string&, bool) { return false; }
 } // namespace network
