@@ -17,6 +17,9 @@
   style lays rows out right to left, Text takes `writingDirection`, and
   `textAlign` gains `start` (now the default) and `end`, which `text-start` and
   `text-end` compile to.
+- Text, TextInput and nested-Text span strings are clipped at their 255- and
+  63-byte limits on a character boundary (`er_utf8_clip`): a span could end in
+  half a UTF-8 sequence, and a clipped string in a mark without its letter.
 
 ## Unreleased — native archive extraction
 

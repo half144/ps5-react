@@ -106,6 +106,10 @@ Latin, so a string containing them gets a taller line box: about 14% for
 Devanagari and Bengali and 28% for Arabic over Inter's (CJK keeps Inter's). Joined scripts take no `letterSpacing`, and faux
 bold does not widen them, so their joins stay intact. Each node's text is
 limited to 255 bytes (`ER_TEXT_MAX`): about 85 CJK or Devanagari characters.
+Each styled segment of a nested `Text` is limited to 63 bytes
+(`ER_SPAN_TEXT_MAX`, about 21 such characters), at most four segments. Longer
+text is cut at the last whole character, never inside a UTF-8 sequence or
+between a letter and its marks or conjunct.
 
 ## Right-to-left text
 

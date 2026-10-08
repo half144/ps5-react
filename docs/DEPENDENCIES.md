@@ -103,6 +103,9 @@ fonts cannot, and keeps node text from ending in half a UTF-8 sequence.
 type files; not yet proposed upstream) adds the inherited `direction` style with
 right-to-left flex layout, Text `writingDirection`, and `start`/`end` text
 alignment.
+`embeddedReact-text-clip.patch` (Apache-2.0 engine and bridge files; not yet
+proposed upstream) adds `er_utf8_clip()` and clips Text, TextInput and span
+strings at a character boundary rather than a byte count.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
