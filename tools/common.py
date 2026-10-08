@@ -131,7 +131,8 @@ def resource_files(app, config):
             if path.is_symlink() or not path.resolve().is_relative_to(app.resolve()):
                 raise ValueError(f"Resource symlinks are not supported: {entry}")
             target = path.relative_to(app)
-            if target.parts[0] in ("sce_sys", "sce_module", "notices") or str(target) in ("eboot.bin", "lapy.elf", "lapy-manifest.json"):
+            reserved = ("sce_sys", "sce_module", "notices", *(("fonts",) if config.get("textFonts") else ()))
+            if target.parts[0] in reserved or str(target) in ("eboot.bin", "lapy.elf", "lapy-manifest.json"):
                 raise ValueError(f"Resource would overwrite package infrastructure: {target}")
             if path.is_file(): files[target] = path
             elif not path.is_dir(): raise ValueError(f"Resource is not a regular file: {target}")
@@ -169,6 +170,10 @@ def app_config(app, config=None):
     if config.get("networking") and config.get("filesystemAccess", "sandbox") != "console":
         raise ValueError('networking requires filesystemAccess: "console" for the PS5 native transport')
     resource_files(app, config)
+    from text_fonts import SCRIPTS
+    fonts = config.get("textFonts", [])
+    if not isinstance(fonts, list) or len(set(fonts)) != len(fonts) or not set(fonts) <= SCRIPTS.keys():
+        raise ValueError(f"textFonts must list distinct scripts from: {', '.join(SCRIPTS)}")
     for other in (ROOT / "apps").glob("*/app.json"):
         if other.parent.resolve() != app.resolve() and json.loads(other.read_text())["titleId"] == title:
             raise ValueError(f"titleId already belongs to {other.parent.name}")
@@ -194,4 +199,6 @@ def bundle(app, er):
     if not (package / "node_modules").exists():
         run(["npm", "ci", "--omit=optional"], cwd=package, log=ROOT / ".build/npm-upstream.log")
     run(["node", ROOT / "tools/bundle.mjs", er, app, output], log=output.parent / "bundle.log")
+    from text_fonts import text_fonts
+    text_fonts(config, output / "fonts")
     return app, config, output

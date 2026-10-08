@@ -14,6 +14,7 @@ import sys
 import time
 
 from common import ROOT, app_config, app_files, bundle, dependency, run, stb_image
+from text_fonts import harfbuzz
 
 
 def sandbox(app):
@@ -38,7 +39,7 @@ def desktop(app, test=False):
     quickjs = dependency("quickjsSource")
     hui = dependency("platform")
     run(["cmake", "-S", ROOT / "native/desktop", "-B", build,
-         f"-DER_ROOT={er}", f"-DHUI_ROOT={hui}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", "-DCMAKE_BUILD_TYPE=Release"],
+         f"-DER_ROOT={er}", f"-DHUI_ROOT={hui}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", f"-DHB_ROOT={harfbuzz()}", "-DCMAKE_BUILD_TYPE=Release"],
         log=build / "configure.log")
     run(["cmake", "--build", build, "--target", "ps5-react-preview", "-j", "6"], log=build / "build.log")
     command = [build / "ps5-react-preview", generated / "app.bundle.js"]

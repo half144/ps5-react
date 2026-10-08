@@ -24,7 +24,8 @@
       "patches/embeddedReact-border-sweep.patch",
       "patches/embeddedReact-border-gradient.patch",
       "patches/embeddedReact-border-radial.patch",
-      "patches/embeddedReact-european-glyphs.patch"
+      "patches/embeddedReact-european-glyphs.patch",
+      "patches/embeddedReact-text-shaper.patch"
     ]
   },
   "platform": {
@@ -82,5 +83,20 @@
     "version": "v0.40.2",
     "url": "https://github.com/ps5-payload-dev/pacbrew-repo/releases/download/v0.40.2/ps5-payload-dev.tar.gz",
     "sha256": "a85f65de418a8e6a898c6c3e3c870d50fff7618a200e4dd59ea9692af6ecec4d"
+  },
+  "harfbuzz": {
+    "version": "14.6.0",
+    "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.6.0/harfbuzz-14.6.0.tar.xz",
+    "sha256": "d07a007327277708a2a73ae437887cdbaf282937f6d03ca5467723e9099af586"
+  },
+  "notoFonts": {
+    "NotoSansSC-Regular.otf": {
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf",
+      "sha256": "faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9"
+    },
+    "NotoSansJP-Regular.otf": {
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf",
+      "sha256": "dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073"
+    }
   }
 }

@@ -102,6 +102,17 @@
         "minLength": 1
       },
       "description": "Relative files or directories copied read-only into the application folder. No symlinks, traversal or package-infrastructure paths."
+    },
+    "textFonts": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "chinese",
+          "japanese"
+        ]
+      },
+      "description": "Scripts whose subset Noto font is packaged in fonts/ and rasterized at runtime when text needs it: chinese (GB 2312) and japanese (JIS X 0208). See docs/TEXT.md."
     }
   },
   "additionalProperties": false,

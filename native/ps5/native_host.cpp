@@ -22,6 +22,7 @@
 #include "input_script.hpp"
 #include "js_heap.hpp"
 #include "screenshot.hpp"
+#include "text_shaper.hpp"
 #include "filesystem_access.hpp"
 #include <algorithm>
 #include <cerrno>
@@ -250,6 +251,9 @@ bool run_proof() {
   }
   if (ok) {
     er_register_assets();
+    char fonts[256];
+    if (host::resolve_path("/app0/fonts", fonts, sizeof fonts))
+      text_shaper::install(fonts, [](const char* line) { async_log::write("[PS5-REACT] %s", line); });
     ok = er_runtime_load_source(proof_bundle, proof_bundle_length, "app.jsx.bundle");
     async_log::write("[PS5-REACT] bundle=%d gc_accounting=%d at %lldms", ok, er_runtime_gc_accounting_ok(), since_launch_ms());
   }
@@ -345,6 +349,7 @@ bool run_proof() {
   archives::stop();
   network::stop();
   if (runtime) er_runtime_shutdown();
+  text_shaper::shutdown();
   ps5_react_stop_sound();
   if (software) er_software_backend_destroy();
   host_platform_set_pad(nullptr);

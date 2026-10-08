@@ -176,6 +176,16 @@ export const Power = {
   keepAwake: enabled => host().power.keepAwake(Boolean(enabled)),
 };
 
+export const Fonts = {
+  /**
+   * The interface language, as a BCP 47 tag ('ja', 'zh-Hans', 'ar'), for text drawn from the
+   * runtime fonts (docs/TEXT.md): it picks Japanese or Chinese forms of Han characters and the
+   * shaping language. Defaults to the system language; set it before text renders.
+   * @param {string} tag
+   */
+  setLanguage: tag => host().text.setLanguage(String(tag)),
+};
+
 const backListeners = [];
 
 export const BackHandler = {

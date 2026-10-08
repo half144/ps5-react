@@ -5,6 +5,12 @@
 - Add the `latin-ext`, `cyrillic` and `european` baked glyph sets, so runtime
   text in Spanish, French, German, Portuguese, Indonesian, Russian and the other
   European languages renders without listing each letter (docs/TEXT.md).
+- Draw Chinese and Japanese text: app.json `textFonts` packages subset Noto Sans
+  SC (GB 2312) and JP (JIS X 0208) fonts, which HarfBuzz shapes and rasterizes
+  on demand into a 4 MiB glyph cache, loading each font only when text needs
+  it. CJK text breaks between characters with basic kinsoku rules.
+  `Fonts.setLanguage` (ABI v6) picks Japanese or Chinese Han forms; it defaults
+  to the system language.
 
 ## Unreleased — native archive extraction
 

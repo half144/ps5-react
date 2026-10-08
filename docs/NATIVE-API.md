@@ -272,6 +272,16 @@ homebrew use). The desktop preview disables or enables the SDL screen saver and
 prints `[power] keep awake on|off`. **Not yet validated on hardware**: no test
 has shown a console staying awake through its rest-mode timeout.
 
+## Fonts
+
+`Fonts.setLanguage(tag)` sets the interface language (a BCP 47 tag such as
+`'ja'`, `'zh-Hans'` or `'ar'`) for text drawn from the runtime fonts an app
+packages with `textFonts` ([International text](TEXT.md)). It chooses the
+Japanese or the Chinese form of Han characters and the language text is shaped
+for. It starts as `DeviceInfo` `language`; call it before text renders, since
+text already laid out keeps its layout until it changes. **Not yet validated on
+hardware.**
+
 ## BackHandler
 
 `BackHandler.exitApp()` asks the host to close the app after the current frame,

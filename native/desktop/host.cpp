@@ -31,6 +31,7 @@ void er_register_assets(void);
 #include "input_script.hpp"
 #include "js_heap.hpp"
 #include "screenshot.hpp"
+#include "text_shaper.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
 #include <algorithm>
@@ -139,6 +140,7 @@ struct Host {
     archives::stop();
   network::stop();
     if (runtime_started) er_runtime_shutdown();
+    text_shaper::shutdown();
     ps5_react_stop_sound();
     if (backend_started) er_software_backend_destroy();
     presenter.release(); // GL objects must be deleted before their context.
@@ -193,6 +195,7 @@ struct Host {
       JS_FreeValue(ctx, global);
     }
     er_register_assets();
+    text_shaper::install(PS5_REACT_FONT_DIR, [](const char* line) { std::printf("[PS5-REACT] %s\n", line); });
     FILE* file = std::fopen(path, "rb");
     if (!file) return false;
     bool ok = std::fseek(file, 0, SEEK_END) == 0;

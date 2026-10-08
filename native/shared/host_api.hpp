@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v5) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v6) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -65,6 +65,8 @@
 //   sound.play(name, volume, pan)  ABI v5; boolean; posts an imported WAV to the mixer (volume
 //                                  0..1, pan -1..1); false without audio or while it still plays
 //   sound.setVolume(volume)        master gain 0..1 for every sound
+//   text.setLanguage(tag)          ABI v6; BCP 47 language for runtime text (Han glyph forms,
+//                                  shaping); defaults to the system language
 //   exit()                         asks the host to close after this frame
 // Failures throw a JS Error whose message names the call, the path, and strerror.
 #pragma once

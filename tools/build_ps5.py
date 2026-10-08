@@ -17,6 +17,7 @@ import zipfile
 
 from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
 from network_ports import ports, copy_notices
+from text_fonts import harfbuzz
 
 BUILD = ROOT / ".build/starter/ps5"
 TITLE = "PPSA99053"
@@ -136,12 +137,16 @@ def main():
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
                ROOT / "native/shared/gl_presenter.cpp",
-               ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/js_heap.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", generated / "assets.generated.c",
+               ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/js_heap.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", ROOT / "native/shared/text_shaper.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system", "audio_out")],
                hui / "src/core/input.cpp", hui / "src/audio/mixer.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]
+    hb = harfbuzz() / "src"
+    # HarfBuzz (MIT): OpenType shaping and outline rasterization for runtime text, single-threaded.
+    harfbuzz_sources = [hb / "harfbuzz.cc", hb / "hb-raster-draw.cc", hb / "hb-raster-image.cc"]
+    sources.extend(harfbuzz_sources)
     includes = [hui / "src", ROOT / "native/shared", ROOT / "native/ps5", generated, gl / "include", er / "engine/include", er / "bridges/quickjs",
-                er / "backends/software", quickjs, stb_image(), archive_ports / "include"]
+                er / "backends/software", er / "engine/text", hb, quickjs, stb_image(), archive_ports / "include"]
     if access_client:
         sources.append(access_client / "examples/sandbox-elevation/src/elevation.cpp")
         includes.append(access_client / "examples/sandbox-elevation")
@@ -153,9 +158,10 @@ def main():
     objects = []
     for i, source in enumerate(sources):
         obj = BUILD / "obj" / f"{i}-{source.name}.o"
-        cpp = source.suffix == ".cpp"
+        cpp = source.suffix in (".cpp", ".cc")
         flags = ["-std=c++20", "-fno-exceptions", "-fno-rtti"] if cpp else ["-std=c11"]
-        run(["sh", hui / "tooling/prospero-clang18", *flags, "-O2", "-Wall", "-Wextra", "-Werror",
+        warnings = ["-w", "-DHB_TINY", "-DHB_HAS_RASTER"] if source in harfbuzz_sources else ["-Wall", "-Wextra", "-Werror"]
+        run(["sh", hui / "tooling/prospero-clang18", *flags, "-O2", *warnings,
              "-DPROSPERO=1", "-DGL_GLEXT_PROTOTYPES=1", *shlex.split(definitions),
              *[flag for path in includes for flag in ("-I", path)], "-c", source, "-o", obj],
             env=env, log=BUILD / (f"compile-{i}.log"))
@@ -206,12 +212,19 @@ def main():
         draw.text((48, 140), "PS5", font=font, fill="#45d4de")
         draw.text((48, 225), "React", font=font, fill="white")
         image.save(app / "sce_sys/icon0.png")
+    shutil.rmtree(app / "fonts", ignore_errors=True)
     for relative, source in resource_files(app_dir, config).items():
         target = app / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    fonts = sorted((generated / "fonts").glob("*"))
+    if fonts:
+        (app / "fonts").mkdir()
+        for font in fonts: shutil.copy2(font, app / "fonts" / font.name)
     notices = app / "notices"
     notices.mkdir(exist_ok=True)
+    (notices / "Noto-fonts-LICENSE.txt").unlink(missing_ok=True)
+    if fonts: shutil.copy2(ROOT / "licenses/Noto-fonts-LICENSE.txt", notices / "Noto-fonts-LICENSE.txt")
     if access_client:
         for name in ("lapy.elf", "lapy-manifest.json"):
             shutil.copy2(helper / name, app / name)
@@ -237,6 +250,7 @@ def main():
         "embedded-react-LICENSE": er / "LICENSE",
         "embedded-react-engine-LICENSE": er / "engine/LICENSE",
         "QuickJS-LICENSE": quickjs / "LICENSE",
+        "harfbuzz-COPYING": hb.parent / "COPYING",
         "Inter-LICENSE": hui / "assets/fonts/Inter-LICENSE.txt",
         "material-sounds-NOTICE.txt": ROOT / "licenses/material-sounds-NOTICE.txt",
         "ps5-opengl-LICENSE": gl.parent / "LICENSE",
