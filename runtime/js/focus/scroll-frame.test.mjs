@@ -14,6 +14,8 @@ function setup(maxY) {
     if (!Number.isNaN(y)) engine.y = Math.min(Math.max(y, 0), engine.maxY);
     return [engine.x, engine.y, 0, engine.maxY];
   }};
+  engine.deferred = 0;
+  globalThis.__ps5ReactNative = {image: {defer: ms => { engine.deferred = ms; }}};
   const targets = [];
   const frame = createFrame(null);
   frame.props = {onScrollTarget: target => targets.push(target)};
@@ -36,6 +38,7 @@ test('onScrollTarget reports each new focus-scroll target once, when the scroll 
   assert.equal(engine.y, 412);
   assert.equal(frame.y, 412);
   assert.equal(targets.length, 1, 'arriving is not a new target');
+  assert.equal(engine.deferred, 150, 'image fetches wait while the view moves');
 });
 
 test('onScrollTarget reports where the scroll settled when shrinking content clamps it', () => {

@@ -5,6 +5,7 @@
 // NativeUI.scrollTo (patches/embeddedReact-scroll-to.patch) and `onScrollTarget`. Free of React so
 // tests can drive it with a stand-in NativeUI.
 import {onFrame} from '../frame.js';
+import {deferImageFetches} from '../native.js';
 import {anchorOffset, catchUpSpeed, revealOffset, scrollStep} from './geometry.js';
 
 // 32 logical px of a 1280-wide layout, in screen px like the layout rectangles.
@@ -17,6 +18,10 @@ const MAX_LOGICAL_PX_PER_FRAME = 40;
 const ACCEL_LOGICAL_PX = 12;
 const BRAKE_LOGICAL_PX = 4;
 const FRAME_MS = 1000 / 60;
+// Images wait while the view moves and this long after it stops, like a browser's lazy loading: art
+// that only flies past is never fetched; what the view stops on (with the rows the list mounts ahead)
+// starts then. Cached art still draws during the scroll.
+const IMAGE_DEFER_MS = 150;
 
 function assignRef(ref, value) {
   if (typeof ref === 'function') ref(value);
@@ -70,6 +75,7 @@ export function createFrame(parent) {
           frame.speed = [speedX, speedY];
         }
         const [atX, atY] = NativeUI.scrollTo(frame.handle, x, y);
+        deferImageFetches(IMAGE_DEFER_MS);
         // The engine stores offsets as floats. Far from the request means clamped by a content size that
         // changed since the target was chosen: settle where it stopped.
         if (Math.abs(atX - x) > 0.5) frame.target[0] = x = Math.round(atX);

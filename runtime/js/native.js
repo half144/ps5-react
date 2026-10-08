@@ -380,6 +380,14 @@ export function warmImages(uris) {
   host().image.warm(uris);
 }
 
+/**
+ * Internal: holds image requests to the network back for `ms`, called every frame a ScrollView
+ * moves, so a held key does not fetch the art of every row it passes. @param {number} ms
+ */
+export function deferImageFetches(ms) {
+  host().image.defer(ms);
+}
+
 export function acquireImage(uri, width, height, fit, prefetch, listener) {
   const result = host().image.load(uri, width, height, fit, prefetch);
   const {id} = result;

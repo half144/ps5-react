@@ -63,6 +63,17 @@ void log_memory() {
   const images::Memory image = images::memory();
   async_log::write("[PS5-REACT] memory: heap=%zu/%zuMiB peak=%zuMiB failed=%zu img encoded=%zuKiB decoded=%zuKiB",
                    live >> 20, size >> 20, peak >> 20, failures, image.encoded >> 10, image.decoded >> 10);
+  async_log::write("[PS5-REACT] images: %s", images::stats().c_str());
+}
+
+// Unused decoded images kept for scrolling back. Browsing peaks near 110 MiB live with 24 MiB of them
+// and a 64-connection download, so a 128 MiB heap keeps 24 MiB; a 256 MiB heap holds 64 MiB (about 160
+// grid covers, or a hero and 140 covers) and still leaves over 80 MiB free at that peak.
+std::size_t image_cache_bytes() {
+  std::size_t heap = 0;
+  hui_heap_capacity(&heap, nullptr, nullptr);
+  constexpr std::size_t MiB = 1024 * 1024;
+  return heap >= 256 * MiB ? 64 * MiB : heap >= 192 * MiB ? 40 * MiB : 24 * MiB;
 }
 
 // A file in the app folder's dev/ directory. After console filesystem elevation /app0 is only a
@@ -235,6 +246,7 @@ bool run_proof() {
     host_platform_set_pad(&pad);
   }
   if (ok) {
+    images::set_cache_bytes(image_cache_bytes());
     if (network::start()) ps5_react_start_images();
     async_log::write("[PS5-REACT] sound=%d at %lldms", ps5_react_start_sound(), since_launch_ms());
     ErRuntimeConfig config = {};

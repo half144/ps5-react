@@ -13,10 +13,11 @@ namespace images {
 // How a decoded image is fitted to the requested box, as the engine's resizeMode draws it.
 enum class Fit : std::uint8_t { cover, contain, stretch, none };
 
-// Decoded pixels that stay cached while unused, least recently used evicted first. Images in use
-// are never evicted, so a screen that shows more than this exceeds it.
-constexpr std::size_t kCacheBytes = 24 * 1024 * 1024;
-constexpr std::size_t kCacheEntries = 128;
+// Decoded pixels that stay cached while unused, least recently used evicted first, by default. Images
+// in use are never evicted, so a screen that shows more than this exceeds it. set_cache_bytes() sizes
+// it for the host's heap.
+constexpr std::size_t kCacheBytes = 64 * 1024 * 1024;
+constexpr std::size_t kCacheEntries = 256;
 // Larger responses fail. Store covers and 1920x1080 screenshots measure under 2 MiB.
 constexpr std::size_t kMaxEncodedBytes = 4 * 1024 * 1024;
 // Encoded bytes kept by URL, so the same image drawn at another size decodes without a fetch.
@@ -60,4 +61,13 @@ void discard(std::uint32_t id, const std::string& reason);
 // Heap the loader holds now: encoded bytes (transfers, decode queue, encoded cache) and decoded pixels.
 struct Memory { std::size_t encoded = 0, decoded = 0; };
 Memory memory();
+// Holds back requests to the network for `ms` from now (render thread), while a list scrolls past
+// images it would only fetch to drop: loads from the caches carry on, the rest start once it ends.
+void defer(int ms);
+// Replaces the decoded cache budget (render thread, any time).
+void set_cache_bytes(std::size_t bytes);
+// Counters since start() and the busiest origins, one line for the host's periodic memory log:
+// how loads were served (decoded cache, encoded cache, disk, network), decodes, cancellations,
+// retries and failures, and per origin its requests, failures, average latency and bytes.
+std::string stats();
 } // namespace images

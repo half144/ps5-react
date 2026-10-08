@@ -188,6 +188,9 @@ def main():
         started = time.monotonic()
         assert run("cancel", origin + "/slow.jpg") == {"reported": 0}
         assert time.monotonic() - started < 2.5
+        before = len(Handler.requests)
+        assert run("flyby", origin + "/photo.jpg?flyby") == {"reported": 0}
+        assert len(Handler.requests) == before, Handler.requests[before:]
         # 12 images of 4 MiB against a 24 MiB budget: the 6 oldest unused go, the one in use stays.
         evicted = run("evict", origin + "/photo.jpg", 12)
         assert evicted == {"loaded": 12, "evicted": 6, "first": 2, "kept": True}, evicted

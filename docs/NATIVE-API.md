@@ -154,7 +154,8 @@ drawn, into a bounded LRU cache. `Image.prefetch(uri, {width, height,
 resizeMode})` warms that cache. `Image.getColor(uri)` resolves to the art's most
 prominent vivid colour as `'#rrggbb'`, or `null` for grey or dark art, computed
 while decoding a small copy. The bridge (`image.load`, `image.release`,
-`image.poll`, ABI v3; results carry that `color`) is internal to the `Image` component. See
+`image.poll`, ABI v3; results carry that `color`; `image.warm` and `image.defer(ms)`, which
+ScrollViews call while they move to hold network requests back) is internal to the `Image` component. See
 [IMAGES.md](IMAGES.md) for sizing, formats, memory budgets and errors.
 
 ## Notifications

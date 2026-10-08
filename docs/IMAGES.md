@@ -42,6 +42,13 @@ them with no opt-in.
   the URL, for example `Image.load https://example.com/a.jpg: HTTP 404`.
 - **Lifetime.** Unmounting the element or changing its `source` releases the
   image; a fetch or decode that nothing else is waiting for is cancelled.
+- **Lazy loading.** As a browser's `loading="lazy"`, an element's image goes to
+  the network only once it has been mounted for 120 ms, and no request starts
+  while a ScrollView moves or for 150 ms after it stops: a held key scrolls past
+  rows without fetching their art (holding Down through the Overdrive grid for
+  3 s went from 140 fetches and 167 decodes to 45 and 69), and the rows the view
+  stops on, with those a VirtualList mounts ahead, load then. Art in the decoded,
+  encoded or disk cache is not held back. Prefetches skip the 120 ms wait.
 
 `Image.prefetch(uri, {width, height, resizeMode})` loads a URL ahead of time for
 a box (pass the same style size the `<Image>` will have) and resolves when it is
@@ -63,7 +70,8 @@ fetched again) and samples at most about 16k pixels: use it for an accent or
 | Encoded size | 4 MiB per response (store covers and 1920 × 1080 screenshots measure under 2 MiB) |
 | Source size | 5 megapixels (for example 3840 × 1300) |
 | Request | GET, 30-second total timeout, the shared transport policy of [NETWORKING.md](NETWORKING.md) (verified TLS, at most five redirects, identity encoding) |
-| Retries | Two more attempts after connection failures, timeouts, HTTP 429/502/503/504 and running out of heap (for the response or the decode) |
+| Retries | Four more attempts, 0.5, 1, 2 and 4 s apart, after connection failures, timeouts, HTTP 429/502/503/504 and running out of heap for the response; two more, 1 and 2 s apart, from the fetched bytes after running out of heap to decode |
+| Connections | At most 8 per origin, kept alive between requests (HTTP/1.1: the console's libcurl has no HTTP/2) |
 
 ## Memory and threads
 
@@ -76,7 +84,7 @@ while loads are pending, then registers finished pixels with the engine.
 
 | Budget | Value |
 | --- | --- |
-| Decoded cache | 24 MiB and at most 128 images. Images in use are never evicted, so a screen that draws more than that exceeds it; unused ones are evicted least recently used first |
+| Decoded cache | 64 MiB and at most 256 images; the PS5 host keeps 64 MiB with a heap of 256 MiB or more, 40 MiB from 192 MiB and 24 MiB below. Images in use are never evicted, so a screen that draws more than that exceeds it; unused ones are evicted least recently used first |
 | Encoded cache | 4 MiB of recently fetched bytes by URL, so the same image at another size decodes without a second fetch. Loads of a URL already being fetched join that request |
 | Decode | One image at a time; a decode holds about 4.5 bytes per source pixel for JPEG and 8 for PNG (up to 40 MiB at the source limit) until it finishes |
 | In flight | No new fetch starts while encoded bytes held anywhere (responses, decode queue, encoded cache) pass 16 MiB; up to 32 connections, 8 while a download to a file runs |
@@ -88,11 +96,17 @@ the download buffers (128 MiB at the least on the PS5; see
 Responses and decodes allocate with `malloc` and check the result, so running
 out of heap fails or retries one image instead of aborting the title. The PS5
 host logs `[PS5-REACT] memory: heap=live/size … img encoded=… decoded=…` about
-every ten seconds. Hosts stop the image workers and free
+every ten seconds, followed by `[PS5-REACT] images:` with counters since launch:
+loads by where they were served from (`decoded-cache`, `encoded-cache`, `disk`,
+`net`), `decodes` with their average time, `shown` with the average and longest
+time from request to pixels for images an element waits on, `cancelled` loads,
+`aborted` transfers, `retries` and `failed`, then the four busiest origins with
+their requests, failures, average time and size. The desktop preview prints the
+same line every two seconds while it changes. Hosts stop the image workers and free
 every image before shutting the runtime down.
 
 Fetched bytes are also kept on disk in the app's data directory
-(`FileSystem.dataDir` + `/.cache/images`, at most 64 MiB, least recently used
+(`FileSystem.dataDir` + `/.cache/images`, at most 256 MiB, least recently used
 first), so a relaunch decodes art without the network. Entries are fetched
 again after a week; responses over 16 MiB are not stored. Deleting the
 directory clears the cache.

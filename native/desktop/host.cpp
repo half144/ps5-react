@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "network.hpp"
+#include "image_loader.hpp"
 #include "archives.hpp"
 #include "app_config.hpp"
 #define SDL_MAIN_HANDLED
@@ -122,7 +123,8 @@ struct Host {
   GlPresenter presenter;
   FrameStats stats;
   bool log_frames = true, running = true, runtime_started = false, backend_started = false;
-  Uint32 previous_tick = 0, next_repeat = 0;
+  Uint32 previous_tick = 0, next_repeat = 0, next_image_stats = 0;
+  std::string image_stats;
   const char* held_action = nullptr;
   InputScript script;
   Control control;
@@ -402,6 +404,15 @@ struct Host {
     if (const char* line = stats.end_frame(slow_frame_us); line && log_frames) {
       std::printf("[PS5-REACT] %s\n", line);
       std::fflush(stdout);
+    }
+    // The PS5 host prints this with its memory line; here every two seconds while it changes.
+    if (SDL_TICKS_PASSED(now, next_image_stats)) {
+      next_image_stats = now + 2000;
+      if (std::string line = images::stats(); line != image_stats) {
+        std::printf("[PS5-REACT] images: %s\n", line.c_str());
+        std::fflush(stdout);
+        image_stats = std::move(line);
+      }
     }
     return !*er_runtime_last_error();
   }

@@ -97,8 +97,15 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     images::release(id, false);
     std::printf("{\"reported\":%zu}\n", wait(1, 1500).size());
+  } else if (mode == "flyby") {
+    // An image released within its dwell, as a card a held key scrolls past, is never requested.
+    const auto id = load(url, 64, 64, 0, now);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    images::release(id, false);
+    std::printf("{\"reported\":%zu}\n", wait(1, 400).size());
   } else if (mode == "evict") {
     // Unused images over budget are evicted oldest first; images in use never are.
+    images::set_cache_bytes(24 * 1024 * 1024);
     const int count = std::atoi(argv[3]);
     std::vector<std::uint32_t> ids;
     for (int i = 0; i < count; ++i) ids.push_back(load(url + "?n=" + std::to_string(i), 1024, 1024, 2, now));

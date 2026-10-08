@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
@@ -68,9 +69,22 @@ void* stb_realloc(void* address, std::size_t size) {
 namespace images {
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr unsigned kConnections = 32, kAttempts = 3;
+// Five attempts, 0.5 + 1 + 2 + 4 s apart: a console that briefly cannot connect (Wi-Fi waking, a
+// burst of handshakes refused) recovers instead of failing every image on screen at once.
+constexpr unsigned kConnections = 32, kAttempts = 5;
+// A decode that ran out of heap is tried again 1 and 2 s later, from the cached bytes.
+constexpr unsigned kDecodeAttempts = 3;
 // While a download runs it holds up to 64 connections and their TLS state; images take fewer.
 constexpr unsigned kDownloadConnections = 8;
+// Per origin, on reused keep-alive connections (the console's curl has no HTTP/2): a grid of 30 Sony
+// covers opened 30 TLS handshakes to one host at once.
+constexpr long kHostConnections = 8;
+// An element's image goes to the network only once it has been wanted this long, like a browser's
+// lazy loading: a held key scrolls a card past in about 50 ms and it is released before it fetches.
+// Images in the decoded, encoded or disk cache skip the wait.
+constexpr auto kDwell = std::chrono::milliseconds(120);
+std::atomic<std::size_t> cache_bytes{kCacheBytes};
+std::atomic<Clock::rep> deferred_until{0};
 // New fetches wait while encoded bytes held anywhere (transfers, the decode queue, the encoded
 // cache) exceed this; transfers in flight still finish. Responses are rarely over 2 MiB.
 constexpr std::size_t kEncodedBudget = kEncodedCacheBytes + 12 * 1024 * 1024;
@@ -105,6 +119,30 @@ struct Bytes {
   std::size_t size = 0, capacity = 0;
 };
 using Body = std::shared_ptr<const Bytes>;
+
+// Telemetry for the host's memory log. Counters are atomics; origins are guarded by their mutex.
+struct Counters {
+  std::atomic<std::uint64_t> loads{0}, decoded_hits{0}, encoded_hits{0}, disk_hits{0}, fetches{0}, decodes{0},
+    decode_us{0}, cancelled{0}, aborted{0}, retries{0}, failed{0}, shown{0}, shown_ms{0}, shown_max_ms{0};
+} counters;
+struct Origin { std::string host; std::uint64_t requests = 0, failures = 0, ms = 0, bytes = 0; };
+std::mutex origins_mutex;
+std::vector<Origin> origins;
+
+std::string host_of(const std::string& url) {
+  const std::size_t start = url.find("://");
+  if (start == std::string::npos) return url;
+  const std::size_t end = url.find_first_of("/?#", start + 3);
+  return url.substr(start + 3, end == std::string::npos ? std::string::npos : end - start - 3);
+}
+
+void count_request(const std::string& url, bool failed, std::uint64_t ms, std::size_t bytes) {
+  std::lock_guard lock(origins_mutex);
+  const std::string host = host_of(url);
+  auto it = std::find_if(origins.begin(), origins.end(), [&](const Origin& o) { return o.host == host; });
+  if (it == origins.end()) { origins.push_back({host}); it = origins.end() - 1; }
+  ++it->requests; it->failures += failed; it->ms += ms; it->bytes += bytes;
+}
 constexpr std::uint64_t kDrawn = std::uint64_t{1} << 62;
 // Warming fills the disk cache in the background: a few connections, only while no load waits, and
 // only files small enough that many fit.
@@ -135,8 +173,9 @@ struct Entry {
   std::int32_t color = -1;
   std::string error;
   unsigned attempts = 0;
-  Clock::time_point retry_at{};
+  Clock::time_point retry_at{}, dwell_until{};
   // Render thread only.
+  Clock::time_point requested{};
   unsigned refs = 0, drawers = 0;
   std::uint64_t used = 0, prefetched = 0;
   bool reported = false;
@@ -152,6 +191,7 @@ struct Transfer {
   bool overflow = false, out_of_memory = false;
   // Started by warm(): written to the disk cache; loads of its URL join it.
   bool warm = false;
+  Clock::time_point started{};
 };
 
 // Recently fetched encoded bytes by URL, so another box for the same image decodes without a fetch.
@@ -307,6 +347,7 @@ bool decode(Entry& entry) {
   }
   const Plan p = plan(width, height, entry.box_width, entry.box_height, entry.fit);
   const bool resampled = resample(source, width, channels, p, entry);
+  ++counters.decodes;
   stbi_image_free(source);
   if (!resampled) { entry.error = message(entry, "out of memory for decoded pixels"); return false; }
   entry.color = vivid_color(entry.pixels, entry.width, entry.height);
@@ -444,7 +485,10 @@ public:
     cache_directory_ = cache_directory;
     stopping_ = false;
     multi_ = curl_multi_init();
-    if (!multi_) return false;
+    if (!multi_ || curl_multi_setopt(multi_, CURLMOPT_MAX_HOST_CONNECTIONS, kHostConnections) != CURLM_OK) {
+      stop(nullptr);
+      return false;
+    }
     for (Transfer& t : transfers_) if (!(t.curl = curl_easy_init())) { stop(nullptr); return false; }
     fetch_started_ = spawn(fetch_thread_, +[](void* p)->void* { static_cast<Service*>(p)->fetch_loop(); return nullptr; }, this);
     decode_started_ = fetch_started_ &&
@@ -479,10 +523,14 @@ public:
     EntryPtr entry;
     if (found != by_key_.end()) {
       entry = found->second;
+      if (entry->reported && entry->pixels) ++counters.decoded_hits;
     } else {
+      ++counters.loads;
       entry = std::make_shared<Entry>();
       entry->id = next_id_++; entry->key = key; entry->url = url;
       entry->box_width = width; entry->box_height = height; entry->fit = fit;
+      entry->requested = Clock::now();
+      if (!prefetch) entry->dwell_until = entry->requested + kDwell;
       by_key_.emplace(key, entry); by_id_.emplace(entry->id, entry);
       { std::lock_guard lock(mutex_); fetches_.push_back(entry); }
       curl_multi_wakeup(multi_);
@@ -519,7 +567,7 @@ public:
     if (entry->reported && entry->pixels) { over_budget_ = true; return; }
     entry->cancelled = true;
     forget(*entry);
-    if (!entry->reported) curl_multi_wakeup(multi_);
+    if (!entry->reported) { ++counters.cancelled; curl_multi_wakeup(multi_); }
   }
 
   std::vector<Result> poll(void (*evict)(std::uint32_t)) {
@@ -529,6 +577,13 @@ public:
     for (const EntryPtr& entry : done) {
       if (entry->cancelled) continue;
       entry->reported = true;
+      if (entry->pixels && entry->drawers) {
+        // Time from the first request to pixels, for images an element is waiting to draw.
+        const auto ms = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - entry->requested).count());
+        ++counters.shown; counters.shown_ms += ms;
+        if (ms > counters.shown_max_ms) counters.shown_max_ms = ms;
+      }
       out.push_back(report(*entry));
       over_budget_ = over_budget_ || entry->pixels;
     }
@@ -559,7 +614,7 @@ private:
     over_budget_ = false;
     std::size_t total = 0, decoded = 0;
     for (const auto& [id, entry] : by_id_) if (entry->reported && entry->pixels) { total += bytes(*entry); ++decoded; }
-    while (total > kCacheBytes || decoded > kCacheEntries) {
+    while (total > cache_bytes || decoded > kCacheEntries) {
       EntryPtr oldest;
       for (const auto& [id, entry] : by_id_)
         if (entry->reported && entry->pixels && !entry->refs && (!oldest || entry->used < oldest->used)) oldest = entry;
@@ -618,6 +673,10 @@ private:
     wake_.notify_all();
   }
 
+  bool held(const std::string& url) const {
+    return std::any_of(encoded_.begin(), encoded_.end(), [&](const Encoded& e) { return e.url == url; });
+  }
+
   Body cached(const std::string& url) {
     for (Encoded& e : encoded_) if (e.url == url) { e.used = ++fetch_clock_; return e.body; }
     return nullptr;
@@ -637,13 +696,15 @@ private:
 
   // Fetch thread: serves the entry from cached bytes, joins a transfer of its URL, or starts one.
   void start_fetch(EntryPtr entry, unsigned& active) {
-    if (auto body = cached(entry->url)) { decode_later({std::move(entry)}, body); return; }
+    if (auto body = cached(entry->url)) { ++counters.encoded_hits; decode_later({std::move(entry)}, body); return; }
     if (auto body = disk_.read(entry->url)) {
+      ++counters.disk_hits;
       remember(entry->url, body);
       decode_later({std::move(entry)}, body);
       return;
     }
     for (Transfer& t : transfers_) if (busy(t) && t.url == entry->url) { t.entries.push_back(std::move(entry)); return; }
+    ++counters.fetches;
     Transfer* t = begin(entry->url, false);
     t->entries.push_back(std::move(entry));
     if (!send(*t)) {
@@ -691,17 +752,23 @@ private:
     set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, t);
     set(CURLOPT_XFERINFOFUNCTION, progress); set(CURLOPT_XFERINFODATA, t);
     set(CURLOPT_NOPROGRESS, 0L); set(CURLOPT_PRIVATE, t);
+    t->started = Clock::now();
     return ok && curl_multi_add_handle(multi_, t->curl) == CURLM_OK;
   }
 
   void complete(Transfer& t, CURLcode result) {
     curl_multi_remove_handle(multi_, t.curl);
+    const bool warm = t.warm;
     t.warm = false;
     std::vector<EntryPtr> entries;
     entries.swap(t.entries);
     std::erase_if(entries, [](const EntryPtr& e) { return e->cancelled.load(); });
     long status = 0;
     curl_easy_getinfo(t.curl, CURLINFO_RESPONSE_CODE, &status);
+    if (result == CURLE_ABORTED_BY_CALLBACK) ++counters.aborted;
+    // A warm response over its size limit is skipped, not failed.
+    else count_request(t.url, (result != CURLE_OK && !(warm && t.overflow)) || (result == CURLE_OK && status != 200),
+                       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t.started).count(), t.body.size);
     const bool transient = t.out_of_memory || result == CURLE_COULDNT_CONNECT || result == CURLE_OPERATION_TIMEDOUT ||
       result == CURLE_RECV_ERROR || result == CURLE_SEND_ERROR || result == CURLE_PARTIAL_FILE ||
       status == 429 || status == 502 || status == 503 || status == 504;
@@ -721,9 +788,11 @@ private:
       std::lock_guard lock(mutex_);
       for (EntryPtr& entry : entries) {
         if (transient && ++entry->attempts < kAttempts) {
-          entry->retry_at = Clock::now() + std::chrono::milliseconds(500 * entry->attempts);
+          ++counters.retries;
+          entry->retry_at = Clock::now() + std::chrono::milliseconds(500 << (entry->attempts - 1));
           fetches_.push_back(std::move(entry));
         } else {
+          ++counters.failed;
           entry->error = message(*entry, reason);
           finished_.push_back(std::move(entry));
         }
@@ -740,20 +809,29 @@ private:
       std::vector<EntryPtr> starting;
       bool idle = false;
       const unsigned connections = network::downloading() ? kDownloadConnections : kConnections;
+      auto due = Clock::now() + std::chrono::milliseconds(100);
       {
         std::lock_guard lock(mutex_);
         if (stopping_) break;
         const auto now = Clock::now();
         std::erase_if(fetches_, [](const EntryPtr& e) { return e->cancelled.load(); });
         std::stable_sort(fetches_.begin(), fetches_.end(), [](const EntryPtr& a, const EntryPtr& b) { return a->rank > b->rank; });
-        // Loads joining a transfer or served from cache take no connection; this bound is loose.
-        for (auto it = fetches_.begin(); it != fetches_.end() && active + starting.size() < connections &&
-                                          encoded_bytes < kEncodedBudget;) {
-          if ((*it)->retry_at > now) { ++it; continue; }
+        // Cached bytes start at once and take no connection; the rest wait out their dwell or retry
+        // delay and a free connection. Loads joining a transfer still count one: the bound is loose.
+        unsigned networked = 0;
+        const Clock::time_point deferred{Clock::duration{deferred_until.load()}};
+        for (auto it = fetches_.begin(); it != fetches_.end() && encoded_bytes < kEncodedBudget;) {
+          Entry& e = **it;
+          const bool cached = held(e.url) || disk_.has(e.url);
+          const auto wait = std::max(e.retry_at, cached ? Clock::time_point{} : std::max(e.dwell_until, deferred));
+          if (wait > now) { due = std::min(due, wait); ++it; continue; }
+          if (!cached && active + networked >= connections) { ++it; continue; }
+          networked += !cached;
           starting.push_back(std::move(*it));
           it = fetches_.erase(it);
         }
-        idle = fetches_.empty();
+        idle = fetches_.empty() && deferred <= now;
+        if (fetches_.empty() && deferred > now) due = std::min(due, deferred);
       }
       for (EntryPtr& entry : starting) start_fetch(std::move(entry), active);
       while (idle && active < connections && warming < kWarmConnections && encoded_bytes < kEncodedBudget) {
@@ -772,7 +850,8 @@ private:
         complete(*t, done->data.result);
         --active;
       }
-      curl_multi_poll(multi_, nullptr, 0, 100, nullptr);
+      const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(due - Clock::now()).count();
+      curl_multi_poll(multi_, nullptr, 0, static_cast<int>(std::clamp<long long>(wait, 1, 100)), nullptr);
     }
     for (Transfer& t : transfers_) if (busy(t)) { curl_multi_remove_handle(multi_, t.curl); t.entries.clear(); t.warm = false; }
   }
@@ -791,7 +870,10 @@ private:
         decodes_.erase(next);
       }
       if (entry->cancelled) continue;
-      if (decode(*entry) || ++entry->attempts >= kAttempts) { finish(entry); continue; }
+      const auto started = Clock::now();
+      const bool decoded = decode(*entry);
+      counters.decode_us += std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started).count();
+      if (decoded || ++entry->attempts >= kDecodeAttempts) { finish(entry); continue; }
       // Out of heap: fetched again (usually from the encoded or disk cache) once memory may be free.
       entry->error.clear();
       entry->retry_at = Clock::now() + std::chrono::seconds(entry->attempts);
@@ -834,6 +916,38 @@ void release(std::uint32_t id, bool prefetch) { service.release(id, prefetch); }
 void warm(std::vector<std::string> urls) { service.warm(std::move(urls)); }
 std::vector<Result> poll(void (*evict)(std::uint32_t)) { return service.poll(evict); }
 Memory memory() { return {encoded_bytes.load(), decoded_bytes.load()}; }
+void set_cache_bytes(std::size_t bytes) { cache_bytes = bytes; }
+void defer(int ms) {
+  deferred_until = (Clock::now() + std::chrono::milliseconds(ms)).time_since_epoch().count();
+}
+
+std::string stats() {
+  char line[512];
+  const std::uint64_t decodes = counters.decodes;
+  std::snprintf(line, sizeof line,
+                "loads=%llu decoded-cache=%llu encoded-cache=%llu disk=%llu net=%llu decodes=%llu (%.1f ms avg) "
+                "shown=%llu (%llu ms avg, %llu max) cancelled=%llu aborted=%llu retries=%llu failed=%llu",
+                static_cast<unsigned long long>(counters.loads.load()), static_cast<unsigned long long>(counters.decoded_hits.load()),
+                static_cast<unsigned long long>(counters.encoded_hits.load()), static_cast<unsigned long long>(counters.disk_hits.load()),
+                static_cast<unsigned long long>(counters.fetches.load()), static_cast<unsigned long long>(decodes),
+                decodes ? counters.decode_us / 1000.0 / decodes : 0.0, static_cast<unsigned long long>(counters.shown.load()),
+                static_cast<unsigned long long>(counters.shown ? counters.shown_ms / counters.shown : 0),
+                static_cast<unsigned long long>(counters.shown_max_ms.load()),
+                static_cast<unsigned long long>(counters.cancelled.load()), static_cast<unsigned long long>(counters.aborted.load()),
+                static_cast<unsigned long long>(counters.retries.load()), static_cast<unsigned long long>(counters.failed.load()));
+  std::string out = line;
+  std::vector<Origin> busiest;
+  { std::lock_guard lock(origins_mutex); busiest = origins; }
+  std::sort(busiest.begin(), busiest.end(), [](const Origin& a, const Origin& b) { return a.requests > b.requests; });
+  if (busiest.size() > 4) busiest.resize(4);
+  for (const Origin& o : busiest) {
+    std::snprintf(line, sizeof line, " | %s %llu req %llu fail %llu ms avg %llu KiB avg", o.host.c_str(),
+                  static_cast<unsigned long long>(o.requests), static_cast<unsigned long long>(o.failures),
+                  static_cast<unsigned long long>(o.ms / o.requests), static_cast<unsigned long long>(o.bytes / o.requests >> 10));
+    out += line;
+  }
+  return out;
+}
 } // namespace images
 #else
 namespace images {
@@ -847,5 +961,8 @@ void release(std::uint32_t, bool) {}
 void warm(std::vector<std::string>) {}
 std::vector<Result> poll(void (*)(std::uint32_t)) { return {}; }
 Memory memory() { return {}; }
+void set_cache_bytes(std::size_t) {}
+void defer(int) {}
+std::string stats() { return {}; }
 } // namespace images
 #endif

@@ -28,6 +28,18 @@
 
 ## Unreleased
 
+- Remote images load lazily: an element's image reaches the network after 120 ms mounted, and no
+  request starts while a ScrollView moves or for 150 ms after (new internal `image.defer`). Holding
+  Down through Overdrive's grid for 3 s fetched 45 covers instead of 140 and decoded 69 instead of 167;
+  cached art still draws at once.
+- Image requests retry connection failures, timeouts and 429/502/503/504 four times, 0.5 to 4 s apart
+  (was twice, 0.5 and 1 s), use at most 8 keep-alive connections per origin, and cache hits no longer
+  wait for a free connection.
+- The decoded image cache holds 64 MiB and 256 images (was 24 MiB, 128); the PS5 host keeps 64 MiB
+  with a 256 MiB heap, 40 MiB from 192 MiB and 24 MiB below.
+- The PS5 memory log adds `[PS5-REACT] images:` counters (cache, disk and network loads, decode and
+  time-to-pixels averages, cancellations, retries, failures, busiest origins); the desktop preview
+  prints it too.
 - Download checkpoints and completion receipts no longer include URLs: a signed link that expired
   can be resolved again and the partial resumes, as long as the size, hash and validator match.
   Servers without a strong ETag download in parallel ranges and resume too: `Last-Modified` guards
