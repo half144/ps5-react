@@ -94,8 +94,12 @@ Runtime text breaks where the bitmap path does (newlines, spaces, inside a
 word only when nothing else fits) and also between any two CJK characters,
 following the basic kinsoku rules: closing punctuation (`。、，」』）`), small
 kana, `ー` and iteration marks never start a line, and opening brackets
-(`「『（`) never end one. `numberOfLines` truncates with `…` (from the baked
-font, or `...` when it lacks one).
+(`「『（`) never end one. Devanagari, Bengali, Arabic and Urdu break only at
+spaces (and after a zero-width space, U+200B). A word wider than its line
+breaks between grapheme clusters: a letter keeps its marks and a conjunct
+(consonant, virama, consonant) stays whole. `numberOfLines` truncates with `…`
+(from the baked font, or `...` when it lacks one), after whole clusters.
+`tools/test_text.py` checks these layouts with text-lab's fonts.
 
 ### Shaping
 

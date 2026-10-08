@@ -7,6 +7,9 @@
 // Installed into Embedded React as its ERTextShaper; render thread only.
 #pragma once
 
+#include <utility>
+#include <vector>
+
 namespace text_shaper {
 // Installs the shaper with the fonts in `font_dir`, a real directory holding the files the app
 // packaged (any may be absent). Fonts load the first time text needs them. Call after
@@ -17,4 +20,7 @@ void install(const char* font_dir, void (*log)(const char* line));
 void set_language(const char* tag);
 // Removes the shaper and frees its fonts and caches.
 void shutdown();
+// The [start, end) byte range of each line `text` breaks into at `max_w` pixels, trailing spaces
+// excluded, as layout and drawing break it: for tools/test_text.py.
+std::vector<std::pair<int, int>> lines(const char* text, const char* font_family, int font_size, int max_w);
 }  // namespace text_shaper

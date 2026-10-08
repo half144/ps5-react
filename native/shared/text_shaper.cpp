@@ -148,8 +148,18 @@ bool ignorable(std::uint32_t c) {
 
 bool is_space(std::uint32_t c) { return c == ' ' || c == '\t' || c == 0x3000; }
 
-// Ideographic text breaks between any two characters (UAX #14 class ID and its neighbours).
-bool breaks_around(std::uint32_t c) { return script_of(c) != Script::kOther && c != 0x3000; }
+// Ideographic text breaks between any two characters (UAX #14 class ID and its neighbours). Other
+// scripts, Devanagari, Bengali and Arabic among them, break only after spaces.
+bool breaks_around(std::uint32_t c) {
+  const Script script = script_of(c);
+  return (script == Script::kHan || script == Script::kKana) && c != 0x3000;
+}
+
+// A virama or zero-width joiner joins the next consonant into one conjunct: never a line break.
+bool joins_next(std::uint32_t c) {
+  return c == 0x200D ||
+         hb_unicode_combining_class(hb_unicode_funcs_get_default(), c) == HB_UNICODE_COMBINING_CLASS_VIRAMA;
+}
 
 // Kinsoku: characters that may not start a line (closing punctuation, small kana, iteration and
 // prolonged-sound marks) or end one (opening brackets).
@@ -346,7 +356,9 @@ struct Paragraph {
   std::uint8_t level;  // base level: 1 for a right-to-left paragraph
 };
 
-enum : std::uint8_t { kClusterStart = 1, kBreakBefore = 2, kSpace = 4, kNewline = 8 };
+// kClusterStart: a HarfBuzz cluster (a base and its marks) starts here. kGraphemeStart: a cluster
+// that does not continue a conjunct, the only place a word too wide for its line may be cut.
+enum : std::uint8_t { kClusterStart = 1, kBreakBefore = 2, kSpace = 4, kNewline = 8, kGraphemeStart = 16 };
 
 struct Layout {
   std::string text, family;
@@ -430,9 +442,12 @@ void shape(Layout& layout) {
   for (Run& run : layout.runs) {
     run.first_glyph = static_cast<std::uint32_t>(layout.glyphs.size());
     if (run.face < 0) {
+      std::uint32_t cluster = run.start;
       for (std::size_t at = run.start; at < run.end;) {
-        const std::uint32_t cluster = static_cast<std::uint32_t>(at);
+        const std::uint32_t start = static_cast<std::uint32_t>(at);
         const std::uint32_t cp = next_codepoint(text, length, at);
+        // A baked combining mark belongs to its base's cluster, so no line starts with it.
+        if (start == run.start || !extends(cp)) cluster = start;
         if (cp == '\n' || ignorable(cp)) {
           layout.glyphs.push_back({cp, 0, 0, 0, cluster, -1});
           continue;
@@ -477,15 +492,19 @@ void shape(Layout& layout) {
     layout.advance[g.cluster] += g.advance;
     layout.flags[g.cluster] |= kClusterStart;
   }
-  // Break opportunities, before the character at each cluster start.
+  // Break opportunities, before the character at each cluster start: after a space or a zero-width
+  // space, and around CJK characters as kinsoku allows.
   std::uint32_t before = 0;
   for (std::size_t at = 0; at < length;) {
     const std::size_t start = at;
     const std::uint32_t cp = next_codepoint(text, length, at);
     if (cp == '\n') layout.flags[start] |= kNewline;
     if (is_space(cp)) layout.flags[start] |= kSpace;
-    if (start > 0 && (layout.flags[start] & kClusterStart) && !is_space(cp) &&
-        (is_space(before) || ((breaks_around(before) || breaks_around(cp)) && !no_line_start(cp) && !no_line_end(before))))
+    if ((layout.flags[start] & kClusterStart) && (start == 0 || !joins_next(before)))
+      layout.flags[start] |= kGraphemeStart;
+    if (start > 0 && (layout.flags[start] & kGraphemeStart) && !is_space(cp) &&
+        (is_space(before) || before == 0x200B ||
+         ((breaks_around(before) || breaks_around(cp)) && !no_line_start(cp) && !no_line_end(before))))
       layout.flags[start] |= kBreakBefore;
     before = cp;
   }
@@ -531,8 +550,8 @@ struct Line {
 int to_px(std::int32_t fixed) { return (fixed + 63) >> 6; }
 
 // Breaks like the bitmap renderer: at newlines, at break opportunities when the next cluster would
-// pass `max_w` (0 = no limit), and inside a word only when nothing else fits. `truncated` reports
-// text left over after `max_lines`.
+// pass `max_w` (0 = no limit), and inside a word only when nothing else fits, between grapheme
+// clusters (a conjunct stays whole). `truncated` reports text left over after `max_lines`.
 std::vector<Line> break_lines(const Layout& layout, int max_w, int max_lines, bool& truncated) {
   std::vector<Line> lines;
   truncated = false;
@@ -567,7 +586,7 @@ std::vector<Line> break_lines(const Layout& layout, int max_w, int max_lines, bo
     at = skip_spaces(at);
     if (at >= length) break;
     const std::uint32_t start = at;
-    std::uint32_t breakpoint = 0;
+    std::uint32_t breakpoint = 0, grapheme = 0;
     std::int32_t width = 0;
     std::uint32_t end = length;
     at = length;
@@ -579,8 +598,10 @@ std::vector<Line> break_lines(const Layout& layout, int max_w, int max_lines, bo
       }
       if (!(layout.flags[p] & kClusterStart)) continue;
       if (p > start && (layout.flags[p] & kBreakBefore)) breakpoint = p;
-      if (width + layout.advance[p] > limit && p > start && !(layout.flags[p] & kSpace)) {
-        end = breakpoint > start ? breakpoint : p;
+      if (p > start && (layout.flags[p] & kGraphemeStart)) grapheme = p;
+      // A line holds at least one grapheme, even one wider than `max_w`.
+      if (width + layout.advance[p] > limit && p > start && !(layout.flags[p] & kSpace) && (breakpoint || grapheme)) {
+        end = breakpoint ? breakpoint : grapheme;
         at = end;
         break;
       }
@@ -679,18 +700,24 @@ void render(const ERTextRenderParams* params, const char* text, const std::uint8
     Line line = lines[i];
     const bool cut = ellipsis && i + 1 == lines.size();
     if (cut) {
+      // Whole grapheme clusters that fit before the ellipsis.
       const std::int32_t room = (clip.w - ellipsis_w) * 64;
+      const std::uint32_t full = line.end;
       std::int32_t width = 0;
-      std::uint32_t end = line.start;
-      for (std::uint32_t p = line.start; p < line.end; p++) {
+      std::uint32_t p = line.start;
+      for (; p < full; p++) {
         if (!(layout.flags[p] & kClusterStart)) continue;
+        if (layout.flags[p] & kGraphemeStart) {
+          line.end = p;
+          line.width = width;
+        }
         if (width + layout.advance[p] > room) break;
         width += layout.advance[p];
-        end = p + 1;
-        while (end < line.end && !(layout.flags[end] & kClusterStart)) end++;
       }
-      line.end = end;
-      line.width = width;
+      if (p == full) {
+        line.end = full;
+        line.width = width;
+      }
     }
     const bool rtl = paragraph_level(layout, line.start) & 1;
     const int width = to_px(line.width) + (cut ? ellipsis_w : 0);
@@ -826,6 +853,15 @@ void shutdown() {
   state = nullptr;
   layouts = nullptr;
   cache = nullptr;
+}
+
+std::vector<std::pair<int, int>> lines(const char* text, const char* font_family, int font_size, int max_w) {
+  const Layout& layout = layout_for(text, font_family, er_text_clamp_font_size(font_size), 0, 0, ER_DIRECTION_INHERIT);
+  bool truncated = false;
+  std::vector<std::pair<int, int>> out;
+  for (const Line& line : break_lines(layout, max_w, 0, truncated))
+    out.emplace_back(static_cast<int>(line.start), static_cast<int>(line.end));
+  return out;
 }
 
 }  // namespace text_shaper

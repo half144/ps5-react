@@ -32,7 +32,7 @@ def preview_env(app):
     return {**os.environ, "PS5_REACT_SANDBOX": str(sandbox(app))}
 
 
-def desktop(app, test=False):
+def desktop(app, test=False, target="ps5-react-preview"):
     er = dependency("embeddedReact")
     _, _, generated = bundle(app, er)
     build = ROOT / ".build" / app.name / "desktop"
@@ -41,7 +41,7 @@ def desktop(app, test=False):
     run(["cmake", "-S", ROOT / "native/desktop", "-B", build,
          f"-DER_ROOT={er}", f"-DHUI_ROOT={hui}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", f"-DHB_ROOT={harfbuzz()}", f"-DSB_ROOT={sheenbidi()}", "-DCMAKE_BUILD_TYPE=Release"],
         log=build / "configure.log")
-    run(["cmake", "--build", build, "--target", "ps5-react-preview", "-j", "6"], log=build / "build.log")
+    run(["cmake", "--build", build, "--target", target, "-j", "6"], log=build / "build.log")
     command = [build / "ps5-react-preview", generated / "app.bundle.js"]
     if test:
         run(["node", "--test", *sorted((ROOT / "tools/tailwind").glob("*.test.mjs")),
@@ -55,6 +55,7 @@ def desktop(app, test=False):
         run(["python3", ROOT / "tools/test_archives.py"], log=ROOT / ".build/archive-test.log")
         run(["python3", ROOT / "tools/test_network.py"], log=ROOT / ".build/network-test.log")
         run(["python3", ROOT / "tools/test_images.py"], log=ROOT / ".build/image-test.log")
+        run(["python3", ROOT / "tools/test_text.py"], log=ROOT / ".build/text-test.log")
         command.append("--self-test")
     return command, build
 
