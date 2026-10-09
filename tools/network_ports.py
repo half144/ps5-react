@@ -12,7 +12,7 @@ def ports():
     item = LOCK["networkPorts"]
     root = DEPS / "network-ports" / item["version"]
     marker = root / ".complete"
-    if not marker.exists() or marker.read_text().strip() != item["sha256"] or not (root / "lib/libarchive.a").exists() or not (root / "include/lzma.h").exists():
+    if not marker.exists() or marker.read_text().strip() != item["sha256"] or not (root / "lib/libarchive.a").exists() or not (root / "include/lzma.h").exists() or not (root / "include/zlib.h").exists():
         archive = fetch(item["url"], DEPS / "network-ports.tar.gz", item["sha256"])
         prefix = "opt/ps5-payload-sdk/target/user/homebrew/"
         libraries = {"libcurl.a", "libssl.a", "libcrypto.a", "libz.a", "libzstd.a", "libpsl.a", "libarchive.a", "liblzma.a", "libbz2.a"}
@@ -23,7 +23,7 @@ def ports():
                 if not name.startswith(prefix):
                     continue
                 relative = name[len(prefix):]
-                if relative in {"include/archive.h", "include/archive_entry.h", "include/lzma.h"} or relative.startswith(("include/curl/", "include/openssl/", "include/lzma/")) or relative in {
+                if relative in {"include/archive.h", "include/archive_entry.h", "include/lzma.h", "include/zlib.h", "include/zconf.h"} or relative.startswith(("include/curl/", "include/openssl/", "include/lzma/")) or relative in {
                     "lib/" + name for name in libraries
                 }:
                     member.name = relative

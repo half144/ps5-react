@@ -332,8 +332,10 @@ export const Downloads = {
 
 /** Streaming archive extraction off-thread; source volumes are preserved on failure/cancel. */
 export const Archives = Object.freeze({
-  extract({sources, destination, maxBytes = 1024**4}) {
-    const id = host().archives.extract(sources, destination, maxBytes);
+  extract({sources, destination, maxBytes = 1024**4, password}) {
+    if (password != null && (typeof password !== 'string' || password.length > 1024 || password.includes('\0')))
+      throw new TypeError('Archives.extract: password must be a string without NUL, at most 1024 UTF-8 bytes.');
+    const id = host().archives.extract(sources, destination, maxBytes, password ?? '');
     return networkTask(id, 'Archives.extract', destination, 'archives');
   },
   /** What the files' leading bytes are, and why their headers so far already rule out extraction.

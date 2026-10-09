@@ -5,6 +5,8 @@
 #include <clocale>
 #include <mutex>
 #include "archive_preflight.hpp"
+#include "rar5_password.hpp"
+#include <zlib.h>
 #include "digest.hpp"
 #include "thread_name.hpp"
 #include <archive.h>
@@ -281,13 +283,14 @@ bool restart_staging(const std::string& staging, const struct stat& expected) {
 }
 // The SHA-256 is taken from the blocks as they are written. A file that arrives out of order or with
 // holes is hashed by reading it back.
-std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, const std::string& path, std::string& digest) {
+std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, const std::string& path, std::string& digest, std::uint32_t* checksum = nullptr) {
   const auto max_bytes = job.request.max_bytes;
   const void* buffer = nullptr;
   std::size_t bytes = 0;
   la_int64_t offset = 0;
   std::uint64_t extent = 0, hashed = 0;
   integrity::Hash hash;
+  std::uint32_t crc = 0;
   bool contiguous = true;
   int result = ARCHIVE_OK;
   while (!job.cancelled && (result = archive_read_data_block(archive, &buffer, &bytes, &offset)) == ARCHIVE_OK) {
@@ -307,6 +310,7 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
     }
     if (contiguous && static_cast<std::uint64_t>(offset) == hashed) {
       hash.update(buffer, bytes);
+      if (checksum) crc = crc32(crc, static_cast<const Bytef*>(buffer), bytes);
       hashed += bytes;
     } else {
       contiguous = false;
@@ -319,6 +323,10 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
   if (fsync(fd)) return std::strerror(errno);
   if (contiguous && hashed == extent) digest = hash.finish();
   else if (!file_hash(path, job, digest)) digest.clear();
+  if (checksum) {
+    if (!contiguous) return "Non-contiguous RAR5 file data cannot be verified.";
+    *checksum = crc;
+  }
   if (digest.size() != 64 && !job.cancelled) return "Cannot verify extracted file.";
   return {};
 }
@@ -329,7 +337,8 @@ void use_utf8_names() {
   static std::once_flag once;
   std::call_once(once, [] { if (!std::setlocale(LC_CTYPE, "C.UTF-8")) std::setlocale(LC_CTYPE, "en_US.UTF-8"); });
 }
-archive* open_archive(const Request& request, std::string& error) {
+archive* open_archive(Job& job, std::string& error, std::unique_ptr<Rar5PasswordReader>& decrypted) {
+  const auto& request = job.request;
   use_utf8_names();
   auto* archive = archive_read_new();
   archive_read_support_filter_all(archive);
@@ -338,15 +347,24 @@ archive* open_archive(const Request& request, std::string& error) {
   archive_read_support_format_rar5(archive);
   archive_read_support_format_7zip(archive);
   archive_read_support_format_tar(archive);
+  if (!request.password.empty() && archive_read_add_passphrase(archive, request.password.c_str()) != ARCHIVE_OK) {
+    error = archive_error(archive, "Cannot configure archive password.");
+    return archive;
+  }
   std::vector<const char*> files;
   for (const auto& path : request.sources) files.push_back(path.c_str());
   files.push_back(nullptr);
-  if (archive_read_open_filenames(archive, files.data(), read_block_size) != ARCHIVE_OK)
+  int result;
+  if (!request.password.empty() && Rar5PasswordReader::matches(request.sources.front())) {
+    decrypted = std::make_unique<Rar5PasswordReader>(request.sources, request.password, job.cancelled);
+    result = archive_read_open(archive, decrypted.get(), nullptr, Rar5PasswordReader::read, nullptr);
+  } else result = archive_read_open_filenames(archive, files.data(), read_block_size);
+  if (result != ARCHIVE_OK)
     error = archive_error(archive, "Unsupported or incomplete archive.");
   return archive;
 }
 // Writes every entry under root and appends its digest line to the receipt.
-std::string extract(Job& job, archive* archive, int root, const std::string& staging, std::string& receipt) {
+std::string extract(Job& job, archive* archive, int root, const std::string& staging, std::string& receipt, Rar5PasswordReader* decrypted) {
   const auto& request = job.request;
   archive_entry* entry = nullptr;
   int result = ARCHIVE_OK;
@@ -383,9 +401,12 @@ std::string extract(Job& job, archive* archive, int root, const std::string& sta
     close(parent);
     if (fd < 0) return std::strerror(errno);
     std::string digest;
-    const auto error = write_entry(job, archive, fd, size, staging + "/" + path, digest);
+    std::uint32_t crc = 0;
+    const std::string original_name(name);
+    const auto error = write_entry(job, archive, fd, size, staging + "/" + path, digest, decrypted ? &crc : nullptr);
     close(fd);
     if (!error.empty() || job.cancelled) return error;
+    if (decrypted && !decrypted->verify(original_name, crc)) return "Extracted RAR5 file checksum mismatch.";
     receipt += digest + "|" + path + "\n";
     if (receipt.size() > max_metadata_bytes) return "Extraction receipt exceeds the metadata limit.";
     std::lock_guard lock(job.mutex);
@@ -465,12 +486,14 @@ void run(const std::shared_ptr<Job>& pointer) {
   }
   std::string receipt = "P5AR001:" + identity + "\n";
   std::string error;
-  auto* archive = open_archive(request, error);
+  std::unique_ptr<Rar5PasswordReader> decrypted;
+  auto* archive = open_archive(job, error, decrypted);
   {
     std::lock_guard lock(job.mutex);
     job.snapshot.state = "extracting";
   }
-  if (error.empty()) error = extract(job, archive, root, staging, receipt);
+  if (error.empty()) error = extract(job, archive, root, staging, receipt, decrypted.get());
+  if (decrypted && !decrypted->error().empty()) error = decrypted->error();
   archive_read_free(archive);
   if (error.empty() && !job.cancelled && !write_metadata(root, receipt_name, receipt)) error = "Cannot save extraction completion receipt.";
   if (error.empty() && !job.cancelled && fsync(root)) error = std::strerror(errno);
@@ -497,7 +520,8 @@ std::uint32_t enqueue(Request request, std::string& error) {
     error = "An archive task is already running; poll its completion first.";
     return 0;
   }
-  if (request.sources.empty() || request.sources.size() > 1024 || request.destination.empty() || !request.max_bytes) {
+  if (request.sources.empty() || request.sources.size() > 1024 || request.destination.empty() || !request.max_bytes
+      || request.password.size() > 1024 || request.password.find('\0') != std::string::npos) {
     error = "Invalid archive request.";
     return 0;
   }

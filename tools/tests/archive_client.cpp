@@ -9,7 +9,10 @@ int main(int argc,char** argv){
   std::cout<<inspection.kind<<"\n"<<inspection.refusal<<"\n";return 0;}
  if(argc<4)return 2;
  archives::Request request;request.destination=argv[1];request.max_bytes=std::stoull(argv[2]);
- for(int i=3;i<argc;i++)request.sources.emplace_back(argv[i]);
+ for(int i=3;i<argc;i++){
+  if(std::string(argv[i])=="--password"&&i+1<argc)request.password=argv[++i];
+  else request.sources.emplace_back(argv[i]);
+ }
  std::string error;const auto id=archives::enqueue(std::move(request),error);
  if(!id){std::cout<<"failed\n"<<error;return 0;}
  while(true){for(const auto& s:archives::poll())if(s.state=="completed"||s.state=="failed"||s.state=="cancelled"){

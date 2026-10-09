@@ -35,20 +35,96 @@ def rar5_with_window(shift):
  file=bytes([2,2,len(data),0,len(data),0])+vint(3<<7|shift<<10)+bytes([0,1])+b"a"
  return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+rar5_block(file,data)+rar5_block(bytes([5,0,0]))
 
+def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",headers=True,volumes=1,compression=0,crypto_flags=1):
+ """Independent RAR5 fixture with AES-CBC data/headers and spec password checks."""
+ salt=bytes(range(16));power=15;iterations=1<<power
+ key=hashlib.pbkdf2_hmac("sha256",password.encode(),salt,iterations)
+ check=hashlib.pbkdf2_hmac("sha256",password.encode(),salt,iterations+32)
+ folded=bytes(check[i]^check[i+8]^check[i+16]^check[i+24] for i in range(8))
+ password_check=folded+hashlib.sha256(folded).digest()[:4]
+ def aes(plain,iv):
+  plain+=bytes((-len(plain))%16)
+  return subprocess.check_output(["openssl","enc","-aes-256-cbc","-nopad","-K",key.hex(),"-iv",iv.hex()],input=plain)
+ def block(body):
+  size=vint(len(body));return struct.pack("<I",binascii.crc32(size+body))+size+body
+ def framed(body):
+  plain=block(body);iv=bytes(range(16,32))
+  return iv+aes(plain,iv) if headers else plain
+ out=[]
+ for i in range(volumes):
+  iv=bytes(range(32,48));piece=data[i*len(data)//volumes:(i+1)*len(data)//volumes]
+  packed=aes(piece or bytes(16),iv)
+  encryption=vint(1)+vint(0)+vint(crypto_flags)+bytes([power])+salt+iv+password_check
+  extra=vint(len(encryption))+encryption
+  common=3|(8 if i else 0)|(16 if i+1<volumes else 0)
+  body=vint(2)+vint(common)+vint(len(extra))+vint(len(packed))+vint(4)+vint(len(data))+vint(0)
+  body+=struct.pack("<I",binascii.crc32(data))+vint(compression)+vint(0)+vint(len(name.encode()))+name.encode()+extra
+  prefix=b"Rar!\x1a\x07\x01\x00"
+  if headers:prefix+=block(vint(4)+vint(0)+vint(0)+vint(1)+bytes([power])+salt+password_check)
+  main=vint(1)+vint(0)+(vint(3)+vint(i) if volumes>1 else vint(0))
+  out.append(prefix+framed(main)+framed(body)+packed+framed(vint(5)+vint(0)+vint(int(i+1<volumes))))
+ return out
+
 def main():
  with tempfile.TemporaryDirectory(prefix="ps5-react-archives-") as tmp:
   root=Path(tmp);binary=root/"archive-client"
   prefix=subprocess.check_output(["brew","--prefix","libarchive"],text=True).strip()
   xz=subprocess.check_output(["brew","--prefix","xz"],text=True).strip()
-  sources=[ROOT/"tools/tests/archive_client.cpp",ROOT/"native/shared/archives.cpp",ROOT/"native/shared/archive_preflight.cpp"]
-  subprocess.run(["clang++","-std=c++20","-O2","-Wall","-Wextra","-Werror","-pthread","-I",str(ROOT/"native/shared"),"-I",prefix+"/include","-I",xz+"/include",*map(str,sources),"-L",prefix+"/lib","-L",xz+"/lib","-larchive","-llzma","-o",str(binary)],check=True)
-  def run(name,parts,limit=1024*1024):
-   out=subprocess.check_output([str(binary),str(root/name),str(limit),*map(str,parts)],text=True,timeout=20).splitlines()
+  crypto=subprocess.check_output(["brew","--prefix","openssl@3"],text=True).strip()
+  sources=[ROOT/"tools/tests/archive_client.cpp",ROOT/"native/shared/archives.cpp",ROOT/"native/shared/archive_preflight.cpp",ROOT/"native/shared/rar5_password.cpp"]
+  subprocess.run(["clang++","-std=c++20","-O2","-Wall","-Wextra","-Werror","-pthread","-I",str(ROOT/"native/shared"),"-I",prefix+"/include","-I",xz+"/include","-I",crypto+"/include",*map(str,sources),"-L",prefix+"/lib","-L",xz+"/lib","-L",crypto+"/lib","-larchive","-llzma","-lcrypto","-lz","-o",str(binary)],check=True)
+  def run(name,parts,limit=1024*1024,password=None):
+   args=[] if password is None else ["--password",password]
+   out=subprocess.check_output([str(binary),str(root/name),str(limit),*map(str,parts),*args],text=True,timeout=20).splitlines()
    return out
   zip=root/"fixture.zip"
   with zipfile.ZipFile(zip,"w",compression=zipfile.ZIP_DEFLATED) as z:z.writestr("nested/game.ffpfsc",DATA)
   assert run("zip",[zip])[0]=="completed"
   assert (root/"zip/game.ffpfsc").read_bytes()==DATA
+  # Real password-protected ZIP: correct password, incorrect/missing password, and ordered volumes.
+  protected=root/"protected.zip";payload=root/"protected.bin";payload.write_bytes(DATA)
+  subprocess.run(["/usr/bin/zip","-q","-P","DLPSGAME.COM",str(protected),payload.name],cwd=root,check=True)
+  assert run("zip-password",[protected],password="DLPSGAME.COM")[0]=="completed"
+  assert (root/"zip-password/protected.bin").read_bytes()==DATA
+  for name,password in [("wrong-password","wrong"),("missing-password",None)]:
+   assert run(name,[protected],password=password)[0]=="failed"
+   assert protected.exists() and not (root/name).exists() and not (root/(name+".extracting")).exists()
+  blob=protected.read_bytes();protected_parts=[]
+  for i in range(3):
+   volume=root/f"protected-part{i}";volume.write_bytes(blob[i*len(blob)//3:(i+1)*len(blob)//3]);protected_parts.append(volume)
+  assert run("zip-password-volumes",protected_parts,password="DLPSGAME.COM")[0]=="completed"
+  assert (root/"zip-password-volumes/protected.bin").read_bytes()==DATA
+  for headers in [True,False]:
+   name="rar5-encrypted-headers" if headers else "rar5-encrypted-data"
+   rar=root/(name+".rar");rar.write_bytes(encrypted_rar5(DATA,headers=headers)[0])
+   result=run(name,[rar],password="DLPSGAME.COM")
+   assert result[0]=="completed",result
+   assert (root/name/"game.ffpfsc").read_bytes()==DATA
+   result=run(name+"-wrong",[rar],password="wrong")
+   assert result[0]=="failed" and "password" in result[-1].lower(),result
+   assert rar.exists() and not (root/(name+"-wrong")).exists()
+  rar_parts=[]
+  for i,blob in enumerate(encrypted_rar5(DATA,volumes=2)):
+   volume=root/f"encrypted-volume-{i}.rar";volume.write_bytes(blob);rar_parts.append(volume)
+  result=run("rar5-password-volumes",rar_parts,password="DLPSGAME.COM")
+  assert result[0]=="completed",result
+  assert (root/"rar5-password-volumes/game.ffpfsc").read_bytes()==DATA
+  corrupt=root/"corrupt-encrypted.rar"
+  damaged=bytearray(encrypted_rar5(DATA)[0]);damaged[-64]^=1
+  corrupt.write_bytes(damaged)
+  result=run("rar5-corrupt",[corrupt],password="DLPSGAME.COM")
+  assert result[0]=="failed" and "checksum" in result[-1].lower(),result
+  assert corrupt.exists() and not (root/"rar5-corrupt").exists()
+  empty=root/"empty-encrypted.rar";empty.write_bytes(encrypted_rar5(b"",compression=4<<7|8<<10)[0])
+  result=run("rar5-empty",[empty],password="DLPSGAME.COM");assert result[0]=="completed",result
+  assert (root/"rar5-empty/game.ffpfsc").read_bytes()==b""
+  for name,kwargs in [("rar5-encrypted-window",{"compression":3<<7|9<<10}),
+                       ("rar5-encrypted-traversal",{"name":"../escape"}),
+                       ("rar5-keyed-checksum",{"crypto_flags":3})]:
+   rar=root/(name+".rar");rar.write_bytes(encrypted_rar5(DATA,**kwargs)[0])
+   result=run(name,[rar],password="DLPSGAME.COM")
+   assert result[0]=="failed",result
+   assert not (root/name).exists() and rar.exists()
   # A non-ASCII name in a process left in the C locale, as on the console (the Teardown backport).
   named=root/"named.zip"
   with zipfile.ZipFile(named,"w") as z:z.writestr("PPSA15246 \u2013 USA/eboot.bin",DATA)

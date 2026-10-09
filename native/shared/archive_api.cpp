@@ -31,6 +31,16 @@ JSValue extract(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   if (JS_ToFloat64(ctx,&maximum,argv[2]) || !std::isfinite(maximum) || maximum < 1 || maximum > 1099511627776.0 || std::floor(maximum) != maximum)
     return JS_ThrowTypeError(ctx,"archives.extract: maxBytes must be an integer between 1 and 1 TiB");
   request.max_bytes = static_cast<std::uint64_t>(maximum);
+  if (argc > 3 && !JS_IsUndefined(argv[3]) && !JS_IsNull(argv[3])) {
+    if (!JS_IsString(argv[3])) return JS_ThrowTypeError(ctx,"archives.extract: password must be a string");
+    std::size_t size = 0;
+    const char* password = JS_ToCStringLen(ctx,&size,argv[3]);
+    if (!password) return JS_EXCEPTION;
+    const bool valid = size <= 1024 && !std::memchr(password,0,size);
+    if (valid) request.password.assign(password,size);
+    JS_FreeCString(ctx,password);
+    if (!valid) return JS_ThrowTypeError(ctx,"archives.extract: password must have at most 1024 UTF-8 bytes and no NUL");
+  }
   const JSValue length_value = JS_GetPropertyStr(ctx,argv[0],"length"); std::uint32_t length = 0;
   const int result = JS_ToUint32(ctx,&length,length_value); JS_FreeValue(ctx,length_value);
   if (result || !length || length > 1024) return JS_ThrowTypeError(ctx,"archives.extract: expected 1–1024 ordered volumes");
@@ -87,7 +97,7 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 JSValue ps5_react_archive_api(JSContext* ctx) {
   JSValue api = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx,api,"extract",JS_NewCFunction(ctx,extract,"extract",3));
+  JS_SetPropertyStr(ctx,api,"extract",JS_NewCFunction(ctx,extract,"extract",4));
   JS_SetPropertyStr(ctx,api,"inspect",JS_NewCFunction(ctx,inspect,"inspect",1));
   JS_SetPropertyStr(ctx,api,"cancel",JS_NewCFunction(ctx,cancel,"cancel",1));
   JS_SetPropertyStr(ctx,api,"poll",JS_NewCFunction(ctx,poll,"poll",0));

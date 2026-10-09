@@ -406,6 +406,7 @@ const task = Archives.extract({
   sources: ['/data/downloads/part-1.bin', '/data/downloads/part-2.bin'],
   destination: '/data/downloads/extracted/my-release',
   maxBytes: 100 * 1024 ** 3,
+  password: 'published-archive-password', // optional; case and brackets are significant
 });
 const unsubscribe = task.subscribe(({state, written}) => console.log(state, written));
 try { const {artifacts} = await task.done; console.log(artifacts); }
@@ -421,7 +422,18 @@ published directory is reverified; matching interrupted staging is restarted.
 Unowned destinations/staging are preserved. Image artifacts are flattened to the
 output root for ShadowMount scan depth; duplicate filenames fail without overwrite.
 
-Encrypted archives, unsupported compression methods and RAR5 dictionaries above
+`password` is optional, with at most 1024 UTF-8 bytes and no NUL. Wrong or missing
+passwords fail without publishing partial output or removing source volumes.
+ZIP decryption uses libarchive's passphrase support. RAR5 AES-256 headers/data are
+decrypted in bounded buffers by the native reader before libarchive decompresses
+them. Header CRCs, file checksums, decoder-memory limits and output-path validation
+remain enforced. CBC padding is removed using compressed-block framing; no joined
+or decrypted archive copy is written to disk. Ordered encrypted RAR5 volumes use
+the same API. RAR5 files without CRC32, keyed CRC/BLAKE checksums, encrypted older RAR formats and
+encrypted 7z are not supported. Password derivation is capped at 2^20 iterations
+and runs on the extraction worker, never the render thread.
+
+Unsupported encryption/compression methods and RAR5 dictionaries above
 libarchive's supported limit fail explicitly. Before extracting, the headers are
 read to refuse archives whose declared decoder windows (7z LZMA/LZMA2/PPMd/zstd
 and BCJ2 buffers, RAR5 windows, RAR PPMd, ZIP LZMA/XZ/zstd/PPMd, and an outer

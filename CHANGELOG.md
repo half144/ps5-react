@@ -36,6 +36,13 @@
 
 ## Unreleased — native archive extraction
 
+- Accept an optional archive password, including ordered volumes. Stream-decrypt
+  RAR5 AES-256 headers and file data before libarchive decodes them, retaining CRC
+  verification, memory limits, safe staging and cancellation. ZIP uses libarchive
+  passphrases; RAR5 files without CRC32, keyed RAR5 checksums and encrypted older RAR/7z remain unsupported.
+- Verify password-protected RAR5/ZIP extraction, incorrect passwords and encrypted
+  RAR5 volumes; a local test extracted the actual 3D MiniGolf eboot with its source
+  CRC preserved. Hardware execution is not established by those tests.
 - Add cancellable `Archives.extract` with streaming ordered-volume extraction,
   bounded output, safe paths, atomic staging and SHA-256 completion recovery.
 - Reuse native task polling and integrity hashing for HTTP and archive workers.

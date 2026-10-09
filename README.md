@@ -59,7 +59,7 @@ The supported development environment is **macOS on Apple Silicon**.
 1. Install native tools:
 
    ```sh
-   brew install python node git cmake sdl2 llvm@18 curl libarchive
+   brew install python node git cmake sdl2 llvm@18 curl libarchive openssl@3
    ```
 
 2. Clone the project and install dependencies:
