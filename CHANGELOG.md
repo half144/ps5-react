@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — downloads across rest mode
+
+- A download whose connections die while the title is suspended (rest mode, or another app in
+  front) retries the ranges they carried without counting them as a busy server's refusals: they
+  no longer halve the origin's connection window, which then only grew back one connection a
+  second for the rest of the job, nor spend the attempts that fail a download. Connection failures
+  in the minute after the suspension, while the network comes back, are treated the same way.
+
 ## Unreleased — browser capture
 
 - Add ABI v7 `BrowserCapture.capture`, a bounded, read-only Vikingfile URL
