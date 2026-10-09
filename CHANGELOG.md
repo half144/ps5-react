@@ -16,6 +16,8 @@
 - Also reroute an image host over DoH when the DNS points it at another server
   (a TLS handshake for the wrong certificate, or an empty reply), and fall back
   from 1.1.1.1 to 8.8.8.8 when the network blocks the first.
+- Pin a DoH-resolved image host to the address its first load connected to,
+  instead of a DoH query per image: a fresh install's covers appear at once.
 
 ## Unreleased — international text
 

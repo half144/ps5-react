@@ -75,6 +75,7 @@ using Clock = std::chrono::steady_clock;
 constexpr unsigned kConnections = 32, kAttempts = 5;
 // IP literals, so the DoH request itself needs no DNS. A network that blocks the first gets the second.
 constexpr std::array<const char*, 2> kDohURLs = {"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"};
+constexpr std::size_t kResolver = kDohURLs.size();
 // A decode that ran out of heap is tried again 1 and 2 s later, from the cached bytes.
 constexpr unsigned kDecodeAttempts = 3;
 // While a download runs it holds up to 64 connections and their TLS state; images take fewer.
@@ -197,6 +198,9 @@ struct Transfer {
   // Started by warm(): written to the disk cache; loads of its URL join it.
   bool warm = false;
   Clock::time_point started{};
+  // How it reached its host: the console's resolver (kResolver), kDohURLs[doh], or the address `pin`.
+  std::size_t doh = 0;
+  const curl_slist* pin = nullptr;
 };
 
 // Recently fetched encoded bytes by URL, so another box for the same image decodes without a fetch.
@@ -516,6 +520,8 @@ public:
     }
     if (multi_) curl_multi_cleanup(multi_);
     multi_ = nullptr;
+    for (curl_slist* pin : doh_pins_) curl_slist_free_all(pin);
+    doh_pins_.clear(); doh_hosts_.clear();
     fetches_.clear(); decodes_.clear(); finished_.clear(); by_key_.clear(); by_id_.clear(); encoded_.clear();
     running_ = false;
   }
@@ -754,10 +760,20 @@ private:
     bool ok = network::configure_transport(t->curl, t->url, true);
     const auto set = [&](CURLoption option, auto value) { ok = ok && curl_easy_setopt(t->curl, option, value) == CURLE_OK; };
     set(CURLOPT_TIMEOUT, 30L);
-    // The handle's cache still holds the blocked address, which a lookup would return before DoH.
+    t->doh = kResolver;
+    t->pin = nullptr;
     if (const auto doh = doh_hosts_.find(host_of(t->url)); doh != doh_hosts_.end()) {
-      set(CURLOPT_DOH_URL, kDohURLs[doh->second]);
-      set(CURLOPT_DNS_CACHE_TIMEOUT, 0L);
+      t->doh = doh->second.server;
+      t->pin = doh->second.pin;
+      // Once a DoH load has connected, the rest go straight to its address: a DoH query per image made
+      // a fresh install's first screen of covers take seconds.
+      if (doh->second.pin) {
+        set(CURLOPT_RESOLVE, doh->second.pin);
+      } else {
+        // The handle's cache still holds the blocked address, which a lookup would return before DoH.
+        set(CURLOPT_DOH_URL, kDohURLs[doh->second.server]);
+        set(CURLOPT_DNS_CACHE_TIMEOUT, 0L);
+      }
     }
     set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, t);
     set(CURLOPT_XFERINFOFUNCTION, progress); set(CURLOPT_XFERINFODATA, t);
@@ -782,13 +798,34 @@ private:
     const std::string host = host_of(t.url);
     const bool blocked = result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST ||
       result == CURLE_SSL_CONNECT_ERROR || result == CURLE_PEER_FAILED_VERIFICATION || result == CURLE_GOT_NOTHING;
+    // Only a failure on the host's current route moves it on: the loads sent before a switch fail
+    // together, and one switch covers them all. A pinned address that stops answering is looked up
+    // again on the same server first.
     const auto doh = doh_hosts_.find(host);
-    const bool rerouted = blocked && (doh == doh_hosts_.end() || doh->second + 1 < kDohURLs.size());
-    if (rerouted) {
-      const std::size_t server = doh == doh_hosts_.end() ? 0 : doh->second + 1;
-      doh_hosts_[host] = server;
+    const bool current = doh == doh_hosts_.end() ? t.doh == kResolver
+      : t.pin ? t.pin == doh->second.pin : !doh->second.pin && t.doh == doh->second.server;
+    const bool moved = blocked && current && (doh == doh_hosts_.end() || doh->second.pin || doh->second.server + 1 < kDohURLs.size());
+    if (moved) {
+      Doh& route = doh_hosts_[host];
+      if (doh != doh_hosts_.end() && !route.pin) ++route.server;
+      route.pin = nullptr;
       network::platform_log(("images: " + host + " unreachable (" + curl_easy_strerror(result) + "); resolving it over " +
-                    kDohURLs[server]).c_str());
+                    kDohURLs[route.server]).c_str());
+    }
+    // Retried on the new route, whatever the error was on the old one.
+    const bool rerouted = blocked && (moved || !current);
+    if (result == CURLE_OK && current && doh != doh_hosts_.end() && !doh->second.pin) {
+      // A redirect's address is its target's, not this host's.
+      char* ip = nullptr;
+      char* landed = nullptr;
+      curl_easy_getinfo(t.curl, CURLINFO_EFFECTIVE_URL, &landed);
+      if (landed && host_of(landed) == host && curl_easy_getinfo(t.curl, CURLINFO_PRIMARY_IP, &ip) == CURLE_OK && ip && *ip) {
+        const bool tls = t.url.rfind("https:", 0) == 0;
+        const std::string entry = host + (tls ? ":443:" : ":80:") + (std::strchr(ip, ':') ? "[" + std::string(ip) + "]" : std::string(ip));
+        doh_pins_.push_back(curl_slist_append(nullptr, entry.c_str()));
+        doh->second.pin = doh_pins_.back();
+        network::platform_log(("images: " + host + " pinned to " + ip + " from DoH").c_str());
+      }
     }
     const bool transient = t.out_of_memory || rerouted || result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST || result == CURLE_OPERATION_TIMEDOUT ||
       result == CURLE_RECV_ERROR || result == CURLE_SEND_ERROR || result == CURLE_PARTIAL_FILE ||
@@ -919,8 +956,11 @@ private:
   std::uint64_t fetch_clock_ = 0;
   // Hosts the console's resolver sends nowhere: a DNS that blocks a vendor's domains (as consoles
   // running homebrew do, against system updates) also blocks its image CDN. These resolve over DoH,
-  // through the server of kDohURLs at the mapped index.
-  std::map<std::string, std::size_t> doh_hosts_;
+  // through kDohURLs[server], until a load connects and pins its address.
+  struct Doh { std::size_t server = 0; curl_slist* pin = nullptr; };
+  std::map<std::string, Doh> doh_hosts_;
+  // Every pin made, kept until stop(): a transfer in flight may still read a replaced one.
+  std::vector<curl_slist*> doh_pins_;
   CURLM* multi_ = nullptr;
   pthread_t fetch_thread_{}, decode_thread_{};
   std::string cache_directory_;
