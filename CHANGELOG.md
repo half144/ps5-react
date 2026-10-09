@@ -18,6 +18,10 @@
   from 1.1.1.1 to 8.8.8.8 when the network blocks the first.
 - Pin a DoH-resolved image host to the address its first load connected to,
   instead of a DoH query per image: a fresh install's covers appear at once.
+- Elevate under ShadowMountPlus 1.7beta4, which mounts /data into the sandbox:
+  the elevation client (filesystemHelperClient 335d8c4) no longer mistakes
+  that mount for console access, which left the app sandboxed with no image
+  cache and froze it in fs.mounts.
 
 ## Unreleased — international text
 

@@ -68,7 +68,7 @@
   },
   "filesystemHelperClient": {
     "url": "https://github.com/blackbearreloaded/ProsperoStore.git",
-    "revision": "22dca63607cf5f1f95006eda6ffb802607bed699"
+    "revision": "335d8c43f916020205f445b76b66106ee50d2eeb"
   },
   "filesystemHelper": {
     "url": "https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon.git",
