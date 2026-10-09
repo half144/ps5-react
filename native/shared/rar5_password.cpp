@@ -291,7 +291,9 @@ struct Rar5PasswordReader::State {
       emitted = packed;
       return true;
     }
-    for (unsigned blocks = 0; blocks < 100000 && !cancelled; blocks++) {
+    // Every iteration consumes at least the three-byte block header. The source
+    // size bounds the scan; a fixed block count rejects valid large game files.
+    while (!cancelled) {
       if (compressed_last) {
         if (packed - at > 15) {
           error = "Invalid RAR5 encrypted padding.";
@@ -351,7 +353,8 @@ struct Rar5PasswordReader::State {
       }
       at += size;
     }
-    error = "Missing RAR5 last compression block or compression-block budget exceeded.";
+    error = cancelled ? "Extraction cancelled; downloaded parts are preserved."
+                      : "Missing RAR5 last compression block.";
     return false;
   }
   bool header(Bytes &plain) {
