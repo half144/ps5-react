@@ -1,6 +1,6 @@
 """Real local archive extraction with the same native worker used on PS5."""
 from pathlib import Path
-import binascii,hashlib,io,json,lzma,struct,subprocess,tarfile,tempfile,zipfile
+import binascii,hashlib,io,json,lzma,random,struct,subprocess,tarfile,tempfile,zipfile
 ROOT=Path(__file__).resolve().parents[1]
 DATA=bytes(range(256))*1024
 TOO_BIG="This archive needs more memory to extract than the console app can use."
@@ -51,9 +51,12 @@ def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",header
   plain=block(body);iv=bytes(range(16,32))
   return iv+aes(plain,iv) if headers else plain
  out=[]
+ # Like RAR, encrypt the file once and split the AES-CBC stream at unaligned volume offsets.
+ iv=bytes(range(32,48));stream=aes(data or bytes(16),iv)
+ cuts=[0]+[i*len(stream)//volumes+5 for i in range(1,volumes)]+[len(stream)]
+ assert all(cut%16 for cut in cuts[1:-1])
  for i in range(volumes):
-  iv=bytes(range(32,48));piece=data[i*len(data)//volumes:(i+1)*len(data)//volumes]
-  packed=aes(piece or bytes(16),iv)
+  packed=stream[cuts[i]:cuts[i+1]]
   encryption=vint(1)+vint(0)+vint(crypto_flags)+bytes([power])+salt+iv+password_check
   extra=vint(len(encryption))+encryption
   common=3|(8 if i else 0)|(16 if i+1<volumes else 0)
@@ -74,8 +77,21 @@ def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",header
    header=vint(3)+vint(3)+vint(len(extra))+vint(len(index))+vint(0)+vint(len(index))+vint(0)
    header+=vint(0)+vint(0)+vint(2)+b"QO"+extra
    service=framed(header)+index
-  out.append(prefix+framed(main)+framed(body)+packed+service+framed(vint(5)+vint(0)+vint(int(i+1<volumes))))
+  # A volume may end with filler after its end header; UnRAR opens the next volume regardless.
+  filler=bytes(56) if i+1<volumes else b""
+  out.append(prefix+framed(main)+framed(body)+packed+service+framed(vint(5)+vint(0)+vint(int(i+1<volumes)))+filler)
  return out
+
+def words():
+ """The game.bin inside rar5_encrypted_volumes.part*.rar.uu."""
+ r=random.Random(5)
+ vocabulary=[bytes(r.choice(b"abcdefghijklmnopqrstuvwxyz") for _ in range(r.randint(2,9))) for _ in range(4000)]
+ return b" ".join(r.choice(vocabulary) for _ in range(24000))
+
+def uudecode(source,destination):
+ lines=source.read_bytes().splitlines();at=next(i for i,line in enumerate(lines) if line.startswith(b"begin "))
+ destination.write_bytes(b"".join(binascii.a2b_uu(line) for line in lines[at+1:] if line not in (b"end",b"`",b" ",b"")))
+ return destination
 
 def main():
  with tempfile.TemporaryDirectory(prefix="ps5-react-archives-") as tmp:
@@ -142,6 +158,12 @@ def main():
   result=run("rar5-password-volumes",rar_parts,password="DLPSGAME.COM")
   assert result[0]=="completed",result
   assert (root/"rar5-password-volumes/game.ffpfsc").read_bytes()==DATA
+  # Real `rar a -ma5 -m3 -hp -v20k` output: compressed blocks and the one AES-CBC stream of the file
+  # cross volumes at unaligned offsets.
+  real=[uudecode(source,root/source.stem) for source in sorted((ROOT/"tools/tests/archives").glob("rar5_encrypted_volumes.part*.rar.uu"))]
+  result=run("rar5-real-volumes",real,password="fixture-password")
+  assert result[0]=="completed",result
+  assert (root/"rar5-real-volumes/game.bin").read_bytes()==words()
   corrupt=root/"corrupt-encrypted.rar"
   damaged=bytearray(encrypted_rar5(DATA)[0]);damaged[-64]^=1
   corrupt.write_bytes(damaged)
@@ -219,10 +241,8 @@ def main():
   assert run("missing-part",parts[:1])[0]=="failed"
   assert not (root/"missing-part").exists()
   rar_parts=[]
-  for source in sorted((ROOT/"tools/tests/archives").glob("*.rar.uu")):
-   lines=source.read_bytes().splitlines();at=next(i for i,line in enumerate(lines) if line.startswith(b"begin "))
-   content=b"".join(binascii.a2b_uu(line) for line in lines[at+1:] if line not in (b"end",b"`",b" ",b""))
-   dest=root/source.stem;dest.write_bytes(content);rar_parts.append(dest)
+  for source in sorted((ROOT/"tools/tests/archives").glob("test_rar_multivolume_single_file.part*.rar.uu")):
+   rar_parts.append(uudecode(source,root/source.stem))
   assert len(rar_parts)==3
   result=run("rar-multipart",rar_parts)
   assert result[0]=="completed",result

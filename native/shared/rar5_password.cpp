@@ -100,12 +100,27 @@ struct Rar5PasswordReader::State {
   int fd = -1;
   bool need_signature = true, encrypted_headers = false, finished = false;
   std::array<unsigned char, 32> header_key{};
-  Cipher data_cipher{nullptr, EVP_CIPHER_CTX_free};
-  std::uint64_t data_left = 0, emit_left = 0, stored_written = 0;
-  std::string stored_name, error;
-  std::string compressed_name;
-  std::uint64_t compressed_left = 0;
-  bool compressed_last = false;
+  std::uint64_t data_left = 0, emit_left = 0;
+  std::string error;
+  // A file's packed data is one AES-CBC stream even when RAR splits it across volumes, and the
+  // split points need not be 16-byte aligned. Offsets below are positions in that stream.
+  struct Span {
+    std::size_t source;
+    std::uint64_t offset, size;
+  };
+  struct Stream {
+    std::string name;
+    std::array<unsigned char, 32> key{};
+    std::array<unsigned char, 16> iv{};
+    Cipher cipher{nullptr, EVP_CIPHER_CTX_free}, probe{nullptr, EVP_CIPHER_CTX_free};
+    std::vector<Span> spans;
+    std::uint64_t packed = 0, emitted = 0, next_block = 0, end = UINT64_MAX;
+    // Raw bytes short of a whole AES block, and decrypted bytes held back for the next piece.
+    Bytes carry, pending;
+  } stream;
+  bool decrypting = false, last_piece = false;
+  int probe_fd = -1;
+  std::size_t probe_source = 0;
   Bytes output;
   std::map<std::string, std::uint32_t> checksums;
   std::size_t checksum_bytes = 0;
@@ -114,7 +129,14 @@ struct Rar5PasswordReader::State {
   ~State() {
     if (fd >= 0)
       close(fd);
+    if (probe_fd >= 0)
+      close(probe_fd);
     OPENSSL_cleanse(header_key.data(), header_key.size());
+    OPENSSL_cleanse(stream.key.data(), stream.key.size());
+  }
+  void reset_stream() {
+    OPENSSL_cleanse(stream.key.data(), stream.key.size());
+    stream = Stream{};
   }
   bool take(Bytes &bytes, std::size_t size) {
     bytes.resize(size);
@@ -214,148 +236,155 @@ struct Rar5PasswordReader::State {
   // Read ahead without advancing the stream. Only tiny compressed-block headers are decrypted here;
   // file bodies stay in the 128 KiB streaming buffer. This finds CBC padding before publishing the
   // packed size to libarchive, which would otherwise parse padding as another compression block.
-  bool probe(std::uint64_t offset, std::size_t count, Bytes &bytes) {
-    if (fd < 0 || volume == 0) {
-      error = "Missing RAR5 data source.";
-      return false;
-    }
-    const auto current = lseek(fd, 0, SEEK_CUR);
-    if (current < 0) {
-      error = "Cannot inspect RAR5 source.";
-      return false;
-    }
-    offset += current;
-    bytes.resize(count);
-    std::size_t copied = 0;
-    for (std::size_t index = volume - 1; index < paths.size() && copied < count; index++) {
-      const int input =
-          index == volume - 1 ? fd : open(paths[index].c_str(), O_RDONLY | O_NOFOLLOW);
-      struct stat st;
-      const bool valid = input >= 0 && !fstat(input, &st) && S_ISREG(st.st_mode) && st.st_size >= 0;
-      if (!valid) {
-        if (input >= 0 && input != fd)
-          close(input);
-        error = "Cannot inspect RAR5 source.";
-        return false;
-      }
-      if (offset >= static_cast<std::uint64_t>(st.st_size)) {
-        offset -= st.st_size;
-        if (input != fd)
-          close(input);
+  bool read_stream(std::uint64_t offset, std::size_t count, unsigned char *bytes) {
+    for (const auto &span : stream.spans) {
+      if (!count)
+        return true;
+      if (offset >= span.size) {
+        offset -= span.size;
         continue;
       }
-      const auto available = std::min<std::uint64_t>(count - copied, st.st_size - offset);
+      if (probe_fd < 0 || probe_source != span.source) {
+        if (probe_fd >= 0)
+          close(probe_fd);
+        probe_fd = open(paths[span.source].c_str(), O_RDONLY | O_NOFOLLOW);
+        probe_source = span.source;
+        if (probe_fd < 0) {
+          error = "Cannot inspect RAR5 source.";
+          return false;
+        }
+      }
+      const auto step = std::min<std::uint64_t>(count, span.size - offset);
       std::size_t got = 0;
-      while (got < available) {
-        const auto n = pread(input, bytes.data() + copied + got, available - got, offset + got);
+      while (got < step) {
+        const auto n = pread(probe_fd, bytes + got, step - got, span.offset + offset + got);
         if (n < 0 && errno == EINTR)
           continue;
         if (n <= 0)
           break;
         got += n;
       }
-      if (input != fd)
-        close(input);
-      if (got != available) {
+      if (got != step) {
         error = "Incomplete RAR5 compressed data.";
         return false;
       }
-      copied += got;
+      bytes += step;
+      count -= step;
       offset = 0;
     }
-    if (copied != count) {
+    if (count) {
       error = "Incomplete RAR5 compressed data.";
       return false;
     }
     return true;
   }
-  bool compressed_size(std::uint64_t packed, std::uint64_t unpacked, std::uint64_t flags,
-                       const std::string &name, const std::array<unsigned char, 32> &data_key,
-                       const unsigned char *data_iv, std::uint64_t &emitted) {
-    if (!(flags & 8) || compressed_name != name) {
-      compressed_name = name;
-      compressed_left = 0;
-      compressed_last = false;
+  // Decrypts stream bytes [offset, offset + count), which must lie in whole AES blocks already read.
+  bool decrypt_stream(std::uint64_t offset, std::size_t count, Bytes &plain) {
+    const auto aligned = offset & ~std::uint64_t(15);
+    const auto end = (offset + count + 15) & ~std::uint64_t(15);
+    const std::size_t before = aligned ? 16 : 0;
+    Bytes raw(before + end - aligned), decoded;
+    if (!read_stream(aligned - before, raw.size(), raw.data()))
+      return false;
+    const auto *iv = before ? raw.data() : stream.iv.data();
+    if (EVP_DecryptInit_ex(stream.probe.get(), nullptr, nullptr, nullptr, iv) != 1 ||
+        !decrypt(stream.probe, Bytes(raw.begin() + before, raw.end()), decoded)) {
+      error = "Cannot inspect RAR5 compressed block.";
+      return false;
     }
-    if (!unpacked) {
-      emitted = 0;
-      return true;
-    }
-    std::uint64_t at = std::min(compressed_left, packed);
-    compressed_left -= at;
-    if (compressed_left) {
-      if (!(flags & 16)) {
-        error = "Incomplete RAR5 compressed volume.";
+    plain.assign(decoded.begin() + (offset - aligned), decoded.begin() + (offset - aligned) + count);
+    return true;
+  }
+  // Walks compression block headers through the decryptable part of the stream. A header that
+  // continues past it waits for the next volume; the last block's end marks where padding starts.
+  bool scan_blocks() {
+    const auto decryptable = stream.packed & ~std::uint64_t(15);
+    // Every iteration consumes at least the three-byte block header, so the stream size bounds it.
+    while (!cancelled && stream.end == UINT64_MAX && stream.next_block + 3 <= decryptable) {
+      const auto at = stream.next_block;
+      Bytes plain;
+      if (!decrypt_stream(at, std::min<std::uint64_t>(5, decryptable - at), plain))
         return false;
-      }
-      emitted = packed;
-      return true;
-    }
-    // Every iteration consumes at least the three-byte block header. The source
-    // size bounds the scan; a fixed block count rejects valid large game files.
-    while (!cancelled) {
-      if (compressed_last) {
-        if (packed - at > 15) {
-          error = "Invalid RAR5 encrypted padding.";
-          return false;
-        }
-        emitted = at;
-        return true;
-      }
-      if (at == packed) {
-        if (flags & 16) {
-          emitted = packed;
-          return true;
-        }
-        break;
-      }
-      const auto aligned = at & ~std::uint64_t(15), within = at - aligned;
-      const auto count =
-          std::min<std::uint64_t>((within + 5 + 15) & ~std::uint64_t(15), packed - aligned);
-      Bytes iv(data_iv, data_iv + 16), raw, plain;
-      if ((aligned && !probe(aligned - 16, 16, iv)) || !probe(aligned, count, raw))
-        return false;
-      auto ctx = cipher(data_key, iv.data());
-      if (!decrypt(ctx, raw, plain)) {
-        error = "Cannot inspect RAR5 compressed block.";
-        return false;
-      }
-      if (within + 3 > plain.size()) {
-        error = "Incomplete RAR5 compressed block header.";
-        return false;
-      }
-      const auto block_flags = plain[within];
+      const auto block_flags = plain[0];
       const unsigned size_bytes = ((unsigned(block_flags) >> 3) & 7) + 1;
-      if (size_bytes > 3 || within + 2 + size_bytes > plain.size()) {
+      if (size_bytes > 3) {
         error = "Unsupported RAR5 compressed block header.";
         return false;
       }
+      if (2 + size_bytes > plain.size())
+        break;
       std::uint64_t size = 0;
       unsigned char checksum = 0x5a ^ block_flags;
       for (unsigned i = 0; i < size_bytes; i++) {
-        size |= std::uint64_t(plain[within + 2 + i]) << (8 * i);
-        checksum ^= plain[within + 2 + i];
+        size |= std::uint64_t(plain[2 + i]) << (8 * i);
+        checksum ^= plain[2 + i];
       }
-      if (checksum != plain[within + 1]) {
+      if (checksum != plain[1]) {
         error = "Corrupt RAR5 compressed block header.";
         return false;
       }
-      at += 2 + size_bytes;
-      compressed_last = block_flags & 0x40;
-      if (size > packed - at) {
-        compressed_left = size - (packed - at);
-        if (!(flags & 16)) {
-          error = "Incomplete RAR5 compressed volume.";
-          return false;
-        }
-        emitted = packed;
-        return true;
-      }
-      at += size;
+      stream.next_block = at + 2 + size_bytes + size;
+      if (block_flags & 0x40)
+        stream.end = stream.next_block;
     }
-    error = cancelled ? "Extraction cancelled; downloaded parts are preserved."
-                      : "Missing RAR5 last compression block.";
-    return false;
+    if (cancelled) {
+      error = "Extraction cancelled; downloaded parts are preserved.";
+      return false;
+    }
+    if (!last_piece)
+      return true;
+    if (stream.end == UINT64_MAX || stream.end > stream.packed) {
+      error = "Missing RAR5 last compression block.";
+      return false;
+    }
+    if (stream.packed - stream.end > 15) {
+      error = "Invalid RAR5 encrypted padding.";
+      return false;
+    }
+    return true;
+  }
+  // Starts or continues the file's stream with this piece and returns how many decrypted bytes
+  // libarchive gets for it: whole AES blocks only, never padding, and never part of a block header,
+  // since libarchive cannot parse a compression block header split across volumes.
+  bool encrypted_piece(const std::string &name, std::uint64_t flags, std::uint64_t packed,
+                       std::uint64_t unpacked, std::uint64_t method,
+                       const std::array<unsigned char, 32> &data_key, const unsigned char *data_iv,
+                       std::uint64_t &emitted) {
+    if (!(flags & 8) || stream.name != name || !stream.cipher) {
+      reset_stream();
+      stream.name = name;
+      stream.key = data_key;
+      std::copy(data_iv, data_iv + 16, stream.iv.begin());
+      stream.cipher = cipher(stream.key, stream.iv.data());
+      stream.probe = cipher(stream.key, stream.iv.data());
+      // An empty compressed file stores only an encrypted padding block.
+      stream.end = method && unpacked ? UINT64_MAX : method ? 0 : unpacked;
+    }
+    const auto at = fd < 0 ? -1 : lseek(fd, 0, SEEK_CUR);
+    if (!stream.cipher || !stream.probe || at < 0 || !volume) {
+      error = "Cannot read RAR5 encrypted data.";
+      return false;
+    }
+    stream.spans.push_back({volume - 1, static_cast<std::uint64_t>(at), packed});
+    stream.packed += packed;
+    last_piece = !(flags & 16);
+    if (last_piece && stream.packed % 16) {
+      error = "Invalid RAR5 encrypted data alignment.";
+      return false;
+    }
+    if (!method && last_piece && stream.end > stream.packed) {
+      error = "Invalid RAR5 stored volume size.";
+      return false;
+    }
+    if (stream.end == UINT64_MAX && !scan_blocks())
+      return false;
+    auto target = std::min(stream.end, stream.packed & ~std::uint64_t(15));
+    if (stream.end == UINT64_MAX)
+      target = std::min(target, stream.next_block);
+    emitted = target - stream.emitted;
+    stream.emitted = target;
+    decrypting = true;
+    return true;
   }
   bool header(Bytes &plain) {
     Cipher ctx(nullptr, EVP_CIPHER_CTX_free);
@@ -437,7 +466,7 @@ struct Rar5PasswordReader::State {
       return true;
     }
     std::uint64_t emitted = packed;
-    data_cipher.reset();
+    decrypting = false;
     Bytes kept_extra, specific;
     if (type == 2 || type == 3) {
       const auto file_flags = fields.number(), unpacked = fields.number();
@@ -469,9 +498,11 @@ struct Rar5PasswordReader::State {
         return false;
       }
       const std::string name(reinterpret_cast<const char *>(plain.data() + name_at), name_size);
-      if (type == 3 && name == "QO") {
-        // Quick-open is an optional index of cached headers. Read the original headers instead;
-        // its service encryption check need not authenticate the password used for file data.
+      if (type == 3) {
+        // Service headers (quick-open index, recovery record, comments) carry no file data, and
+        // libarchive skips them. Drop them whole: the quick-open index's encryption check need not
+        // match the password used for file data, and an encrypted service between the volume
+        // pieces of a split file must not restart that file's AES stream.
         // The enclosing header CRC was already checked, and take() still validates payload length.
         data_left = packed;
         emit_left = 0;
@@ -522,26 +553,11 @@ struct Rar5PasswordReader::State {
           iv_fields.number();
           iv_fields.skip(17);
           const auto *iv = record_bytes.data() + iv_fields.at;
-          data_cipher = cipher(data_key, iv);
-          if (!data_cipher || packed % 16) {
-            error = "Invalid RAR5 encrypted data alignment.";
+          const bool piece =
+              encrypted_piece(name, flags, packed, unpacked, method, data_key, iv, emitted);
+          OPENSSL_cleanse(data_key.data(), data_key.size());
+          if (!piece)
             return false;
-          }
-          if (!method) {
-            if (!(flags & 8) || stored_name != name) {
-              stored_name = name;
-              stored_written = 0;
-            }
-            if (stored_written > unpacked) {
-              error = "Invalid RAR5 stored volume size.";
-              return false;
-            }
-            emitted = std::min(packed, unpacked - stored_written);
-            stored_written += emitted;
-          } else if (!compressed_size(packed, unpacked, flags, name, data_key, iv, emitted)) {
-            OPENSSL_cleanse(data_key.data(), data_key.size());
-            return false;
-          }
           if (!unpacked && method) {
             // RAR stores an encrypted padding block for empty compressed files. Once removed,
             // mark the empty file as stored so libarchive does not read the next header as data.
@@ -551,7 +567,6 @@ struct Rar5PasswordReader::State {
             specific.insert(specific.end(), plain.begin() + compression_end,
                             plain.begin() + extra_at);
           }
-          OPENSSL_cleanse(data_key.data(), data_key.size());
         } else
           kept_extra.insert(kept_extra.end(), plain.begin() + start, plain.begin() + end);
         extra.at = end;
@@ -580,6 +595,11 @@ struct Rar5PasswordReader::State {
         return false;
       }
       if (more & 1) {
+        // Like UnRAR, continue at the start of the next volume file: a volume may end with
+        // filler after its end header.
+        if (fd >= 0)
+          close(fd);
+        fd = -1;
         need_signature = true;
         encrypted_headers = false;
       } else
@@ -590,24 +610,44 @@ struct Rar5PasswordReader::State {
   la_ssize_t next() {
     output.clear();
     while (error.empty() && !cancelled) {
-      if (data_left) {
+      if (data_left || emit_left) {
         const auto count = std::min<std::uint64_t>(data_left, block_size);
         Bytes raw;
         if (!take(raw, count))
           return -1;
-        if (data_cipher) {
-          if (!decrypt(data_cipher, raw, output)) {
+        data_left -= count;
+        if (decrypting) {
+          raw.insert(raw.begin(), stream.carry.begin(), stream.carry.end());
+          const auto whole = raw.size() & ~std::size_t(15);
+          stream.carry.assign(raw.begin() + whole, raw.end());
+          raw.resize(whole);
+          Bytes plain;
+          if (!decrypt(stream.cipher, raw, plain)) {
             error = "Cannot decrypt RAR5 data.";
             return -1;
           }
+          if (stream.pending.empty())
+            output = std::move(plain);
+          else {
+            output = std::move(stream.pending);
+            output.insert(output.end(), plain.begin(), plain.end());
+          }
         } else
           output = std::move(raw);
-        data_left -= count;
-        const auto emit = std::min<std::uint64_t>(emit_left, count);
+        const auto emit = std::min<std::uint64_t>(emit_left, output.size());
         emit_left -= emit;
+        if (decrypting)
+          stream.pending.assign(output.begin() + emit, output.end());
         output.resize(emit);
-        if (!data_left)
-          data_cipher.reset();
+        if (!data_left) {
+          if (emit_left) {
+            error = "Incomplete RAR5 file data.";
+            return -1;
+          }
+          if (decrypting && last_piece)
+            reset_stream();
+          decrypting = false;
+        }
         if (emit)
           return output.size();
         continue;
