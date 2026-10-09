@@ -26,6 +26,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <pthread.h>
@@ -72,8 +73,8 @@ using Clock = std::chrono::steady_clock;
 // Five attempts, 0.5 + 1 + 2 + 4 s apart: a console that briefly cannot connect (Wi-Fi waking, a
 // burst of handshakes refused) recovers instead of failing every image on screen at once.
 constexpr unsigned kConnections = 32, kAttempts = 5;
-// An IP literal, so the DoH request itself needs no DNS.
-constexpr const char* kDohURL = "https://1.1.1.1/dns-query";
+// IP literals, so the DoH request itself needs no DNS. A network that blocks the first gets the second.
+constexpr std::array<const char*, 2> kDohURLs = {"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"};
 // A decode that ran out of heap is tried again 1 and 2 s later, from the cached bytes.
 constexpr unsigned kDecodeAttempts = 3;
 // While a download runs it holds up to 64 connections and their TLS state; images take fewer.
@@ -754,8 +755,8 @@ private:
     const auto set = [&](CURLoption option, auto value) { ok = ok && curl_easy_setopt(t->curl, option, value) == CURLE_OK; };
     set(CURLOPT_TIMEOUT, 30L);
     // The handle's cache still holds the blocked address, which a lookup would return before DoH.
-    if (std::find(doh_hosts_.begin(), doh_hosts_.end(), host_of(t->url)) != doh_hosts_.end()) {
-      set(CURLOPT_DOH_URL, kDohURL);
+    if (const auto doh = doh_hosts_.find(host_of(t->url)); doh != doh_hosts_.end()) {
+      set(CURLOPT_DOH_URL, kDohURLs[doh->second]);
       set(CURLOPT_DNS_CACHE_TIMEOUT, 0L);
     }
     set(CURLOPT_WRITEFUNCTION, body); set(CURLOPT_WRITEDATA, t);
@@ -774,16 +775,22 @@ private:
     std::erase_if(entries, [](const EntryPtr& e) { return e->cancelled.load(); });
     long status = 0;
     curl_easy_getinfo(t.curl, CURLINFO_RESPONSE_CODE, &status);
-    // A connection refused at once or a name that does not resolve is what a blocking DNS gives: the
-    // host switches to DoH and the load retries.
+    // What a blocking DNS gives: a name that does not resolve, a connection refused at once, or (a DNS
+    // that points the vendor's domains at its own server) a TLS handshake for a certificate that is not
+    // the host's, or nothing at all. The host switches to DoH, then to the second DoH server, and the
+    // load retries.
     const std::string host = host_of(t.url);
-    if ((result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST) &&
-        std::find(doh_hosts_.begin(), doh_hosts_.end(), host) == doh_hosts_.end()) {
-      doh_hosts_.push_back(host);
-      network::platform_log(("images: " + host + " unreachable through the system resolver (" + curl_easy_strerror(result) +
-                    "); resolving it over DoH").c_str());
+    const bool blocked = result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST ||
+      result == CURLE_SSL_CONNECT_ERROR || result == CURLE_PEER_FAILED_VERIFICATION || result == CURLE_GOT_NOTHING;
+    const auto doh = doh_hosts_.find(host);
+    const bool rerouted = blocked && (doh == doh_hosts_.end() || doh->second + 1 < kDohURLs.size());
+    if (rerouted) {
+      const std::size_t server = doh == doh_hosts_.end() ? 0 : doh->second + 1;
+      doh_hosts_[host] = server;
+      network::platform_log(("images: " + host + " unreachable (" + curl_easy_strerror(result) + "); resolving it over " +
+                    kDohURLs[server]).c_str());
     }
-    const bool transient = t.out_of_memory || result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST || result == CURLE_OPERATION_TIMEDOUT ||
+    const bool transient = t.out_of_memory || rerouted || result == CURLE_COULDNT_CONNECT || result == CURLE_COULDNT_RESOLVE_HOST || result == CURLE_OPERATION_TIMEDOUT ||
       result == CURLE_RECV_ERROR || result == CURLE_SEND_ERROR || result == CURLE_PARTIAL_FILE ||
       status == 429 || status == 502 || status == 503 || status == 504;
     std::string reason;
@@ -911,8 +918,9 @@ private:
   std::vector<Encoded> encoded_;
   std::uint64_t fetch_clock_ = 0;
   // Hosts the console's resolver sends nowhere: a DNS that blocks a vendor's domains (as consoles
-  // running homebrew do, against system updates) also blocks its image CDN. These resolve over DoH.
-  std::vector<std::string> doh_hosts_;
+  // running homebrew do, against system updates) also blocks its image CDN. These resolve over DoH,
+  // through the server of kDohURLs at the mapped index.
+  std::map<std::string, std::size_t> doh_hosts_;
   CURLM* multi_ = nullptr;
   pthread_t fetch_thread_{}, decode_thread_{};
   std::string cache_directory_;
