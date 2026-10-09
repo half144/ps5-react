@@ -123,6 +123,8 @@ struct Transfer {
   // A 200 or 206 that is not the range asked for but carries the file's validators: a proxy or a busy
   // node answering oddly, retried a few times rather than taken for a changed file.
   bool glitch = false;
+  // In flight while the process was suspended: its connection may have died with no server at fault.
+  bool interrupted = false;
   CURLcode result = CURLE_OK;
 };
 
@@ -226,6 +228,19 @@ bool congested(const Transfer& t) {
       return true;
     default: return false;
   }
+}
+
+// A transfer loop pass this long after the previous one means the process was suspended (rest mode,
+// or another app in front); passes are otherwise at most 50 ms apart. Rest mode may stop the monotonic
+// clock, so the wall clock is compared as well.
+constexpr auto suspension_gap = std::chrono::seconds(10);
+// After a suspension the console's network takes a while to come back, and connections that crossed
+// it may only time out (LOW_SPEED_TIME, 30 s): connection failures until then are not a busy server.
+constexpr auto suspension_grace = std::chrono::seconds(60);
+
+// A broken connection, rather than an HTTP error or a refused response, that a suspension explains.
+bool cut_by_suspension(const Transfer& t, Clock::time_point now, Clock::time_point grace_until) {
+  return t.error.empty() && t.result != CURLE_OK && (t.interrupted || now < grace_until);
 }
 
 // Total attempts a range (or probe) gets after this failure; 0 fails the job at once.
@@ -1307,7 +1322,7 @@ void Service::finish_transfer(Transfer& t) {
 void Service::run_job(const std::shared_ptr<Job>& job) {
   for (Transfer& t : transfers_) {
     t.job = job; t.active = false; t.draining = false; t.probe = false; t.source = 0; t.mirror = 0;
-    t.accepted = 0; t.written = 0; t.pending = 0;
+    t.accepted = 0; t.written = 0; t.pending = 0; t.interrupted = false;
   }
   { std::lock_guard lock(job->mutex); job->snapshot.state = "connecting"; }
   const bool file = !job->request.destination.empty();
@@ -1339,8 +1354,17 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
     std::uint64_t logged_received = job->committed, logged_written = job->committed;
     std::uint64_t previous_written = job->committed;
     std::size_t finished = static_cast<std::size_t>(std::count(scheduled.begin(), scheduled.end(), 1));
+    Clock::time_point last_pass = previous, grace_until{};
+    auto last_wall = std::chrono::system_clock::now();
     while (finished < count && !job->failed && !job->cancelled) {
       const auto now = Clock::now();
+      const auto wall = std::chrono::system_clock::now();
+      if (now-last_pass > suspension_gap || wall-last_wall > suspension_gap) {
+        grace_until = now+suspension_grace;
+        for (Transfer& t : transfers_) if (t.active) t.interrupted = true;
+        platform_log("download: resumed after a suspension; ranges it cut retry without counting");
+      }
+      last_pass = now; last_wall = wall;
       unsigned in_flight = 0;
       for (Transfer& t : transfers_) if (t.active || t.draining) ++in_flight;
       if (job->request.adaptive) for (Window& w : windows) w.grow(now, limit);
@@ -1351,6 +1375,13 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             job->committed += t.written;
             if (job->ranged) job->completed[t.piece] = 1;
             ++finished;
+          } else if (cut_by_suspension(t, now, grace_until)) {
+            // Counted as a busy server, every range in flight across a rest-mode cycle shrank the window
+            // for the rest of the job and spent an attempt on its way to failing the download.
+            log_failure(t, attempts[t.piece]);
+            --attempts[t.piece];
+            scheduled[t.piece] = 0;
+            retry_at[t.piece] = now+std::chrono::seconds(1);
           } else {
             const unsigned attempt = attempts[t.piece];
             log_failure(t, attempt);
@@ -1400,7 +1431,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             t.length = job->ranged ? std::min(job->request.range_bytes, job->total-t.begin) : job->total;
             t.mirror = mirror;
           }
-          t.accepted = 0; t.written = 0; ++attempts[next];
+          t.accepted = 0; t.written = 0; t.interrupted = false; ++attempts[next];
           if (!file) job->response.clear();
           if (!configure(t) || curl_multi_add_handle(multi_, t.curl) != CURLM_OK) {
             job->fail(t.error.empty() ? "could not schedule transfer" : t.error); break;

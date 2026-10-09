@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import ssl
 import struct
@@ -37,6 +38,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # /hop sends its first request (the probe) to /node-a, whose ranges then fail with HTTP 500, and
     # every later one to /node-b, a healthy node with the same file.
     hops = 0
+    # Connections serving /suspend ranges, which the test cuts while the client is stopped.
+    streams = set()
 
     def respond(self, head=False):
         if self.path == "/hop":
@@ -171,12 +174,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         if head:
             return
+        if path == "/suspend" and selected != "bytes=0-0":
+            with self.guard:
+                Handler.streams.add(self.connection)
         try:
             for offset in range(start, end+1, 65536):
                 index = offset % len(payload)
                 self.wfile.write(payload[index:index+min(65536, end-offset+1)])
                 if path.startswith("/slow") or path.startswith("/multipart-slow"):
                     time.sleep(0.006)
+                if path == "/suspend":
+                    time.sleep(0.02)
                 if path == "/truncated" and selected != "bytes=0-0":
                     self.close_connection = True
                     self.connection.shutdown(socket.SHUT_RDWR)
@@ -423,6 +431,27 @@ def main():
         client.kill(); client.wait()
         assert Path(str(path)+".part").exists() and Path(str(path)+".resume").exists()
         assert run("/slow", path)["state"] == "completed"
+        assert path.read_bytes() == DATA
+        path.unlink()
+        # Ranges whose connections died while the process was suspended (rest mode) are retried without
+        # counting as a busy server's refusals.
+        path = directory / "suspended"
+        client = subprocess.Popen([str(binary), origin+"/suspend", str(path), "4", str(1024*1024), "0", hashlib.sha256(DATA).hexdigest(),
+                                   "GET", "0", "0", "single"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                  env={**os.environ, "NETWORK_TEST_ADAPTIVE": "1"})
+        deadline = time.monotonic()+5
+        while len(Handler.streams) < 4 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        client.send_signal(signal.SIGSTOP)
+        with Handler.guard:
+            for stream in Handler.streams:
+                try: stream.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+            Handler.streams.clear()
+        time.sleep(10.5)
+        client.send_signal(signal.SIGCONT)
+        out = json.loads(client.communicate(timeout=20)[0])
+        assert out["state"] == "completed" and out["retries"] == 0, out
         assert path.read_bytes() == DATA
         path.unlink()
         path = directory / "shutdown"
