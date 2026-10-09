@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "packages.hpp"
 #include "host_api.hpp"
+#include "worker_thread.hpp"
 #include <atomic>
 #include <climits>
 #include <cstdio>
@@ -35,7 +36,7 @@ struct Job {
   std::atomic<bool> cancelled{false};
   std::atomic<int> socket{-1};
   std::mutex mutex;
-  std::thread worker;
+  WorkerThread worker;
 };
 std::mutex guard;
 std::shared_ptr<Job> active;
@@ -132,7 +133,11 @@ std::uint32_t install(std::string path, std::string name, std::string& error) {
   job->name = std::move(name);
   job->snapshot.id = next_id++;
   active = job;
-  job->worker = std::thread(run, job);
+  if (!job->worker.start([job] { run(job); }, 1024 * 1024)) {
+    active.reset();
+    error = "Cannot start the installer thread.";
+    return 0;
+  }
   return job->snapshot.id;
 }
 

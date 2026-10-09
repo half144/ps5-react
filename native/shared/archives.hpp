@@ -15,4 +15,8 @@ std::uint32_t enqueue(Request request, std::string& error);
 void cancel(std::uint32_t id);
 std::vector<Snapshot> poll();
 void stop();
+// The names in a directory, from the host's own listing (a console title cannot use opendir).
+bool list_directory(const char* path, void (*visit)(const char* name, void* user), void* user);
+// Each extraction step, for the console's crash log; the host defines it (a no-op on the desktop).
+void trace(const char* step, const char* detail = "");
 }

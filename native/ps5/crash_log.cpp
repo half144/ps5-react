@@ -14,6 +14,12 @@
 #include <unistd.h>
 
 extern "C" int __real_sceKernelDebugOutText(int channel, const char* text);
+extern "C" {
+struct ModuleSegment { void* address; std::uint32_t size; std::int32_t prot; };
+struct ModuleInfo { std::size_t size; char name[256]; ModuleSegment segments[4]; std::uint32_t segment_count; std::uint8_t fingerprint[20]; };
+int sceKernelGetModuleList(int* handles, std::size_t count, std::size_t* actual);
+int sceKernelGetModuleInfo(int handle, ModuleInfo* info);
+}
 
 namespace {
 std::atomic<int> log_fd{-1};
@@ -62,6 +68,24 @@ extern "C" int __wrap_sceKernelDebugOutText(int channel, const char* text) {
   return __real_sceKernelDebugOutText(channel, text);
 }
 
+namespace {
+// Where every loaded module sits, so a fault's rip maps to a module and an offset in it.
+void log_modules() {
+  int handles[256];
+  std::size_t count = 0;
+  if (sceKernelGetModuleList(handles, 256, &count) != 0) return;
+  for (std::size_t i = 0; i < count && i < 256; ++i) {
+    ModuleInfo info {};
+    info.size = sizeof info;
+    if (sceKernelGetModuleInfo(handles[i], &info) != 0) continue;
+    char line[400];
+    const int n = std::snprintf(line, sizeof line, "[PS5-REACT] module %s text=%p+0x%x\n", info.name,
+                                info.segment_count ? info.segments[0].address : nullptr, info.segment_count ? info.segments[0].size : 0u);
+    if (n > 0) { append(line, static_cast<std::size_t>(n)); __real_sceKernelDebugOutText(0, line); }
+  }
+}
+}
+
 namespace crash_log {
 void start(const char* directory) {
   char current[320], previous[320];
@@ -74,5 +98,6 @@ void start(const char* directory) {
   action.sa_flags = SA_SIGINFO | SA_RESETHAND;
   sigemptyset(&action.sa_mask);
   for (int signal : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP}) sigaction(signal, &action, nullptr);
+  log_modules();
 }
 }

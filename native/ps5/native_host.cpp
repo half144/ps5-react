@@ -52,6 +52,10 @@ extern const char proof_bundle[];
 extern const unsigned long proof_bundle_length;
 }
 
+// Extraction steps go to the console log, so the crash log keeps the last one before a fault.
+bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) { return host::read_dir(path, visit, user); }
+void archives::trace(const char* step, const char* detail) { async_log::write("[PS5-REACT] archive %s %s", step, detail); }
+
 namespace {
 // Startup steps log their time since main(), to show where launch time goes.
 std::int64_t launch_us = 0;

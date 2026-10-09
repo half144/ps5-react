@@ -203,6 +203,9 @@ def main():
   orphan=root/"orphan.extracting";orphan.mkdir();(orphan/"keep").write_bytes(b"unowned")
   assert run("orphan",[zip])[0]=="failed"
   assert (orphan/"keep").read_bytes()==b"unowned"
+  # A crash before the ownership record leaves empty staging, which the next extraction takes over.
+  (root/"abandoned.extracting").mkdir()
+  assert run("abandoned",[zip])[0]=="completed"
   assert run("limit",[zip],100)[0]=="failed"
   assert not (root/"limit").exists()
   for name,path in [("traversal","../escape"),("absolute","/escape"),("drive","C:/escape")]:

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "archives.hpp"
+#include "worker_thread.hpp"
 #include <clocale>
 #include <mutex>
 #include "archive_preflight.hpp"
@@ -40,7 +41,7 @@ struct Job {
   Snapshot snapshot;
   std::atomic<bool> cancelled{false};
   std::mutex mutex;
-  std::thread worker;
+  WorkerThread worker;
 };
 std::mutex guard;
 std::shared_ptr<Job> active;
@@ -82,26 +83,29 @@ bool safe(const char* name) {
   return true;
 }
 // Every directory is opened relative to an owned root, never following archive-created links.
-int parent_fd(int root, const std::string& name, std::string& leaf) {
-  int fd = dup(root);
+// The console's libkernel for titles has no *at calls (openat, mkdirat, fstatat, unlinkat: only
+// libkernel_sys has them), and calling one faulted at address 0 and killed the title. Paths are used
+// instead, each directory checked as created here and never a link.
+bool plain_directory(const std::string& path) {
+  struct stat st;
+  return !lstat(path.c_str(), &st) && S_ISDIR(st.st_mode);
+}
+// Creates the directories of `name` under `root` and returns the path of its last component.
+bool make_parents(const std::string& root, const std::string& name, std::string& target) {
+  target = root;
   std::size_t start = 0;
   while (true) {
     const auto end = name.find('/', start);
+    const auto part = name.substr(start, end == std::string::npos ? std::string::npos : end - start);
     if (end == std::string::npos) {
-      leaf = name.substr(start);
-      return fd;
+      target += "/" + part;
+      return true;
     }
-    const auto part = name.substr(start, end - start);
     start = end + 1;
     if (part == ".") continue;
-    if (mkdirat(fd, part.c_str(), 0700) && errno != EEXIST) {
-      close(fd);
-      return -1;
-    }
-    const int child = openat(fd, part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    close(fd);
-    if (child < 0) return -1;
-    fd = child;
+    target += "/" + part;
+    if (mkdir(target.c_str(), 0700) && errno != EEXIST) return false;
+    if (!plain_directory(target)) { errno = ENOTDIR; return false; }
   }
 }
 bool file_hash(const std::string& path, Job& job, std::string& digest) {
@@ -167,8 +171,8 @@ bool read_metadata(const std::string& path, std::string& text) {
   close(fd);
   return true;
 }
-bool write_metadata(int root, const char* name, const std::string& text) {
-  const int fd = openat(root, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+bool write_metadata(const std::string& directory, const char* name, const std::string& text) {
+  const int fd = open((directory + "/" + name).c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
   if (fd < 0) return false;
   std::size_t offset = 0;
   bool ok = true;
@@ -185,38 +189,31 @@ bool write_metadata(int root, const char* name, const std::string& text) {
   close(fd);
   return ok;
 }
-// Remove only entries reached through the owned directory descriptor, without following links.
-bool clear_directory(int root, unsigned depth = 0) {
+bool empty_directory(const std::string& path) {
+  std::size_t count = 0;
+  return list_directory(path.c_str(), [](const char* name, void* out) {
+    if (std::strcmp(name, ".") && std::strcmp(name, "..")) ++*static_cast<std::size_t*>(out);
+  }, &count) && !count;
+}
+// Removes what is under `path` without following links. Names come from the host's listing: opendir
+// and the *at calls are unusable in a console title.
+bool clear_directory(const std::string& path, unsigned depth = 0) {
   if (depth > max_depth) return false;
-  DIR* directory = fdopendir(dup(root));
-  if (!directory) return false;
-  bool ok = true;
-  while (auto* entry = readdir(directory)) {
-    if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+  std::vector<std::string> names;
+  if (!list_directory(path.c_str(), [](const char* name, void* out) { static_cast<std::vector<std::string>*>(out)->emplace_back(name); }, &names))
+    return false;
+  for (const auto& name : names) {
+    if (name == "." || name == "..") continue;
+    const std::string child = path + "/" + name;
     struct stat st;
-    if (fstatat(root, entry->d_name, &st, AT_SYMLINK_NOFOLLOW)) {
-      ok = false;
-      break;
-    }
+    if (lstat(child.c_str(), &st)) return false;
     if (S_ISDIR(st.st_mode)) {
-      const int child = openat(root, entry->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-      if (child < 0) {
-        ok = false;
-        break;
-      }
-      ok = clear_directory(child, depth + 1);
-      close(child);
-      if (!ok || unlinkat(root, entry->d_name, AT_REMOVEDIR)) {
-        ok = false;
-        break;
-      }
-    } else if (unlinkat(root, entry->d_name, 0)) {
-      ok = false;
-      break;
+      if (!clear_directory(child, depth + 1) || rmdir(child.c_str())) return false;
+    } else if (unlink(child.c_str())) {
+      return false;
     }
   }
-  closedir(directory);
-  return ok;
+  return true;
 }
 // True when every component below root is a real directory or, last, the entry itself.
 bool plain_path(const std::string& root, const std::string& path) {
@@ -277,7 +274,7 @@ bool restart_staging(const std::string& staging, const struct stat& expected) {
   const int previous = open(staging.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
   struct stat opened;
   const bool owned = previous >= 0 && !fstat(previous, &opened) && opened.st_dev == expected.st_dev && opened.st_ino == expected.st_ino;
-  const bool cleared = owned && clear_directory(previous);
+  const bool cleared = owned && clear_directory(staging);
   if (previous >= 0) close(previous);
   return cleared && !rmdir(staging.c_str());
 }
@@ -335,7 +332,11 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
 // and killed the title. Under a UTF-8 locale a UTF-8 name needs no conversion.
 void use_utf8_names() {
   static std::once_flag once;
-  std::call_once(once, [] { if (!std::setlocale(LC_CTYPE, "C.UTF-8")) std::setlocale(LC_CTYPE, "en_US.UTF-8"); });
+  std::call_once(once, [] {
+    const char* locale = std::setlocale(LC_CTYPE, "C.UTF-8");
+    if (!locale) locale = std::setlocale(LC_CTYPE, "en_US.UTF-8");
+    trace("locale", locale ? locale : "none");
+  });
 }
 archive* open_archive(Job& job, std::string& error, std::unique_ptr<Rar5PasswordReader>& decrypted) {
   const auto& request = job.request;
@@ -364,7 +365,7 @@ archive* open_archive(Job& job, std::string& error, std::unique_ptr<Rar5Password
   return archive;
 }
 // Writes every entry under root and appends its digest line to the receipt.
-std::string extract(Job& job, archive* archive, int root, const std::string& staging, std::string& receipt, Rar5PasswordReader* decrypted) {
+std::string extract(Job& job, archive* archive, const std::string& staging, std::string& receipt, Rar5PasswordReader* decrypted) {
   const auto& request = job.request;
   archive_entry* entry = nullptr;
   int result = ARCHIVE_OK;
@@ -372,6 +373,7 @@ std::string extract(Job& job, archive* archive, int root, const std::string& sta
   // A warning is a header libarchive could only read in part, such as a name it could not convert.
   while (!job.cancelled && ((result = archive_read_next_header(archive, &entry)) == ARCHIVE_OK || result == ARCHIVE_WARN)) {
     const char* name = archive_entry_pathname_utf8(entry);
+    if (job.snapshot.entries < 3) trace("entry", name ? name : "(no name)");
     if (!name) return "Archive has a file name this console cannot read.";
     const auto type = archive_entry_filetype(entry);
     const bool link = archive_entry_symlink(entry) || archive_entry_hardlink(entry);
@@ -387,18 +389,13 @@ std::string extract(Job& job, archive* archive, int root, const std::string& sta
       const auto slash = path.find_last_of('/');
       if (slash != std::string::npos) path = path.substr(slash + 1);
     }
-    std::string leaf;
-    const int parent = parent_fd(root, path, leaf);
-    if (parent < 0) return std::strerror(errno);
+    std::string target;
+    if (!make_parents(staging, path, target)) return std::strerror(errno);
     if (type == AE_IFDIR) {
-      const bool failed = mkdirat(parent, leaf.c_str(), 0700) && errno != EEXIST;
-      const std::string error = failed ? std::strerror(errno) : "";
-      close(parent);
-      if (failed) return error;
+      if (mkdir(target.c_str(), 0700) && (errno != EEXIST || !plain_directory(target))) return std::strerror(errno);
       continue;
     }
-    const int fd = openat(parent, leaf.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-    close(parent);
+    const int fd = open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if (fd < 0) return std::strerror(errno);
     std::string digest;
     std::uint32_t crc = 0;
@@ -422,11 +419,7 @@ std::string extract(Job& job, archive* archive, int root, const std::string& sta
 void remove_owned_staging(const std::string& staging, const struct stat& owned) {
   struct stat current;
   if (lstat(staging.c_str(), &current) || current.st_dev != owned.st_dev || current.st_ino != owned.st_ino) return;
-  const int cleanup = open(staging.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-  if (cleanup < 0) return;
-  const bool cleared = clear_directory(cleanup);
-  close(cleanup);
-  if (cleared) rmdir(staging.c_str());
+  if (clear_directory(staging)) rmdir(staging.c_str());
 }
 void run(const std::shared_ptr<Job>& pointer) {
   name_thread("archive");
@@ -448,13 +441,20 @@ void run(const std::shared_ptr<Job>& pointer) {
     }
     return;
   }
+  trace("start", request.sources.front().c_str());
   if (const auto refusal = preflight(request.sources); !refusal.empty()) {
+    trace("preflight refused", refusal.c_str());
     fail(job, refusal);
     return;
   }
+  trace("preflight ok");
   if (!lstat(staging.c_str(), &st)) {
     std::string owner;
-    if (!S_ISDIR(st.st_mode) || !read_metadata(staging + "/" + stage_name, owner) || owner != "P5ST001:" + identity + "\n") {
+    // Empty staging with no ownership record is this task's own, left by a crash before it wrote one;
+    // staging that holds anything without a record for these inputs is preserved.
+    const bool recorded = S_ISDIR(st.st_mode) && read_metadata(staging + "/" + stage_name, owner);
+    const bool abandoned = S_ISDIR(st.st_mode) && !recorded && empty_directory(staging);
+    if (!abandoned && (!recorded || owner != "P5ST001:" + identity + "\n")) {
       fail(job, "Staging belongs to another extraction; files preserved.");
       return;
     }
@@ -479,23 +479,26 @@ void run(const std::shared_ptr<Job>& pointer) {
     rmdir(staging.c_str());
     return;
   }
-  if (!write_metadata(root, stage_name, "P5ST001:" + identity + "\n") || fsync(root)) {
+  if (!write_metadata(staging, stage_name, "P5ST001:" + identity + "\n") || fsync(root)) {
     close(root);
     fail(job, "Cannot record extraction staging ownership.");
     return;
   }
   std::string receipt = "P5AR001:" + identity + "\n";
   std::string error;
+  trace("staging ok", staging.c_str());
   std::unique_ptr<Rar5PasswordReader> decrypted;
   auto* archive = open_archive(job, error, decrypted);
+  trace("opened", error.c_str());
   {
     std::lock_guard lock(job.mutex);
     job.snapshot.state = "extracting";
   }
-  if (error.empty()) error = extract(job, archive, root, staging, receipt, decrypted.get());
+  if (error.empty()) error = extract(job, archive, staging, receipt, decrypted.get());
   if (decrypted && !decrypted->error().empty()) error = decrypted->error();
+  trace("read", error.c_str());
   archive_read_free(archive);
-  if (error.empty() && !job.cancelled && !write_metadata(root, receipt_name, receipt)) error = "Cannot save extraction completion receipt.";
+  if (error.empty() && !job.cancelled && !write_metadata(staging, receipt_name, receipt)) error = "Cannot save extraction completion receipt.";
   if (error.empty() && !job.cancelled && fsync(root)) error = std::strerror(errno);
   close(root);
   if (job.cancelled || !error.empty()) {
@@ -530,7 +533,11 @@ std::uint32_t enqueue(Request request, std::string& error) {
   job->snapshot.id = next_id++;
   job->snapshot.destination = job->request.destination;
   active = job;
-  job->worker = std::thread(run, job);
+  if (!job->worker.start([job] { run(job); })) {
+    active.reset();
+    error = "Cannot start the extraction thread.";
+    return 0;
+  }
   return job->snapshot.id;
 }
 void cancel(std::uint32_t id) {

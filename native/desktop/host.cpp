@@ -701,3 +701,6 @@ int main(int argc, char** argv) {
   if (!ok) std::fprintf(stderr, "Texture proof failed: %s / %s\n", SDL_GetError(), er_runtime_last_error());
   return ok ? 0 : 1;
 }
+
+void archives::trace(const char*, const char*) {}
+bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) { return host::read_dir(path, visit, user); }
