@@ -4,9 +4,9 @@
 #include "browser_capture.hpp"
 #include "payload_loader.hpp"
 #include "worker_thread.hpp"
+#include "async_log.hpp"
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <memory>
 #include <mutex>
 extern "C" int sceNetShutdown(int, int);
@@ -25,7 +25,7 @@ std::shared_ptr<Job> current;
 std::uint32_t next_id = 1;
 bool terminal(const std::string& state) { return state == "completed" || state == "failed" || state == "cancelled"; }
 void run(std::shared_ptr<Job> job) {
-  std::printf("[browser-capture] submitting payload, task=%u\n", job->snapshot.id);
+  async_log::write("[browser-capture] submitting payload, task=%u", job->snapshot.id);
   std::string error, url;
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(job->timeout + 10);
   const int socket = payload_loader::send("browser-capture.elf", "BRC1\n" + job->prefix + "\n" + job->suffix + "\n" +
@@ -49,7 +49,7 @@ void run(std::shared_ptr<Job> job) {
         else if (line.starts_with("fail ")) { error = line.substr(5); ended = true; }
         else if (line == "waiting") {
           std::lock_guard lock(job->mutex);
-          if (job->snapshot.state != "capturing") std::printf("[browser-capture] payload answering, task=%u\n", job->snapshot.id);
+          if (job->snapshot.state != "capturing") async_log::write("[browser-capture] payload answering, task=%u", job->snapshot.id);
           job->snapshot.state = "capturing";
         }
         else { error = "Invalid capture response."; ended = true; }
@@ -61,7 +61,7 @@ void run(std::shared_ptr<Job> job) {
   std::lock_guard lock(job->mutex);
   job->snapshot.state = job->cancelled ? "cancelled" : !url.empty() ? "completed" : "failed";
   job->snapshot.error = error;
-  std::printf("[browser-capture] task=%u state=%s%s%s\n", job->snapshot.id, job->snapshot.state.c_str(),
+  async_log::write("[browser-capture] task=%u state=%s%s%s", job->snapshot.id, job->snapshot.state.c_str(),
     error.empty() ? "" : " reason=", error.c_str());
   if (!job->cancelled) job->snapshot.url = std::move(url);
 }
