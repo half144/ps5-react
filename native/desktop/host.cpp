@@ -699,6 +699,11 @@ int main(int argc, char** argv) {
     while (ok && host.running) ok = host.frame();
   }
   if (!ok) std::fprintf(stderr, "Texture proof failed: %s / %s\n", SDL_GetError(), er_runtime_last_error());
+  if (ok && desktop_relaunch_requested()) {
+    SDL_Quit();
+    execv(argv[0], argv);
+    std::fprintf(stderr, "relaunch: %s\n", std::strerror(errno));
+  }
   return ok ? 0 : 1;
 }
 

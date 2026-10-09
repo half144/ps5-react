@@ -22,6 +22,7 @@
 //   fs.removeTree(path)            a file, or a directory and everything in it; symbolic links are
 //                                  unlinked, never followed; synchronous, for small app-owned trees
 //   fs.rename(from, to)
+//   fs.chmod(path, mode)           sets permission bits
 //   fs.mounts()                    [{device, path, type}], visible to the process
 //                                  console access is opt-in via app.json
 //   fs.diskUsage(path)             {total, free} in bytes; free available to the app
@@ -71,7 +72,9 @@
 //   sound.setVolume(volume)        master gain 0..1 for every sound
 //   text.setLanguage(tag)          ABI v6; BCP 47 language for runtime text (Han glyph forms,
 //                                  shaping); defaults to the system language
-//   exit()                         asks the host to close after this frame
+//   exit(relaunch)                 asks the host to close after this frame; with relaunch true it
+//                                  opens the app again once closed and returns true, or the reason
+//                                  it cannot (PS5: needs the payload loader on 127.0.0.1:9021)
 // Failures throw a JS Error whose message names the call, the path, and strerror.
 #pragma once
 
@@ -129,6 +132,9 @@ bool read_dir(const char* real_path, void (*visit)(const char* name, void* user)
 bool disk_usage(const char* real_path, double& total, double& free);
 // Records the first use of each native call (PS5: kernel log), to locate native faults.
 void trace(const char* call);
+// Opens the app again once it has closed: PS5 sends relauncher.elf to the payload loader, the desktop
+// preview runs itself again. False with a reason in `error` (at most `size` bytes) when it cannot.
+bool arrange_relaunch(char* error, std::size_t size);
 
 struct DeviceInfo {
   char model[64] = "";

@@ -7,3 +7,5 @@
 
 // The Host owns the controller; the native API borrows it for light bar and rumble.
 void desktop_set_controller(SDL_GameController* controller);
+// Whether the app asked to open again once closed (host::arrange_relaunch); main runs itself again.
+bool desktop_relaunch_requested();

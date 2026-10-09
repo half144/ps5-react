@@ -61,6 +61,13 @@ const char* platform_name() {
   return "desktop";
 }
 
+bool relaunch = false;
+
+bool arrange_relaunch(char*, std::size_t) {
+  relaunch = true;
+  return true;
+}
+
 int list_mounts(MountEntry* mounts, int max) {
   struct statfs* found = nullptr;
   const int count = getmntinfo(&found, MNT_NOWAIT);
@@ -210,3 +217,5 @@ void stop_audio() {
   SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 } // namespace host
+
+bool desktop_relaunch_requested() { return host::relaunch; }

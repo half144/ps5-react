@@ -2,34 +2,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "packages.hpp"
-#include "host_api.hpp"
+#include "payload_loader.hpp"
 #include "worker_thread.hpp"
 #include <atomic>
-#include <climits>
 #include <cstdio>
 #include <cstdlib>
-#include <fcntl.h>
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <unistd.h>
 
 // An app may not call the console's app-install service, and a loader payload may. Each install sends
-// pkg-installer.elf (native/ps5/payloads/pkg_installer.c) to the payload loader on 127.0.0.1:9021, which
-// gives it the rest of the connection as its standard input and output, and relays its lines.
-extern "C" {
-int sceNetSocket(const char* name, int domain, int type, int protocol);
-int sceNetSocketClose(int socket);
-int sceNetConnect(int socket, const void* address, std::uint32_t length);
-int sceNetSend(int socket, const void* data, std::size_t length, int flags);
-int sceNetRecv(int socket, void* data, std::size_t length, int flags);
-int sceNetSetsockopt(int socket, int level, int option, const void* value, std::uint32_t size);
-}
-
+// pkg-installer.elf (native/ps5/payloads/pkg_installer.c) to the payload loader, which relays its lines.
 namespace packages {
 namespace {
-struct NetAddress { std::uint8_t length, family; std::uint16_t port; std::uint32_t address; std::uint16_t virtual_port; std::uint8_t zero[6]; };
-
 struct Job {
   std::string path, name;
   Snapshot snapshot;
@@ -50,37 +35,9 @@ void finish(Job& job, const char* state, const std::string& error = {}) {
   job.snapshot.error = error;
 }
 
-bool send_all(int socket, const char* data, std::size_t size) {
-  while (size) {
-    const int count = sceNetSend(socket, data, size, 0);
-    if (count <= 0) return false;
-    data += count; size -= static_cast<std::size_t>(count);
-  }
-  return true;
-}
-
-// Sends the program and the request; -1 with `error` set when the loader is not there.
+// The payload reports once a second; half a minute of silence means it is gone.
 int submit(Job& job, std::string& error) {
-  char program[PATH_MAX];
-  const int file = host::resolve_path("/app0/pkg-installer.elf", program, sizeof program) ? open(program, O_RDONLY) : -1;
-  if (file < 0) { error = "Packages.install: pkg-installer.elf is missing from the app folder"; return -1; }
-  const int socket = sceNetSocket("ps5-react-pkg", 2, 1, 6);
-  // The payload reports once a second; half a minute of silence means it is gone.
-  constexpr int timeout_us = 30'000'000, connect_us = 5'000'000, level = 0xffff;
-  const NetAddress address{sizeof(NetAddress), 2, static_cast<std::uint16_t>((9021 << 8) | (9021 >> 8)), 0x0100007f, 0, {}};
-  bool ok = socket >= 0 && sceNetSetsockopt(socket, level, 0x1105, &timeout_us, sizeof timeout_us) >= 0 &&
-            sceNetSetsockopt(socket, level, 0x1106, &timeout_us, sizeof timeout_us) >= 0 &&
-            sceNetSetsockopt(socket, level, 0x1109, &connect_us, sizeof connect_us) >= 0 &&
-            sceNetConnect(socket, &address, sizeof address) >= 0;
-  if (!ok) error = "Packages.install: the payload loader on port 9021 did not answer; load an ELF loader and retry";
-  char buffer[65536];
-  for (ssize_t count; ok && (count = read(file, buffer, sizeof buffer)) != 0;)
-    ok = count > 0 && send_all(socket, buffer, static_cast<std::size_t>(count));
-  close(file);
-  const std::string request = "PKI1\n" + job.path + "\n" + job.name + "\n";
-  if (ok && !send_all(socket, request.data(), request.size())) { ok = false; error = "Packages.install: the installer could not be sent"; }
-  if (!ok) { if (socket >= 0) sceNetSocketClose(socket); return -1; }
-  return socket;
+  return payload_loader::send("pkg-installer.elf", "PKI1\n" + job.path + "\n" + job.name + "\n", 30'000'000, "Packages.install", error);
 }
 
 // Lines: "ready", "started <content ID>", "p <written> <total> <status>", "ok", "fail <hex code> <reason>".
@@ -112,7 +69,7 @@ void run(std::shared_ptr<Job> job) {
   char buffer[1024];
   bool ended = false;
   while (!ended && !job->cancelled) {
-    const int count = sceNetRecv(socket, buffer, sizeof buffer, 0);
+    const int count = payload_loader::receive(socket, buffer, sizeof buffer);
     if (count <= 0) break;
     for (int i = 0; i < count && !ended; ++i) {
       if (buffer[i] != '\n') { if (line.size() < 2048) line.push_back(buffer[i]); continue; }
@@ -120,7 +77,7 @@ void run(std::shared_ptr<Job> job) {
       line.clear();
     }
   }
-  if (job->socket.exchange(-1) >= 0) sceNetSocketClose(socket);
+  if (job->socket.exchange(-1) >= 0) payload_loader::close(socket);
   if (!ended) finish(*job, "failed", "Packages.install " + job->path + ": the installer stopped answering; check the console's Downloads");
 }
 }
@@ -146,7 +103,7 @@ void cancel(std::uint32_t id) {
   if (!active || active->snapshot.id != id) return;
   active->cancelled = true;
   // Unblocks the receive; the console keeps installing what it accepted.
-  if (const int socket = active->socket.exchange(-1); socket >= 0) sceNetSocketClose(socket);
+  if (const int socket = active->socket.exchange(-1); socket >= 0) payload_loader::close(socket);
 }
 
 std::vector<Snapshot> poll() {

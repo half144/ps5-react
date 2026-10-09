@@ -236,6 +236,15 @@ JSValue fs_rename(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   return JS_ThrowPlainError(ctx, "fs.rename %s -> %s: %s", from.app(), to.app(), std::strerror(errno));
 }
 
+JSValue fs_chmod(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  Path path(ctx, argv[0]);
+  if (!path) return path.error("fs.chmod");
+  std::uint32_t mode = 0;
+  if (JS_ToUint32(ctx, &mode, argv[1]) || mode > 07777) return JS_ThrowTypeError(ctx, "fs.chmod: mode must be 0 to 0o7777");
+  if (chmod(path.real(), static_cast<mode_t>(mode)) == 0) return JS_UNDEFINED;
+  return JS_ThrowPlainError(ctx, "fs.chmod %s: %s", path.app(), std::strerror(errno));
+}
+
 JSValue mount_object(JSContext* ctx, const char* device, const char* path, const char* type) {
   JSValue mount = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, mount, "device", JS_NewString(ctx, device));
@@ -387,9 +396,11 @@ JSValue pad_state(JSContext* ctx, JSValueConst, int, JSValueConst*) {
   return state;
 }
 
-JSValue request_exit(JSContext*, JSValueConst, int, JSValueConst*) {
+JSValue request_exit(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   exit_requested = true;
-  return JS_UNDEFINED;
+  if (!JS_ToBool(ctx, argv[0])) return JS_UNDEFINED;
+  char error[256] = "";
+  return host::arrange_relaunch(error, sizeof error) ? JS_TRUE : JS_NewString(ctx, error);
 }
 
 struct Function {
@@ -436,7 +447,7 @@ constexpr Function kFs[] = {
   {"readDir", fs_read_dir, 1}, {"stat", fs_stat, 1}, {"readFile", fs_read_file, 1},
   {"writeFile", fs_write_file, 3}, {"mkdir", fs_mkdir, 2}, {"remove", fs_remove, 1},
   {"removeTree", fs_remove_tree, 1},
-  {"rename", fs_rename, 2}, {"mounts", fs_mounts, 0}, {"diskUsage", fs_disk_usage, 1},
+  {"rename", fs_rename, 2}, {"chmod", fs_chmod, 2}, {"mounts", fs_mounts, 0}, {"diskUsage", fs_disk_usage, 1},
 };
 constexpr Function kDevice[] = {{"info", device_info, 0}};
 constexpr Function kUsers[] = {{"foreground", users_foreground, 0}, {"loggedIn", users_logged_in, 0}};
@@ -446,7 +457,7 @@ constexpr Function kPad[] = {
 };
 constexpr Function kPower[] = {{"keepAwake", power_keep_awake, 1}};
 constexpr Function kText[] = {{"setLanguage", text_set_language, 1}};
-constexpr Function kRoot[] = {{"notify", notify, 2}, {"openURL", open_url, 1}, {"exit", request_exit, 0}};
+constexpr Function kRoot[] = {{"notify", notify, 2}, {"openURL", open_url, 1}, {"exit", request_exit, 1}};
 } // namespace
 
 void ps5_react_install_host_api(JSContext* ctx) {

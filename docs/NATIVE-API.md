@@ -94,6 +94,7 @@ inside it can be read by path. Paths containing `..` components are rejected.
 | `remove(path)` | — | A file or an empty directory |
 | `removeTree(path)` | — | A file, or a directory and everything in it; symbolic links are unlinked, never followed. Synchronous: for small app-owned trees |
 | `rename(from, to)` | — | Both are app paths |
+| `chmod(path, mode)` | — | Permission bits, such as `0o777`; a file or directory the console's own services must read (a title's files) needs them open to every user |
 | `mounts()` | `{device, path, type}[]` | Up to 64 mounted filesystems visible to this process, as host paths; see [Hardware status](#hardware-status) |
 | `diskUsage(path)` | `{total, free}` | Bytes for the filesystem holding `path`; `free` is available to the app, clamped to `0..total` |
 
@@ -287,6 +288,13 @@ hardware.**
 
 `BackHandler.exitApp()` asks the host to close the app after the current frame,
 exactly like pressing Options (React Native's name for the same call).
+
+`BackHandler.exitApp({relaunch: true})` also opens the app again once it has closed, and returns
+whether that was arranged. An app cannot launch itself after it exits, so on PS5 it sends
+`relauncher.elf` (`native/ps5/payloads/relauncher.c`, shipped in the app folder) to the payload
+loader on `127.0.0.1:9021`; the payload waits for the title to close, then launches it for the
+foreground user. Without the loader it returns `false`, logs why, and the app only closes. The
+desktop preview runs itself again.
 
 ## Desktop preview behavior
 

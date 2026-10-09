@@ -79,6 +79,8 @@ export const FileSystem = {
   removeTree: path => host().fs.removeTree(path),
   /** @param {string} from @param {string} to */
   rename: (from, to) => host().fs.rename(from, to),
+  /** Sets a file's or directory's permission bits, such as 0o777. */
+  chmod: (path, mode) => host().fs.chmod(path, mode),
   /** Mounted filesystems visible to the host process. Console access requires
    * filesystemAccess: "console" in app.json. @returns {Mount[]} */
   mounts: () => host().fs.mounts(),
@@ -189,8 +191,19 @@ export const Fonts = {
 const backListeners = [];
 
 export const BackHandler = {
-  /** Closes the app after the current frame, like React Native's BackHandler.exitApp. */
-  exitApp: () => host().exit(),
+  /**
+   * Closes the app after the current frame, like React Native's BackHandler.exitApp. With `relaunch`,
+   * the app opens again once closed: true when that is arranged; otherwise it only closes, and the
+   * reason is logged.
+   * @param {{relaunch?: boolean}} [options]
+   * @returns {boolean}
+   */
+  exitApp({relaunch = false} = {}) {
+    const result = host().exit(relaunch);
+    if (!relaunch) return false;
+    if (result !== true) console.log(`BackHandler.exitApp: not reopening: ${result}`);
+    return result === true;
+  },
   /**
    * Circle, after the innermost FocusScope.onBack; the last listener added runs first.
    * @param {'hardwareBackPress'} event
