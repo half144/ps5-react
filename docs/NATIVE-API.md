@@ -429,7 +429,10 @@ decrypted in bounded buffers by the native reader before libarchive decompresses
 them. Header CRCs, file checksums, decoder-memory limits and output-path validation
 remain enforced. CBC padding is removed using compressed-block framing; no joined
 or decrypted archive copy is written to disk. Ordered encrypted RAR5 volumes use
-the same API. RAR5 files without CRC32, keyed CRC/BLAKE checksums, encrypted older RAR formats and
+the same API. Optional quick-open (`QO`) service indexes are skipped; extraction
+reads the original headers and verifies every file password and output CRC32.
+An incomplete index payload or invalid enclosing header CRC still fails.
+RAR5 files without CRC32, keyed CRC/BLAKE checksums, encrypted older RAR formats and
 encrypted 7z are not supported. Password derivation is capped at 2^20 iterations
 and runs on the extraction worker, never the render thread.
 

@@ -35,7 +35,7 @@ def rar5_with_window(shift):
  file=bytes([2,2,len(data),0,len(data),0])+vint(3<<7|shift<<10)+bytes([0,1])+b"a"
  return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+rar5_block(file,data)+rar5_block(bytes([5,0,0]))
 
-def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",headers=True,volumes=1,compression=0,crypto_flags=1):
+def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",headers=True,volumes=1,compression=0,crypto_flags=1,quick_open=False):
  """Independent RAR5 fixture with AES-CBC data/headers and spec password checks."""
  salt=bytes(range(16));power=15;iterations=1<<power
  key=hashlib.pbkdf2_hmac("sha256",password.encode(),salt,iterations)
@@ -62,7 +62,19 @@ def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",header
   prefix=b"Rar!\x1a\x07\x01\x00"
   if headers:prefix+=block(vint(4)+vint(0)+vint(0)+vint(1)+bytes([power])+salt+password_check)
   main=vint(1)+vint(0)+(vint(3)+vint(i) if volumes>1 else vint(0))
-  out.append(prefix+framed(main)+framed(body)+packed+framed(vint(5)+vint(0)+vint(int(i+1<volumes))))
+  service=b""
+  if quick_open and i+1==volumes:
+   # A quick-open index can carry a valid check-field checksum for a different password.
+   # It is optional cached metadata, not a file to extract or authenticate.
+   other=hashlib.pbkdf2_hmac("sha256",b"index-password",salt,iterations+32)
+   check=bytes(other[j]^other[j+8]^other[j+16]^other[j+24] for j in range(8))
+   encryption=vint(1)+vint(0)+vint(1)+bytes([power])+salt+iv+check+hashlib.sha256(check).digest()[:4]
+   extra=vint(len(encryption))+encryption
+   index=aes(bytes(2*128*1024+16),iv)
+   header=vint(3)+vint(3)+vint(len(extra))+vint(len(index))+vint(0)+vint(len(index))+vint(0)
+   header+=vint(0)+vint(0)+vint(2)+b"QO"+extra
+   service=framed(header)+index
+  out.append(prefix+framed(main)+framed(body)+packed+service+framed(vint(5)+vint(0)+vint(int(i+1<volumes))))
  return out
 
 def main():
@@ -103,6 +115,27 @@ def main():
    result=run(name+"-wrong",[rar],password="wrong")
    assert result[0]=="failed" and "password" in result[-1].lower(),result
    assert rar.exists() and not (root/(name+"-wrong")).exists()
+  for headers in [True,False]:
+   name="rar5-quick-open-headers" if headers else "rar5-quick-open-data"
+   rar=root/(name+".rar");blob=encrypted_rar5(DATA,headers=headers,quick_open=True)[0];rar.write_bytes(blob)
+   result=run(name,[rar],password="DLPSGAME.COM")
+   assert result[0]=="completed",result
+   assert (root/name/"game.ffpfsc").read_bytes()==DATA
+   assert not any(p.name=="QO" for p in (root/name).rglob("*"))
+   if headers:
+    parts=[]
+    for i in range(3):
+     part=root/f"{name}-part-{i}";part.write_bytes(blob[i*len(blob)//3:(i+1)*len(blob)//3]);parts.append(part)
+    result=run(name+"-volumes",parts,password="DLPSGAME.COM")
+    assert result[0]=="completed",result
+    assert (root/(name+"-volumes")/"game.ffpfsc").read_bytes()==DATA
+   # The ignored service payload must still be complete; never accept a truncated input.
+   truncated=root/(name+"-truncated.rar");truncated.write_bytes(blob[:-100])
+   result=run(name+"-truncated",[truncated],password="DLPSGAME.COM")
+   assert result[0]=="failed" and not (root/(name+"-truncated")).exists(),result
+  # A real file called QO must retain password authentication.
+  rar=root/"qo-file.rar";rar.write_bytes(encrypted_rar5(DATA,name="QO",password="other",headers=False)[0])
+  assert run("qo-file",[rar],password="DLPSGAME.COM")[0]=="failed"
   rar_parts=[]
   for i,blob in enumerate(encrypted_rar5(DATA,volumes=2)):
    volume=root/f"encrypted-volume-{i}.rar";volume.write_bytes(blob);rar_parts.append(volume)

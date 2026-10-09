@@ -466,6 +466,15 @@ struct Rar5PasswordReader::State {
         return false;
       }
       const std::string name(reinterpret_cast<const char *>(plain.data() + name_at), name_size);
+      if (type == 3 && name == "QO") {
+        // Quick-open is an optional index of cached headers. Read the original headers instead;
+        // its service encryption check need not authenticate the password used for file data.
+        // The enclosing header CRC was already checked, and take() still validates payload length.
+        data_left = packed;
+        emit_left = 0;
+        output.clear();
+        return true;
+      }
       if (type == 2 && !(file_flags & 1) && (file_flags & 4)) {
         if (!checksums.contains(name)) {
           checksum_bytes += name.size() + 64;

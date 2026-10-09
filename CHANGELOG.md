@@ -36,6 +36,13 @@
 
 ## Unreleased — native archive extraction
 
+- Skip optional RAR5 quick-open (`QO`) service indexes and read original headers.
+  3D MiniGolf's index carried a different password check, causing a false incorrect
+  password error after its files. Every file password, output CRC and header CRC
+  remains enforced; incomplete index data still fails. Full-archive streaming on
+  macOS verified 128 files (1,331,695,832 decoded bytes), and a worker reproduction
+  using the original index extracted the eboot successfully. The corrected build
+  still needs PS5 hardware validation.
 - Accept an optional archive password, including ordered volumes. Stream-decrypt
   RAR5 AES-256 headers and file data before libarchive decodes them, retaining CRC
   verification, memory limits, safe staging and cancellation. ZIP uses libarchive
