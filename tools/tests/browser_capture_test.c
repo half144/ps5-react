@@ -44,6 +44,22 @@ int main(void) {
   assert(!browser_match(&match, (const unsigned char *)url, strlen(url)));
   char prefixed[600]; snprintf(prefixed, sizeof prefixed, "x%s", url);
   assert(!browser_match(&match, (const unsigned char *)prefixed, strlen(prefixed) + 1));
+  // The selected public page uses punctuation that the catalog's synthetic name loses.
+  match.filename = "G_02225(v02.024)-[DLPSGAME.COM].rar";
+  const char *real_name_routes[] = {
+    "https://vikingfile.com/d/Ab01234567/G_02225(v02.024)-[DLPSGAME.COM].rar",
+    "https://vikingfile.com/d/Ab01234567/G_02225%28v02.024%29-%5BDLPSGAME.COM%5D.rar"
+  };
+  for (size_t route = 0; route < 2; route++) {
+    for (size_t step = 1; step <= 2; step++) {
+      memset(memory.bytes, 0, memory.length);
+      const char *candidate = real_name_routes[route];
+      const size_t offset = PROBE_CHUNK - 21;
+      for (size_t i = 0; i < strlen(candidate); i++) memory.bytes[offset + i * step] = (unsigned char)candidate[i];
+      assert(scan(&memory, &match, memory.length) == PROBE_FOUND);
+      assert(!strcmp(match.url, candidate));
+    }
+  }
   free(memory.bytes);
   puts("browser matcher/scanner: ASCII, UTF-16, block overlap, holes, cancellation, budget and URL binding passed");
 }

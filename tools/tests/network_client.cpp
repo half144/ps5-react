@@ -52,6 +52,7 @@ int main(int argc, char** argv) {
   const unsigned stop_ms = argc > 9 ? static_cast<unsigned>(std::atoi(argv[9])) : 0;
   if (argc > 6) request.sha256 = argv[6];
   if (argc > 7) request.method = argv[7];
+  if (std::getenv("NETWORK_TEST_RANGE_PROBE")) request.headers.emplace_back("Range: bytes=0-0");
   if (argc > 10 && std::string(argv[10]) == "pieces") {
     const std::uint64_t sizes[] = {3*1024*1024+17, 5*1024*1024+31, 7*1024*1024+9};
     std::uint64_t offset = 0;

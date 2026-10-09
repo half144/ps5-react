@@ -545,7 +545,8 @@ bool storage_test() {
     for (const invalid of [
       () => network.request("file:///tmp/example", {}),
       () => network.request("https://example.com", {maxBytes: 0}),
-      () => network.request("https://example.com", {headers: {Range: "bytes=0-1"}}),
+      () => network.request("https://example.com", {headers: {Host: "other.test"}}),
+      () => network.download("https://example.com", "/download0/a", {headers: {Range: "bytes=0-1"}}),
       () => network.download("https://example.com", "/download0/a", {connections: 65}),
       () => network.download("https://example.com", "/download0/a", {recoverCompleted: 'yes'}),
       () => network.cancel(),
@@ -553,6 +554,9 @@ bool storage_test() {
       try { invalid(); return false; }
       catch (error) { if (!error.message.includes("network.")) return false; }
     }
+    const rangeProbe = network.request("http://127.0.0.1:1", {headers: {Range: "bytes=0-0"}, maxBytes: 8192});
+    if (!Number.isInteger(rangeProbe) || rangeProbe <= 0) return false;
+    network.cancel(rangeProbe);
     // With any sound baked, a second play while the first still sounds is skipped.
     const sound = globalThis.__ps5ReactNative.sound;
     const baked = globalThis.__ps5ReactTestSound;

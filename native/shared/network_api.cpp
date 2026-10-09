@@ -95,7 +95,7 @@ bool pieces(JSContext* ctx, JSValueConst options, network::Request& request) {
   return request.expected_bytes == offset;
 }
 
-bool headers(JSContext* ctx, JSValueConst options, network::Request& request) {
+bool headers(JSContext* ctx, JSValueConst options, network::Request& request, bool download) {
   Value value{ctx, JS_GetPropertyStr(ctx, options, "headers")};
   if (JS_IsUndefined(value.value)) return true;
   if (!JS_IsObject(value.value)) return false;
@@ -112,7 +112,7 @@ bool headers(JSContext* ctx, JSValueConst options, network::Request& request) {
     if (body.find_first_of("\r\n") != std::string::npos) entry = false;
     std::string lower = name;
     for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (lower == "range" || lower == "if-range" || lower == "accept-encoding" || lower == "content-length" ||
+    if ((lower == "range" && download) || lower == "if-range" || lower == "accept-encoding" || lower == "content-length" ||
         lower == "connection" || lower == "host") entry = false;
     valid = valid && entry;
     if (entry && count <= 32) request.headers.push_back(name+": "+body);
@@ -132,7 +132,7 @@ JSValue begin(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, bool d
       request.url.find_first_of("\r\n") != std::string::npos)
     return JS_ThrowTypeError(ctx, "%s: expected an http:// or https:// URL (at most 8192 bytes)", call);
   const JSValueConst options = argv[options_index];
-  if (!headers(ctx, options, request)) return JS_ThrowTypeError(ctx, "%s: invalid headers; transport-owned headers cannot be overridden", call);
+  if (!headers(ctx, options, request, download)) return JS_ThrowTypeError(ctx, "%s: invalid headers; transport-owned headers cannot be overridden", call);
   if (download) {
     std::string path;
     char resolved[PATH_MAX];

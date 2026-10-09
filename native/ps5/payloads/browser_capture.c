@@ -71,8 +71,9 @@ int main(void) {
   BrowserMatch match = {.filename = filename};
   ProbeReader reader = {.context = &target, .read = probe_target_read, .active = active,
     .match = browser_match, .match_context = &match, .remaining = 128U * 1024U * 1024U};
+  ProbeResult result = PROBE_ABSENT;
   while (active(&target) && reader.remaining) {
-    const ProbeResult result = probe_target_scan(&target, &reader, prefix);
+    result = probe_target_scan(&target, &reader, prefix);
     if (result == PROBE_FOUND && active(&target)) {
       say("found", match.url);
       memset(&match, 0, sizeof match);
@@ -82,6 +83,13 @@ int main(void) {
     usleep(100000);
   }
   memset(&match, 0, sizeof match);
-  return fail(target.identity_changed ? "The browser restarted. Reopen the page and retry."
-    : "Capture expired or reached its read budget. Retry or enter the final file link.");
+  if (target.identity_changed) return fail("The browser restarted. Reopen the page and retry.");
+  if (result == PROBE_INVALID) return fail("Could not read the browser memory map. Retry or enter the final file link.");
+  if (!reader.readable) return fail(reader.attempted
+    ? "Browser memory reads failed. Check the jailbreak and retry."
+    : "No eligible browser memory was available. Reopen the page and retry.");
+  char reason[256];
+  snprintf(reason, sizeof reason, "No matching link found (read %llu KiB, attempted %llu KiB, failed reads %u). Reopen the page and retry.",
+    (unsigned long long)(reader.readable / 1024), (unsigned long long)(reader.attempted / 1024), reader.failures);
+  return fail(reason);
 }

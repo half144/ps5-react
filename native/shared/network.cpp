@@ -795,7 +795,7 @@ std::size_t Service::header(char* data, std::size_t size, std::size_t count, voi
   // Only bounded transfer metadata crosses into JS; never expose cookies or auth headers.
   if (name == "content-type" || name == "content-length" || name == "content-disposition" ||
       name == "content-range" || name == "location" || name == "hx-redirect" ||
-      name == "etag" || name == "retry-after") {
+      name == "etag" || name == "last-modified" || name == "retry-after") {
     auto found = std::find_if(t.response_headers.begin(), t.response_headers.end(),
                             [&](const auto& item) { return item.first == name; });
     if (found == t.response_headers.end()) t.response_headers.emplace_back(name, value);

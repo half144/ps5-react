@@ -132,6 +132,9 @@ calls retain their normal permission errors rather than returning fake values.
 `Http.request(url, options)` provides bounded text/JSON HTTP responses, effective
 URLs and allowlisted lowercase response headers. Set `followRedirects: false`
 to inspect redirect metadata; cookies and authentication headers stay private.
+HTTP requests accept a custom `Range` header for bounded probes; downloads own
+their ranges and reject it. Custom headers disable automatic redirects. Response
+headers include `etag` and `last-modified` for stable file identity checks.
 `Downloads.enqueue({url, destination, ...options})` returns a cancellable task
 with progress subscriptions and a completion promise. Binary downloads stay
 native, use parallel validated ranges when eligible, and resume durable ranges.

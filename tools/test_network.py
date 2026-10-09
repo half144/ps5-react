@@ -212,8 +212,10 @@ def main():
         directory = Path(temporary)
         binary = compile_client(directory)
 
-        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, reject_html=False, no_redirect=False, mirrors=(), adaptive=False):
+        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, reject_html=False, no_redirect=False, mirrors=(), adaptive=False, range_probe=False):
             environment = dict(os.environ)
+            environment.pop("NETWORK_TEST_RANGE_PROBE", None)
+            if range_probe: environment["NETWORK_TEST_RANGE_PROBE"] = "1"
             for name in ("NETWORK_TEST_RECOVER", "NETWORK_TEST_REJECT_HTML", "NETWORK_TEST_NO_REDIRECT", "NETWORK_TEST_ADAPTIVE"):
                 environment.pop(name, None)
             if adaptive: environment["NETWORK_TEST_ADAPTIVE"] = "1"
@@ -241,6 +243,13 @@ def main():
         assert metadata["url"] == origin + "/file", metadata
         assert "content-length" in metadata["headers"]
         assert "hx-redirect" not in metadata["headers"] and "set-cookie" not in metadata["headers"]
+        probe = run("/modified", max_bytes=8192, range_probe=True)
+        assert probe["status"] == 206 and len(probe["body"]) == 1, probe
+        assert probe["headers"]["content-range"] == f"bytes 0-0/{len(DATA)}", probe
+        assert probe["headers"]["last-modified"] == Handler.modified, probe
+        # Custom public Range headers still require the caller to inspect redirects explicitly.
+        probe_redirect = run("/redirect", max_bytes=8192, range_probe=True)
+        assert probe_redirect["status"] == 302 and probe_redirect["headers"]["location"] == "/file", probe_redirect
         redirect = run("/redirect", method="HEAD", no_redirect=True)
         assert redirect["status"] == 302 and redirect["headers"]["location"] == "/file", redirect
         for endpoint in ("/html", "/html-no-type", "/html-fragmented"):
