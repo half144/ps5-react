@@ -38,8 +38,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # /hop sends its first request (the probe) to /node-a, whose ranges then fail with HTTP 500, and
     # every later one to /node-b, a healthy node with the same file.
     hops = 0
-    # Connections serving /suspend ranges, which the test cuts while the client is stopped.
+    # Connections serving /suspend ranges, which the test cuts while the client is stopped, and how many
+    # of the ranges asked for next answer 503.
     streams = set()
+    suspend_refusals = 0
 
     def respond(self, head=False):
         if self.path == "/hop":
@@ -153,6 +155,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 first = retry_key not in self.retried
                 self.retried.add(retry_key)
             if first:
+                self.send_response(503)
+                self.send_header("Retry-After", "0")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        if path == "/suspend" and selected != "bytes=0-0":
+            with self.guard:
+                refuse = Handler.suspend_refusals > 0
+                Handler.suspend_refusals -= refuse
+            if refuse:
                 self.send_response(503)
                 self.send_header("Retry-After", "0")
                 self.send_header("Content-Length", "0")
@@ -434,26 +446,34 @@ def main():
         assert path.read_bytes() == DATA
         path.unlink()
         # Ranges whose connections died while the process was suspended (rest mode) are retried without
-        # counting as a busy server's refusals.
-        path = directory / "suspended"
-        client = subprocess.Popen([str(binary), origin+"/suspend", str(path), "4", str(1024*1024), "0", hashlib.sha256(DATA).hexdigest(),
-                                   "GET", "0", "0", "single"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                                  env={**os.environ, "NETWORK_TEST_ADAPTIVE": "1"})
-        deadline = time.monotonic()+5
-        while len(Handler.streams) < 4 and time.monotonic() < deadline:
-            time.sleep(0.01)
-        client.send_signal(signal.SIGSTOP)
-        with Handler.guard:
-            for stream in Handler.streams:
-                try: stream.shutdown(socket.SHUT_RDWR)
-                except OSError: pass
-            Handler.streams.clear()
-        time.sleep(10.5)
-        client.send_signal(signal.SIGCONT)
-        out = json.loads(client.communicate(timeout=20)[0])
-        assert out["state"] == "completed" and out["retries"] == 0, out
-        assert path.read_bytes() == DATA
-        path.unlink()
+        # counting as a busy server's refusals; a server's HTTP error after it still counts.
+        def suspended(refusals):
+            path = directory / "suspended"
+            Handler.suspend_refusals = 0
+            client = subprocess.Popen([str(binary), origin+"/suspend", str(path), "4", str(1024*1024), "0", hashlib.sha256(DATA).hexdigest(),
+                                       "GET", "0", "0", "single"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                      env={**os.environ, "NETWORK_TEST_ADAPTIVE": "1"})
+            try:
+                deadline = time.monotonic()+5
+                while len(Handler.streams) < 4 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                client.send_signal(signal.SIGSTOP)
+                with Handler.guard:
+                    for stream in Handler.streams:
+                        try: stream.shutdown(socket.SHUT_RDWR)
+                        except OSError: pass
+                    Handler.streams.clear()
+                    Handler.suspend_refusals = refusals
+                time.sleep(10.5)
+                client.send_signal(signal.SIGCONT)
+                out = json.loads(client.communicate(timeout=20)[0])
+            finally:
+                client.kill()
+            assert out["state"] == "completed" and out["retries"] == refusals, out
+            assert path.read_bytes() == DATA
+            path.unlink()
+        suspended(0)
+        suspended(1)
         path = directory / "shutdown"
         assert run("/slow", path, stop=180)["state"] == "stopped"
         assert run("/slow", path)["state"] == "completed"
