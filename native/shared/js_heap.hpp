@@ -14,8 +14,9 @@ extern "C" {
 // ErRuntimeConfig.malloc_functions; everything else runs on the render thread.
 const JSMallocFunctions* js_heap_functions();
 
-// ErRuntimeConfig.memory_limit on both hosts.
-constexpr std::size_t kJsMemoryLimit = 32 * 1024 * 1024;
+// ErRuntimeConfig.memory_limit on both hosts. 64 MiB of the title's 256 MiB heap: a store's catalog and
+// a long download's state stay under 25 MiB live, and the rest leaves a collection room to run.
+constexpr std::size_t kJsMemoryLimit = 64 * 1024 * 1024;
 
 // QuickJS collects cycles when its heap grows past a threshold, in whichever
 // allocation crosses it: a full mark-and-sweep of every live object (tens of
