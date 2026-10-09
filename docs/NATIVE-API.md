@@ -465,3 +465,45 @@ error, so a first volume can be refused before the remaining volumes download.
 7z and ZIP keep their directories at the end and show no refusal until complete.
 An empty kind is not proof of anything; image kinds are recognized by superblock
 magic only, not validated as mountable.
+
+
+## Browser download capture (ABI v7)
+
+```js
+import {BrowserCapture} from '@ps5-react/core';
+const task = BrowserCapture.capture({
+  prefix: 'https://vikingfile.com/d/',
+  suffix: '/Selected file.pkg',
+  timeoutSeconds: 180,
+});
+const off = task.subscribe(({state}) => console.log(state));
+try { const {url} = await task.done; /* Validate with HTTP before transferring. */ }
+finally { off(); }
+```
+
+PS5-only, one capture at a time. Sends bundled `browser-capture.elf` to the
+localhost ELF loader on port 9021. The desktop returns a failed task explaining
+that a PS5 is required. The only permitted prefix is the exact Vikingfile HTTPS
+download host; suffix is `/` plus a filename of at most 160 UTF-8 bytes without
+controls, slashes, backslashes or `..`. The deadline is an integer from 1 to
+180 seconds. Snapshots have `id`, `state`, `error` and a matching `url` on
+completion. `cancel()` shuts down the connection, stops the payload's next
+read, and rejects `done` with `AbortError`. Host exit stops and joins the worker.
+
+The user must complete the provider's verification and select Download in the
+system browser. This API does not bypass verification or open the page; the app
+opens it with `Linking.openURL` after submitting capture. Only a uniquely
+identified browser network process is read, with identity checked before every
+read. Scanning is limited to anonymous readable/writable nonexecutable user
+pages, 64 KiB every 32 ms, 128 MiB per session. No dumps, cookies, arbitrary
+process selection or writes. Only complete ASCII/UTF-16 matching routes are
+returned. Provenance: `native/ps5/payloads/browser/README.md` (Orbit Store 1.0.1).
+
+A captured URL may already be stale; the app must validate host, decoded
+filename, HTTP status, content type and length before starting immediately.
+Local tests and compilation do not establish console/firmware support.
+
+Native shape: `browser.capture(prefix, suffix, timeoutSeconds)` returns a task
+ID; `browser.cancel(id)` requests cancellation; `browser.poll()` consumes
+terminal results. Calls submit/poll synchronously on the render thread; all
+payload transport runs on the worker.

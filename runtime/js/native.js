@@ -369,6 +369,14 @@ export const Packages = Object.freeze({
   },
 });
 
+/** Read-only, filename-bound Vikingfile capture on PS5; no browser data is retained. */
+export const BrowserCapture = Object.freeze({
+  capture({prefix = 'https://vikingfile.com/d/', suffix, timeoutSeconds = 180}) {
+    const id = host().browser.capture(prefix, suffix, timeoutSeconds);
+    return networkTask(id, 'BrowserCapture.capture', '', 'browser');
+  },
+});
+
 const pendingImages = new Map();
 let stopImagePolling = null;
 

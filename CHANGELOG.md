@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — browser capture
+
+- Add ABI v7 `BrowserCapture.capture`, a bounded, read-only Vikingfile URL
+  matcher running through a loader payload, with cancellation and desktop failure.
+  Adapted from Orbit Store 1.0.1; firmware execution still needs hardware validation.
+
 ## Unreleased — package installation
 
 - Add `Packages.install` (ABI v5 additive `packages.install/cancel/poll`): a

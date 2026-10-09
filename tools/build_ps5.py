@@ -133,7 +133,7 @@ def main():
                ROOT / "native/ps5/filesystem_access.cpp",
                ROOT / "native/ps5/elevation_transport.cpp",
                ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/network.cpp",
-               ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/rar5_password.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/shared/package_api.cpp", ROOT / "native/ps5/package_installer.cpp", ROOT / "native/ps5/payload_loader.cpp", ROOT / "native/ps5/relaunch.cpp", ROOT / "native/ps5/crash_log.cpp", ROOT / "native/ps5/utf8_locale.cpp", ROOT / "native/ps5/network_platform.cpp",
+               ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/rar5_password.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/shared/browser_capture_api.cpp", ROOT / "native/ps5/browser_capture.cpp", ROOT / "native/shared/package_api.cpp", ROOT / "native/ps5/package_installer.cpp", ROOT / "native/ps5/payload_loader.cpp", ROOT / "native/ps5/relaunch.cpp", ROOT / "native/ps5/crash_log.cpp", ROOT / "native/ps5/utf8_locale.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
                ROOT / "native/shared/gl_presenter.cpp",
@@ -201,6 +201,12 @@ def main():
     run([sdk / "bin/prospero-clang", "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-o", relauncher,
          ROOT / "native/ps5/payloads/relauncher.c", "-lSceUserService", "-lSceSystemService"],
         env=env, log=BUILD / "relauncher.log")
+    capture = BUILD / "browser-capture.elf"
+    browser = ROOT / "native/ps5/payloads/browser"
+    run([sdk / "bin/prospero-clang", "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-o", capture,
+         ROOT / "native/ps5/payloads/browser_capture.c", browser / "browser_platform.c",
+         browser / "browser_scan.c", browser / "browser_match.c", browser / "browser_url.c", "-lkernel_sys"],
+        env=env, log=BUILD / "browser-capture.log")
     if args.compile_only:
         print(f"PS5 ELF linked: {elf}; no application package generated")
         return
@@ -211,6 +217,7 @@ def main():
     shutil.copy2(runtime, app / "sce_module/libc.prx")
     shutil.copy2(installer, app / "pkg-installer.elf")
     shutil.copy2(relauncher, app / "relauncher.elf")
+    shutil.copy2(capture, app / "browser-capture.elf")
     param = json.loads((hui / "sce_sys/param.json").read_text())
     param.update(titleId=TITLE, conceptId=TITLE[4:], contentId=config["contentId"], contentVersion=config["version"])
     param["localizedParameters"]["en-US"]["titleName"] = config["name"]

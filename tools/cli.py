@@ -56,6 +56,7 @@ def desktop(app, test=False, target="ps5-react-preview"):
         run(["python3", ROOT / "tools/test_network.py"], log=ROOT / ".build/network-test.log")
         run(["python3", ROOT / "tools/test_images.py"], log=ROOT / ".build/image-test.log")
         run(["python3", ROOT / "tools/test_text.py"], log=ROOT / ".build/text-test.log")
+        run(["python3", ROOT / "tools/test_browser_capture.py"], log=ROOT / ".build/browser-capture-test.log")
         command.append("--self-test")
     return command, build
 

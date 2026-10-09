@@ -18,3 +18,6 @@ MIT License (licenses/tailwindcss-LICENSE).
 The interface sounds in apps/starter/assets/sounds/ are derived from Google's
 Material Design sound resources, (c) Google, under CC BY 4.0
 (licenses/material-sounds-NOTICE.txt lists the sources and changes).
+
+Browser capture includes adaptations of Orbit Store 1.0.1 by saawant12,
+GPL-3.0-or-later. See native/ps5/payloads/browser/README.md for provenance.
