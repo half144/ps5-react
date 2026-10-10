@@ -55,5 +55,9 @@ int send(const char* program, const std::string& request, int timeout_us, const 
 
 int receive(int socket, char* data, std::size_t size) { return sceNetRecv(socket, data, size, 0); }
 
+bool write(int socket, const char* data, std::size_t size) { return send_all(socket, data, size); }
+
+void receive_timeout(int socket, int timeout_us) { sceNetSetsockopt(socket, 0xffff, 0x1106, &timeout_us, sizeof timeout_us); }
+
 void close(int socket) { sceNetSocketClose(socket); }
 }

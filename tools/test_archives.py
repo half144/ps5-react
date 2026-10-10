@@ -1,6 +1,7 @@
 """Real local archive extraction with the same native worker used on PS5."""
 from pathlib import Path
-import binascii,hashlib,io,json,lzma,random,struct,subprocess,tarfile,tempfile,zipfile
+import binascii,hashlib,io,json,lzma,os,random,struct,subprocess,tarfile,tempfile,zipfile
+from rar_worker import build_host
 ROOT=Path(__file__).resolve().parents[1]
 DATA=bytes(range(256))*1024
 TOO_BIG="This archive needs more memory to extract than the console app can use."
@@ -33,6 +34,15 @@ def rar5_with_window(shift):
  """A RAR5 archive whose only file declares a 128 KiB << shift dictionary."""
  data=bytes(64)
  file=bytes([2,2,len(data),0,len(data),0])+vint(3<<7|shift<<10)+bytes([0,1])+b"a"
+ return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+rar5_block(file,data)+rar5_block(bytes([5,0,0]))
+
+def plain_rar5(name,data,link=None):
+ """An unencrypted RAR5 archive storing one file, or a symbolic link to `link`."""
+ extra=b""
+ if link is not None:
+  record=vint(5)+vint(1)+vint(0)+vint(len(link))+link.encode();extra=vint(len(record))+record
+ fields=vint(4)+vint(len(data))+vint(0)+struct.pack("<I",binascii.crc32(data))+vint(0)+vint(1)+vint(len(name.encode()))+name.encode()
+ file=vint(2)+vint(3 if extra else 2)+(vint(len(extra)) if extra else b"")+vint(len(data))+fields+extra
  return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+rar5_block(file,data)+rar5_block(bytes([5,0,0]))
 
 def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",headers=True,volumes=1,compression=0,crypto_flags=1,quick_open=False):
@@ -99,7 +109,9 @@ def main():
   prefix=subprocess.check_output(["brew","--prefix","libarchive"],text=True).strip()
   xz=subprocess.check_output(["brew","--prefix","xz"],text=True).strip()
   crypto=subprocess.check_output(["brew","--prefix","openssl@3"],text=True).strip()
-  sources=[ROOT/"tools/tests/archive_client.cpp",ROOT/"native/shared/archives.cpp",ROOT/"native/shared/archive_preflight.cpp",ROOT/"native/shared/rar5_password.cpp"]
+  sources=[ROOT/"tools/tests/archive_client.cpp",ROOT/"native/shared/archives.cpp",ROOT/"native/shared/archive_preflight.cpp",ROOT/"native/shared/rar5_password.cpp",ROOT/"native/desktop/rar_worker_process.cpp"]
+  # RAR volumes go to rar-extract, as in the app; the other formats stay with libarchive.
+  os.environ["PS5_REACT_RAR_WORKER"]=str(build_host(root/"rar-extract"))
   subprocess.run(["clang++","-std=c++20","-O2","-Wall","-Wextra","-Werror","-pthread","-I",str(ROOT/"native/shared"),"-I",prefix+"/include","-I",xz+"/include","-I",crypto+"/include",*map(str,sources),"-L",prefix+"/lib","-L",xz+"/lib","-L",crypto+"/lib","-larchive","-llzma","-lcrypto","-lz","-o",str(binary)],check=True)
   def run(name,parts,limit=1024*1024,password=None):
    args=[] if password is None else ["--password",password]
@@ -190,6 +202,22 @@ def main():
   with tarfile.open(tar,"w") as t:
    entry=tarfile.TarInfo("nested/file.bin");entry.size=len(DATA);t.addfile(entry,io.BytesIO(DATA))
   assert run("tar",[tar])[0]=="completed"
+  # rar-extract: images published at the set root, unsafe names and links refused, a missing middle
+  # volume named as such.
+  p=root/"plain.rar";p.write_bytes(plain_rar5("nested/deeper/game.ffpfsc",DATA))
+  assert run("rar-plain",[p])[0]=="completed"
+  assert (root/"rar-plain/game.ffpfsc").read_bytes()==DATA
+  for name,entry,link in [("rar-traversal","../escape",None),("rar-absolute","/escape",None),("rar-backslash","a\\..\\..\\escape",None),
+                          ("rar-dotdot-inner","a/../../escape",None),("rar-reserved","x/.ps5-react-extraction",None),("rar-symlink","link","../escape")]:
+   p=root/(name+".rar");p.write_bytes(plain_rar5(entry,DATA,link))
+   result=run(name,[p])
+   assert result[0]=="failed" and "unsafe" in result[-1],result
+   assert not (root/name).exists() and not (root/(name+".extracting")).exists() and not (root/"escape").exists()
+  real=sorted(root.glob("rar5_encrypted_volumes.part*.rar"))
+  result=run("rar-missing-volume",[real[0],real[1],real[3]],password="fixture-password")
+  assert result[0]=="failed" and "missing volume" in result[-1],result
+  result=run("rar-no-password",real)
+  assert result[0]=="failed" and "password" in result[-1],result
   # Real archive split byte stream: ordered volumes, no temporary joined copy.
   blob=tar.read_bytes();parts=[]
   for i in range(3):

@@ -23,6 +23,7 @@
 #include "actions.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
+#include "payload_loader.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
 #include "filesystem_access.hpp"
@@ -56,6 +57,18 @@ extern const unsigned long proof_bundle_length;
 // Extraction steps go to the console log, so the crash log keeps the last one before a fault.
 bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) { return host::read_dir(path, visit, user); }
 void archives::trace(const char* step, const char* detail) { async_log::write("[PS5-REACT] archive %s %s", step, detail); }
+// rar-extract.elf goes to the payload loader as the package installer does, and reports on the socket.
+int archives::start_rar_worker(const std::string& request, std::string& error) {
+  const int socket = payload_loader::send("rar-extract.elf", request, 5'000'000, "Archives.extract", error);
+  if (socket >= 0) payload_loader::receive_timeout(socket, 250'000);
+  return socket;
+}
+long archives::read_rar_worker(int stream, char* data, std::size_t size) {
+  const int count = payload_loader::receive(stream, data, size);
+  return count < 0 ? -1 : count;
+}
+void archives::cancel_rar_worker(int stream) { payload_loader::write(stream, "cancel\n", 7); }
+void archives::close_rar_worker(int stream) { payload_loader::close(stream); }
 
 namespace {
 // Startup steps log their time since main(), to show where launch time goes.

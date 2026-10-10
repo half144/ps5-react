@@ -19,4 +19,12 @@ void stop();
 bool list_directory(const char* path, void (*visit)(const char* name, void* user), void* user);
 // Each extraction step, for the console's crash log; the host defines it (a no-op on the desktop).
 void trace(const char* step, const char* detail = "");
+// RAR sets go to rar-extract (native/rar_worker), a program of its own: UnRAR's license keeps its code
+// out of this engine. The host starts it with `request` as its input (the console's payload loader, a
+// child process on the desktop) and returns its stream, or -1 with `error` when it cannot.
+int start_rar_worker(const std::string& request, std::string& error);
+// Bytes of its output; 0 at its end, -1 when none came within about a quarter second or on an error.
+long read_rar_worker(int stream, char* data, std::size_t size);
+void cancel_rar_worker(int stream);
+void close_rar_worker(int stream);
 }

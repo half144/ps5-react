@@ -12,5 +12,8 @@ namespace payload_loader {
 // timing out after `timeout_us`; -1 with `error` (prefixed with `what`) when the loader is not there.
 int send(const char* program, const std::string& request, int timeout_us, const char* what, std::string& error);
 int receive(int socket, char* data, std::size_t size);
+bool write(int socket, const char* data, std::size_t size);
+// Later receives wait at most `timeout_us`.
+void receive_timeout(int socket, int timeout_us);
 void close(int socket);
 }
