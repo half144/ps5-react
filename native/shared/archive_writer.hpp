@@ -31,6 +31,7 @@ public:
   // Waits until every file is written, hashed, synced and closed, appends their receipt lines, and
   // returns the first error (empty on success or cancellation).
   std::string finish(std::string& receipt);
+  // The first error, or empty when the job was cancelled.
   std::string error();
 
 private:

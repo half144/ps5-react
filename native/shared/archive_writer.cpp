@@ -15,7 +15,8 @@
 
 namespace archives {
 namespace {
-// Begin and end commands hold no ring bytes; this caps them for archives of many empty files.
+// Begin and end commands hold no ring bytes, and a sparse file's data commands may hold one byte each;
+// this caps them for archives of many empty files or tiny scattered blocks.
 constexpr std::size_t max_commands = 4096, max_closing = 64, readback_block = 128 * 1024;
 // Writer threads only hash and copy; the read-back buffer is on the heap.
 constexpr std::size_t thread_stack = 256 * 1024;
@@ -63,7 +64,9 @@ void Writer::fail(const std::string& error) {
   work_.notify_all();
 }
 
+// Empty on cancellation, as the inline path returns, so the job reports the cancel and not an error.
 std::string Writer::error() {
+  if (cancelled_) return {};
   std::lock_guard lock(mutex_);
   return error_.empty() && failed() ? "Extraction stopped." : error_;
 }
@@ -118,7 +121,7 @@ bool Writer::append(const void* bytes, std::size_t size, std::uint64_t offset) {
       const std::size_t pad = position + piece > capacity_ ? capacity_ - position : 0;
       if (last) last->sealed = true;
       work_.notify_one();
-      space_.wait(lock, [&] { return head_ - tail_ + pad + piece <= capacity_ || failed(); });
+      space_.wait(lock, [&] { return (head_ - tail_ + pad + piece <= capacity_ && commands_.size() < max_commands) || failed(); });
       if (failed()) return false;
       Command command{Kind::data};
       command.ring = (head_ + pad) % capacity_;

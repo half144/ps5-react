@@ -90,6 +90,22 @@ void write_error(const std::string& dir) {
   unlink((dir + "/ro").c_str());
 }
 
+// One-byte blocks in reverse order never merge: each is its own command, which must stay capped.
+void scattered(const std::string& dir) {
+  std::atomic<bool> cancelled{false};
+  archives::Writer writer(cancelled);
+  assert(writer.start(1 << 20));
+  std::vector<unsigned char> data(20000);
+  for (std::size_t i = 0; i < data.size(); ++i) data[i] = static_cast<unsigned char>(i * 7);
+  const int fd = open((dir + "/s").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  assert(fd >= 0 && writer.begin(fd, dir + "/s", "s"));
+  for (std::size_t i = data.size(); i-- > 0;) assert(writer.append(&data[i], 1, i));
+  assert(writer.end());
+  std::string receipt;
+  assert(writer.finish(receipt).empty() && receipt == sha(data) + "|s\n" && slurp(dir + "/s") == data);
+  unlink((dir + "/s").c_str());
+}
+
 void cancel_midway(const std::string& dir, std::mt19937& rng) {
   std::atomic<bool> cancelled{false};
   archives::Writer writer(cancelled);
@@ -114,6 +130,7 @@ int main(int argc, char** argv) {
   const int before = open_descriptors();
   for (int round = 0; round < 40; ++round) round_trip(dir, rng, (1 + rng() % 4) << 20);
   write_error(dir);
+  scattered(dir);
   for (int round = 0; round < 40; ++round) cancel_midway(dir, rng);
   for (int i = 0; i < 40; ++i) unlink((dir + "/c" + std::to_string(i)).c_str());
   assert(open_descriptors() == before);
