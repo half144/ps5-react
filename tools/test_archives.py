@@ -275,14 +275,16 @@ def main():
   result=run("rar-multipart",rar_parts)
   assert result[0]=="completed",result
   assert any(p.is_file() and p.stat().st_size>0 for p in (root/"rar-multipart").rglob("*") if p.name!=".ps5-react-extraction")
-  # A set extracted while it downloads: each later volume appears under its final name by a rename.
+  # A set extracted while it downloads: each later volume appears under its final name by a rename, over
+  # the empty file that reserves the name on the console.
   def stream(name,blobs,gap,extra=()):
    names=[root/f"{name}-v{i}" for i in range(len(blobs))]
    names[0].write_bytes(blobs[0])
    process=subprocess.Popen([str(binary),str(root/name),str(1024*1024),*map(str,names),"--stream",*extra],stdout=subprocess.PIPE,text=True)
    for i,blob in enumerate(blobs[1:],1):
     if gap is None:break
-    time.sleep(gap);partial=root/f"{name}-v{i}.part";partial.write_bytes(blob);os.rename(partial,names[i])
+    time.sleep(gap);partial=root/f"{name}-v{i}.part";partial.write_bytes(blob)
+    names[i].touch();time.sleep(gap);os.rename(partial,names[i])
    return process.communicate(timeout=30)[0].splitlines(),names
   blobs=[p.read_bytes() for p in rar_parts]
   result,names=stream("rar-stream",blobs,0.6)

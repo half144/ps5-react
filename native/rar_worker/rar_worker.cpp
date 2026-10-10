@@ -384,16 +384,21 @@ void heartbeat(Session& session) {
 }
 
 // The app renames a volume to its final name once it is complete; until then, progress and a look for
-// "cancel" go on as while decoding.
+// "cancel" go on as while decoding. Without hard links (the console, exFAT) the download reserves the final
+// name with an empty file just before renaming the volume over it: an empty file is not the volume yet.
 bool await_volume(Session& session, const std::string& path) {
-  struct stat st;
-  while (lstat(path.c_str(), &st)) {
-    if (errno != ENOENT) return false;
+  for (;;) {
+    struct stat st;
+    if (!lstat(path.c_str(), &st)) {
+      if (!S_ISREG(st.st_mode)) return false;
+      if (st.st_size) return true;
+    } else if (errno != ENOENT) {
+      return false;
+    }
     heartbeat(session);
     if (cancelled) return false;
     usleep(250000);
   }
-  return S_ISREG(st.st_mode);
 }
 
 int CALLBACK callback(UINT message, LPARAM user, LPARAM p1, LPARAM p2) {
