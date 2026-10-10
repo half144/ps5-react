@@ -28,6 +28,7 @@
 #include <sys/stat.h>
 #include <thread>
 #include <time.h>
+#include <unordered_map>
 #include <unordered_set>
 #include <unistd.h>
 
@@ -55,6 +56,10 @@ struct Job {
 };
 std::mutex guard;
 std::shared_ptr<Job> active;
+// Destinations whose RAR worker went silent in this process, with how many times: it may still write into
+// that staging, so the next extraction there stages beside it under a new name.
+std::mutex silent_guard;
+std::unordered_map<std::string, unsigned> silent_workers;
 std::uint32_t next_id = 1;
 
 // CPU time of the calling thread, or 0 when the clock is unavailable.
@@ -627,6 +632,26 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
   }
   return true;
 }
+std::string staging_path(const std::string& destination, unsigned attempt) {
+  return destination + ".extracting" + (attempt ? "-" + std::to_string(attempt) : "");
+}
+// Staging a silent worker left in an earlier launch, with this extraction's ownership record or none. The
+// first staging is restarted as usual unless the set is extracted already.
+void remove_leftover_staging(const Request& request, const std::string& identity) {
+  const auto leftover = [&](const std::string& staging) {
+    struct stat st;
+    std::string owner;
+    if (lstat(staging.c_str(), &st) || !S_ISDIR(st.st_mode)) return false;
+    const bool recorded = read_metadata(staging + "/" + stage_name, owner);
+    if ((recorded && owner != "P5ST001:" + identity + "\n" && owner != "P5ST001:" + stream_identity(request) + "\n") ||
+        (!recorded && !empty_directory(staging))) return true;
+    if (clear_directory(staging)) rmdir(staging.c_str());
+    return true;
+  };
+  struct stat st;
+  if (!lstat(request.destination.c_str(), &st)) leftover(staging_path(request.destination, 0));
+  for (unsigned attempt = 1; leftover(staging_path(request.destination, attempt)); attempt++) {}
+}
 void remove_owned_staging(const std::string& staging, const struct stat& owned) {
   struct stat current;
   if (lstat(staging.c_str(), &current) || current.st_dev != owned.st_dev || current.st_ino != owned.st_ino) return;
@@ -636,13 +661,19 @@ void run(const std::shared_ptr<Job>& pointer) {
   name_thread("archive");
   Job& job = *pointer;
   const auto& request = job.request;
-  const std::string staging = request.destination + ".extracting";
+  unsigned attempt = 0;
+  {
+    std::lock_guard lock(silent_guard);
+    if (const auto found = silent_workers.find(request.destination); found != silent_workers.end()) attempt = found->second;
+  }
+  const std::string staging = staging_path(request.destination, attempt);
   struct stat st;
   const auto identity = request.stream ? stream_identity(request) : input_identity(request);
   if (identity.empty() || !regular_file(request.sources.front())) {
     fail(job, "Archive source is missing or not a regular file.");
     return;
   }
+  if (!attempt) remove_leftover_staging(request, identity);
   if (!lstat(request.destination.c_str(), &st)) {
     if (S_ISDIR(st.st_mode) && recover(job, identity)) {
       std::lock_guard lock(job.mutex);
@@ -760,7 +791,12 @@ void run(const std::shared_ptr<Job>& pointer) {
   if (job.cancelled || !error.empty()) {
     // Only this task created staging. Input parts and existing destinations are never removed.
     // A console payload cannot be killed; staging stays for the next attempt rather than vanish under it.
-    if (!job.worker_unconfirmed) remove_owned_staging(staging, owned);
+    if (!job.worker_unconfirmed) {
+      remove_owned_staging(staging, owned);
+    } else {
+      std::lock_guard lock(silent_guard);
+      silent_workers[request.destination] = attempt + 1;
+    }
     fail(job, error.empty() ? "Extraction cancelled; downloaded parts are preserved." : error);
     return;
   }

@@ -17,19 +17,26 @@ int main(int argc,char** argv){
   std::cout<<inspection.kind<<"\n"<<inspection.refusal<<"\n";return 0;}
  if(argc<4)return 2;
  archives::Request request;request.destination=argv[1];request.max_bytes=std::stoull(argv[2]);
- // --stream: later volumes may appear while it runs; --cancel-after <ms> cancels it then.
- long cancel_after=-1;
+ // --stream: later volumes may appear while it runs; --cancel-after <ms> cancels it then; --again <worker>
+ // runs the same request once more in this process with that rar-extract.
+ long cancel_after=-1;const char* again=nullptr;
  for(int i=3;i<argc;i++){
   if(std::string(argv[i])=="--password"&&i+1<argc)request.password=argv[++i];
   else if(std::string(argv[i])=="--stream")request.stream=true;
   else if(std::string(argv[i])=="--cancel-after"&&i+1<argc)cancel_after=std::stol(argv[++i]);
+  else if(std::string(argv[i])=="--again"&&i+1<argc)again=argv[++i];
   else request.sources.emplace_back(argv[i]);
  }
- std::string error;const auto id=archives::enqueue(std::move(request),error);
+ const auto copy=request;
+ std::string error;auto id=archives::enqueue(std::move(request),error);
  if(!id){std::cout<<"failed\n"<<error;return 0;}
- const auto started=std::chrono::steady_clock::now();
+ auto started=std::chrono::steady_clock::now();
  while(true){for(const auto& s:archives::poll())if(s.state=="completed"||s.state=="failed"||s.state=="cancelled"){
-  std::cout<<s.state<<"\n"<<s.written<<"\n"<<s.error;archives::stop();return 0;}
+  std::cout<<s.state<<"\n"<<s.written<<"\n"<<s.error;
+  if(!again){archives::stop();return 0;}
+  std::cout<<"\n";setenv("PS5_REACT_RAR_WORKER",again,1);again=nullptr;cancel_after=-1;
+  if(!(id=archives::enqueue(copy,error))){std::cout<<"failed\n"<<error;return 0;}
+  started=std::chrono::steady_clock::now();}
  if(cancel_after>=0&&std::chrono::steady_clock::now()-started>=std::chrono::milliseconds(cancel_after)){archives::cancel(id);cancel_after=-1;}
  std::this_thread::sleep_for(std::chrono::milliseconds(10));}
 }

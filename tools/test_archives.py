@@ -302,6 +302,16 @@ def main():
   assert not (root/"rar-stream-damaged").exists() and not (root/"rar-stream-damaged.extracting").exists()
   result,_=stream("zip-stream",[zip.read_bytes()],None)
   assert result[0]=="failed" and "RAR set" in result[-1],result
+  # A worker that goes silent may still write into its staging: the next extraction stages beside it,
+  # and a later launch removes what it left once the set is extracted.
+  silent=root/"silent-worker";silent.write_text("#!/bin/sh\nexec sleep 60\n");silent.chmod(0o755)
+  real=os.environ["PS5_REACT_RAR_WORKER"];os.environ["PS5_REACT_RAR_WORKER"]=str(silent)
+  try:out=subprocess.check_output([str(binary),str(root/"rar-silent"),str(1024*1024),*map(str,rar_parts),"--cancel-after","100","--again",real],text=True,timeout=60).splitlines()
+  finally:os.environ["PS5_REACT_RAR_WORKER"]=real
+  assert out[0]=="cancelled" and out[3]=="completed",out
+  assert (root/"rar-silent.extracting/.ps5-react-stage").exists() and not (root/"rar-silent.extracting-1").exists()
+  assert tree(root/"rar-silent")==tree(root/"rar-multipart")
+  assert run("rar-silent",rar_parts)[0]=="completed" and not (root/"rar-silent.extracting").exists()
   # A process interruption leaves owned staging; the next extraction restarts safely.
   st=zip.stat();identity=f"{zip}|{st.st_dev}|{st.st_ino}|{st.st_size}|{st.st_mtime_ns//10**9}|{st.st_mtime_ns%10**9}\n"
   staging=root/"interrupted.extracting";staging.mkdir();(staging/"unfinished").write_bytes(b"partial")
