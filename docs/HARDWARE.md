@@ -121,6 +121,11 @@ changes, with `dev/render-workers.txt` picking the count. The title saw 16 CPUs.
 "Heavy" windows are one-second windows repainting more than 500 kilopixels per
 frame; frames right after each tour screenshot are excluded.
 
+The builds measured in this section were not recorded by hash or commit, and
+some held uncommitted changes, so no row identifies a reproducible artifact.
+They are performance observations of the approach on this console, not
+qualification of any build, and make no compatibility claim.
+
 | Workers | Heavy-window raster | Slow frames | Time over 16.7 ms | Full-screen raster (median) |
 | --- | --- | --- | --- | --- |
 | 1 | 23.1 ms | 160 | 9.3 s | 53.2 ms |
@@ -231,8 +236,8 @@ Before and after, the same private app and 2.5-minute tour at 3840×2160 and
 (`ERUI_SCRATCH_*` and `ERUI_XFORM_*` 768, `ERUI_MAX_IMG_ROW_PIXELS` 3840), so
 that full-width images and focus scales render at all, and the app's
 `Screens`/`Screen` replaced by one keyed page under `AnimatePresence
-mode="wait"`. "After" is this branch. Frames over 33 ms are logged; frames
-right after each tour screenshot are excluded. The screenshots show the same
+mode="wait"`. "After" is this branch at a commit that was not recorded. Frames
+over 33 ms are logged; frames right after each tour screenshot are excluded. The screenshots show the same
 screens, except that on return to Home the branch keeps the scrolled row.
 
 | | Before | After |
