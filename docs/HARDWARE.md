@@ -225,6 +225,24 @@ streaming in, search typing or a page's first mount fell to 70–100 fps. The
 controller was in use during that run, so its tour path differed from the
 60 Hz runs and the numbers are not a comparison.
 
+Before and after, the same private app and 2.5-minute tour at 3840×2160 and
+60 Hz, one run each from a clean build directory. "Before" is upstream
+`6c168a6` with only the offscreen buffers sized for a 3840-wide render
+(`ERUI_SCRATCH_*` and `ERUI_XFORM_*` 768, `ERUI_MAX_IMG_ROW_PIXELS` 3840), so
+that full-width images and focus scales render at all, and the app's
+`Screens`/`Screen` replaced by one keyed page under `AnimatePresence
+mode="wait"`. "After" is this branch. Frames over 33 ms are logged; frames
+right after each tour screenshot are excluded. The screenshots show the same
+screens, except that on return to Home the branch keeps the scrolled row.
+
+| | Before | After |
+| --- | --- | --- |
+| Frames over 33 ms | 217 | 4 |
+| Time over 16.7 ms | 27.4 s | 0.09 s |
+| Median of those frames | 138 ms | 41 ms |
+| Worst frame | 855 ms | 42 ms |
+| Home idle, hero animating | about 4 fps (each frame a full repaint, 133 ms raster + 113 ms upload) | 60 fps |
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,
