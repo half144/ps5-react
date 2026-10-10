@@ -43,6 +43,12 @@ JSMallocFunctions functions = {js_calloc, js_malloc, js_free, js_realloc, usable
 constexpr std::int64_t kIdleUs = 500000;
 // Below this much garbage a collection is not worth a frame.
 constexpr std::size_t kMinGarbage = 512 * 1024;
+// Still frames before an idle collection (GcScheduler::wait_for_still). A focus ring's sweep repaints
+// its edges every frame and stays under the bound.
+constexpr int kStillFrames = 3;
+// The room after a collection: QuickJS's 1.5 times what survived, but at least this much, so a burst of
+// input (React allocates on every key) does not reach the threshold before an idle frame comes.
+constexpr std::size_t kMinRoom = 8 * 1024 * 1024;
 
 constexpr std::size_t kCeiling = kJsMemoryLimit - kJsMemoryLimit / 8;
 
@@ -54,12 +60,14 @@ const JSMallocFunctions* js_heap_functions() {
   return &functions;
 }
 
-const char* GcScheduler::frame(JSRuntime* runtime, std::int64_t now_us) {
+const char* GcScheduler::frame(JSRuntime* runtime, std::int64_t now_us, std::size_t repainted_px,
+                               std::size_t screen_px) {
+  still_frames_ = repainted_px * 50 < screen_px ? still_frames_ + 1 : 0;
   const std::size_t threshold = JS_GetGCThreshold(runtime);
   if (threshold != threshold_) {
     // QuickJS collected while the frame ran and moved its threshold to 1.5 times what survived.
     const bool first = threshold_ == 0;
-    threshold_ = std::min(threshold, kCeiling);
+    threshold_ = std::min(std::max(threshold, live + kMinRoom), kCeiling);
     if (threshold_ != threshold) JS_SetGCThreshold(runtime, threshold_);
     live_after_gc_ = live;
     if (first) return nullptr;
@@ -69,12 +77,15 @@ const char* GcScheduler::frame(JSRuntime* runtime, std::int64_t now_us) {
   const std::size_t room = threshold > live_after_gc_ ? threshold - live_after_gc_ : 0;
   const std::size_t garbage = live > live_after_gc_ ? live - live_after_gc_ : 0;
   if (now_us - last_input_us_ < kIdleUs || garbage < kMinGarbage || garbage < room / 3) return nullptr;
+  // Waiting for a still screen stops once three quarters of the room is garbage: QuickJS would soon
+  // collect inside an allocation anyway, likely in the frame that handles the next key.
+  if (wait_for_still_ && still_frames_ < kStillFrames && garbage < room / 4 * 3) return nullptr;
   const std::size_t before = live;
   const std::int64_t start = clock_();
   JS_RunGC(runtime);
   live_after_gc_ = live;
-  // The threshold QuickJS sets after its own collections, so the next one comes no later than it would have.
-  threshold_ = std::min(live + live / 2, kCeiling);
+  // QuickJS's own rule after a collection, with the room's floor.
+  threshold_ = std::min(live + std::max(live / 2, kMinRoom), kCeiling);
   JS_SetGCThreshold(runtime, threshold_);
   std::snprintf(line_, sizeof line_, "gc: idle, %.1f ms, %.1f -> %.1f MiB live", (clock_() - start) / 1000.0,
                 mib(before), mib(live));

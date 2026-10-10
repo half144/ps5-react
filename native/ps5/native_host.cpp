@@ -338,6 +338,12 @@ bool run_proof() {
     }
     tsc_per_us = std::max<std::uint64_t>(sceKernelGetTscFrequency() / 1000000, 1);
     er_perf_set_clock(perf_clock);
+    // A test deploy may let idle collections run during motion with a dev/gc-still.txt holding 0.
+    if (FILE* file = std::fopen(dev_path("gc-still.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file)) gc_scheduler.wait_for_still(std::atoi(text) != 0);
+      std::fclose(file);
+    }
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
@@ -393,12 +399,14 @@ bool run_proof() {
       ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
                           display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
+      const std::size_t repainted = damage_tracker_area();
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
       ok = ok && display.swap();
       stats.lap(FrameStats::swap, hui::sys::monotonic_us());
       if (!ok) break;
-      if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), hui::sys::monotonic_us()))
+      if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), hui::sys::monotonic_us(),
+                                                repainted, static_cast<std::size_t>(width) * height))
         async_log::write("[PS5-REACT] %s", line);
       if (!first_present) {
         first_present = hui::sys::monotonic_us();

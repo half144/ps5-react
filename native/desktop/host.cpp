@@ -406,6 +406,7 @@ struct Host {
     }
     int sw = 0, sh = 0;
     SDL_GL_GetDrawableSize(window, &sw, &sh);
+    const std::size_t repainted = damage_tracker_area();
     if (sw > 0 && sh > 0) {
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
       int layer_count = 0;
@@ -418,7 +419,9 @@ struct Host {
     stats.lap(FrameStats::present, now_us());
     if (swap) SDL_GL_SwapWindow(window);
     stats.lap(FrameStats::swap, now_us());
-    if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), now_us()); line && log_frames)
+    if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), now_us(), repainted,
+                                              static_cast<std::size_t>(width) * height);
+        line && log_frames)
       std::printf("[PS5-REACT] %s\n", line);
     const Uint32 now = SDL_GetTicks();
     embedded_renderer_tick(std::min<Uint32>(now - previous_tick, 50));

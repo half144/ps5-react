@@ -206,6 +206,19 @@ slides took 20–24 ms (10–16 ms of raster); with it, only the frame that moun
 the page (39–55 ms, 16–30 ms of React) and the first frame of each exit (21 ms)
 went over.
 
+Garbage collection, a scripted burst of detail pages and grid scrolling, the
+same build with three scheduling policies:
+
+| Policy | Runs | Automatic collections | Idle pauses | Time over 16.7 ms |
+| --- | --- | --- | --- | --- |
+| Room 1.5× live, no still wait | 2 | 1 each, in a full-screen frame (51–58 ms) | 12–32 ms | 232–253 ms |
+| Room at least 8 MiB, still wait with valve | 1 | 0 | 16, 26, 33 ms | 181 ms |
+| Same, idle trigger at a sixth of live | 3 | 0 | five per run, 12–33 ms | 225–239 ms |
+
+Every idle pause landed in a frame that repainted under 2% of the screen. A
+longer session of fast browsing still reached the 8 MiB room once (a 79 ms
+detail-page frame against 39 ms) and then paused 48 ms at 17.5 MiB live.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

@@ -75,10 +75,16 @@ tens of milliseconds on the PS5 that runs inside whatever allocation crosses its
 threshold, often the frame handling a key press. Hosts install a counting
 allocator (`native/shared/js_heap.cpp`) and collect in idle frames, half a
 second after the last input, once a third of the room before that threshold is
-garbage, so bursts of input start with most of it. The threshold itself is
-never raised, and it stays an eighth below `memory_limit`: QuickJS fails an
-allocation past the limit without collecting first. Hosts log each
-collection as `gc: idle` or `gc: automatic` with the live heap.
+garbage, so bursts of input start with most of it. The room is at least 8 MiB,
+more than QuickJS's 1.5 times what survived while that is under 16 MiB, and the
+threshold stays an eighth below `memory_limit`: QuickJS fails an allocation past
+the limit without collecting first. An idle collection also waits for three
+frames in a row that repainted under a fiftieth of the screen, so it does not
+land in a page slide, until three quarters of the room is garbage. A pause grows
+with the heap it scans: on the PS5 about 12 ms at 9 MiB live and 48 ms at 17.5.
+Hosts log each collection as `gc: idle` or `gc: automatic` with the live heap.
+A PS5 test deploy can drop the wait for still frames with `dev/gc-still.txt`
+holding 0.
 
 `className` and `tw` styling is compiled by `tools/tailwind` during bundling into
 literal style objects; class names and CSS never reach QuickJS or the engine.

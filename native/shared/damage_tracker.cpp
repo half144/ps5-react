@@ -148,6 +148,13 @@ std::span<const ERRect> damage_tracker_rects() {
 
 std::span<const DamageMove> damage_tracker_moves() { return {moves, static_cast<std::size_t>(move_count)}; }
 
+std::size_t damage_tracker_area() {
+  std::size_t area = 0;
+  for (const ERRect& r : damage_tracker_rects()) area += static_cast<std::size_t>(r.w) * r.h;
+  for (const DamageMove& m : damage_tracker_moves()) area += static_cast<std::size_t>(m.src.w) * m.src.h;
+  return area;
+}
+
 void damage_tracker_clear() {
   for (Damage& set : damage) set.count = set.last = 0;
   move_count = 0;

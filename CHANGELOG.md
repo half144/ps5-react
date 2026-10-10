@@ -86,6 +86,11 @@
   scrolled away) repainting their old footprint on every later commit; with a
   focus ring animating, that was 1.4 million pixels a frame. An Embedded React
   patch, maintained here and not proposed upstream.
+- Idle garbage collections wait for a still screen (three frames that repainted
+  under a fiftieth of it) until three quarters of their room is garbage, and the
+  room is at least 8 MiB (docs/ARCHITECTURE.md). On a PS5 burst of detail pages
+  and grid scrolling, the previous policy collected automatically inside a
+  full-screen frame in both runs (51–58 ms); this one in neither.
 - Per-frame callbacks run in one React batch, through an Embedded React patch
   that exports `unstable_batchedUpdates`: each image delivered and each
   VirtualList step rendered on its own before.
