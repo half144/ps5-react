@@ -141,3 +141,31 @@ link of the same MediaFire file gains nothing if the cap is per IP, which is lik
 3. MediaFire per IP or per link: two volumes of one release downloaded at once on a fast line
    (the Mac's line was too slow today).
 4. At gigabit speeds: whether `paused` or `buffered` near 16 MiB show storage becoming the limit.
+
+## Addendum: the tester's file (MediaFire, 1.27 GB)
+
+The beta log came from PPSA03647 on **MediaFire**, 1.27 GB (about 76 ranges of 16 MiB), at
+35-40 MB/s with `conns=25/27` for most of the transfer. So the console got about 1.4 MB/s per
+connection from MediaFire and it scaled with connections: the "near 3 MB/s per client" measured
+from the Mac does not hold there. The range-count explanation above does not fit this file.
+
+Reproduction attempts on localhost with 1.27 GB at 1.4 MB/s per connection all grew 8 to 64 within
+about 6 s and held 87.5 MB/s: with validators and without, with `Connection: close` on every
+response, with up to 3 s of random time to first byte, and with a 3 ms delay on every write (PS5
+storage). The stall at 27 is **not reproduced**. In the code, the window grows only when
+`in_flight >= allowed` at the moment of the check (`Window::grow`), and a slot freed by a finished
+range is refilled in the same pass, so on the Mac it is always full when ranges remain.
+
+Change (commit "Grow an origin's connection window when it is nine-tenths busy"): grow while nine-tenths of the window is busy (`in_flight + allowed/10 >= allowed`;
+below 10 connections it still needs every slot), with the same halving on 5xx, 429, 408 and broken
+connections. It does not change any localhost number (the window was already full there; the busy-origin
+case still peaks at 14 connections with 5-6 retries), and it would have taken the tester's 25/27 to 40.
+Whether that raises the console's speed, or a second cause (a MediaFire per-IP connection limit, or
+a console clock or socket limit) holds it at about 25, needs the console test: the timestamps of
+consecutive stat lines from the start of that download (to check the 1 s and 2 s intervals), and a
+run of the new build on the same file.
+
+The app's "Capped near 3 MB/s" label for MediaFire (`sources.speed.mediafire`, used only as text by
+`describeSource` in `native/game/sources.js:41-43`) caps nothing, but it is now contradicted by the
+console and should be dropped or reworded. That file has uncommitted changes from another task, so
+this branch leaves it alone.

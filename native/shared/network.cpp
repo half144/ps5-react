@@ -556,7 +556,8 @@ const std::string& range_url(const Job& job, unsigned source, unsigned mirror) {
 }
 
 // Connections one origin may hold, adapted like TCP congestion control (AIMD). It starts small and
-// grows by half each second while the window is full and healthy; a 5xx, 429, 408 or broken connection
+// grows by half each second while the window is nine-tenths busy and healthy (a console download sat at
+// 25 of 27 for most of a 1.27 GB file, never full at the instant of the check); a 5xx, 429, 408 or broken connection
 // halves it, after which it grows by one a second. archive.org storage nodes answer HTTP 500 to some
 // ranges past about a dozen connections, while CDNs take all 64.
 struct Window {
@@ -566,7 +567,7 @@ struct Window {
   Clock::time_point grown{}, shrunk{}, paused_until{};
   bool open(Clock::time_point now) const { return in_flight < allowed && now >= paused_until; }
   void grow(Clock::time_point now, unsigned limit) {
-    if (allowed >= limit || in_flight < allowed || now-grown < std::chrono::seconds(1) ||
+    if (allowed >= limit || in_flight+allowed/10 < allowed || now-grown < std::chrono::seconds(1) ||
         now-shrunk < std::chrono::seconds(3)) return;
     allowed = std::min(limit, congested ? allowed+1 : allowed+std::max(2u, allowed/2));
     grown = now;

@@ -7,6 +7,8 @@
   connections (under 1 GiB at 16 MiB ranges) now use every connection, and a slow connection or the
   last ranges no longer hold the end of a download: a 432 MiB file from a 1.4 MB/s-per-connection
   origin went from 14.3 s to 8.4 s on a localhost benchmark. The stats line counts `splits`.
+- An origin's connection window grows while nine-tenths of it is busy, not only when it is full: a
+  console download held 25 of 27 connections for most of a 1.27 GB file and never grew.
 
 ## Unreleased — downloads across rest mode
 
