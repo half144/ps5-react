@@ -30,6 +30,8 @@
 
 namespace {
 constexpr size_t max_path_length = 4096, max_line = 8192, buffer_bytes = 4 << 20, buffer_count = 4;
+// Each queued file holds its descriptor; empty files take no buffer, so this bounds how far ahead they open.
+constexpr size_t max_queued_files = 32;
 constexpr unsigned max_depth = 128;
 constexpr uint64 progress_ns = 250000000;
 const char* too_much_memory = "This archive needs more memory to extract than the console app can use.";
@@ -224,6 +226,11 @@ public:
   // Takes the descriptor; the file is reported as `name` once synced.
   void begin(int fd, const std::string& name) {
     current_ = nullptr;
+    {
+      std::unique_lock lock(mutex_);
+      changed_.wait(lock, [this] { return queued_files_ < max_queued_files; });
+      ++queued_files_;
+    }
     push({Command::begin, fd, name, nullptr, 0});
   }
   bool append(const byte* data, size_t size) {
@@ -321,6 +328,7 @@ private:
       if (queue_.empty()) return;
       Command command = std::move(queue_.front());
       queue_.pop_front();
+      queued_files_ -= command.type == Command::begin;
       busy_ = true;
       lock.unlock();
       // After an error, commands only give their buffers and descriptors back.
@@ -340,6 +348,7 @@ private:
   std::condition_variable changed_;
   std::string error_;
   bool quit_ = false, busy_ = false;
+  size_t queued_files_ = 0;
   std::thread thread_;
   byte* current_ = nullptr;
   size_t used_ = 0;
