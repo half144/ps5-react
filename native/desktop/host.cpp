@@ -129,6 +129,8 @@ struct Host {
   bool log_frames = true, running = true, runtime_started = false, backend_started = false;
   int render_worker_count = 1;
   Uint32 previous_tick = 0, next_repeat = 0, next_image_stats = 0;
+  // When the last frame callback ran: the next one advances by the whole frame period, swap wait included.
+  std::int64_t previous_step_us = 0;
   std::string image_stats;
   const char* held_action = nullptr;
   InputScript script;
@@ -181,6 +183,7 @@ struct Host {
     std::printf("Physical controller: %s\n", controller ? SDL_GameControllerName(controller) : "not connected");
     desktop_set_controller(controller);
     previous_tick = SDL_GetTicks();
+    previous_step_us = now_us();
     er_perf_set_clock(perf_clock);
     return presenter.init(width, height);
   }
@@ -395,7 +398,9 @@ struct Host {
     stats.lap(FrameStats::input, now_us());
     er_perf_phase_begin(ER_PERF_PHASE_JS);
     er_runtime_pump();
-    const bool stepped = ps5_react_frame(er_runtime_context(), std::min<Uint32>(SDL_GetTicks() - previous_tick, 50));
+    const std::int64_t step_us = now_us();
+    const bool stepped = ps5_react_frame(er_runtime_context(), std::min(50.0, (step_us - previous_step_us) / 1000.0));
+    previous_step_us = step_us;
     er_perf_phase_end(ER_PERF_PHASE_JS);
     if (!stepped) {
       std::fprintf(stderr, "Frame callback failed\n");
