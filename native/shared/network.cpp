@@ -113,7 +113,8 @@ struct Transfer {
   std::uint64_t begin = 0, length = 0, requested = 0, accepted = 0, block_offset = 0;
   std::atomic<std::uint64_t> written{0};
   std::atomic<unsigned> pending{0};
-  unsigned piece = 0, source = 0, retry_after = 0, window = 0;
+  // `attempt` counts this span's tries: the parts of a split range each get their own.
+  unsigned piece = 0, source = 0, retry_after = 0, window = 0, attempt = 0;
   unsigned mirror = 0; // 0 is the primary URL, n is Job::mirrors[n-1]
   long status = 0;
   std::string etag, last_modified, encoding, error, content_type, html_prefix, sample;
@@ -1366,13 +1367,13 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
     // Once every range has a connection, idle connections split the range with the most bytes left
     // (a slow connection's, or the last ones') instead of waiting out the tail. A split range is done
     // when all its parts are (`open`); a part that fails retries alone, as a span.
-    struct Span { unsigned piece; std::uint64_t begin, length; Clock::time_point at; };
+    struct Span { unsigned piece, attempt; std::uint64_t begin, length; Clock::time_point at; };
     std::vector<Span> spans;
     std::vector<unsigned> open(count);
     std::vector<unsigned char> split(count);
-    const auto requeue = [&](const Transfer& t, Clock::time_point at) {
-      if (split[t.piece]) { spans.push_back({t.piece, t.begin, t.length, at}); return; }
-      scheduled[t.piece] = 0; open[t.piece] = 0; retry_at[t.piece] = at;
+    const auto requeue = [&](const Transfer& t, unsigned attempt, Clock::time_point at) {
+      if (split[t.piece]) { spans.push_back({t.piece, attempt, t.begin, t.length, at}); return; }
+      scheduled[t.piece] = 0; open[t.piece] = 0; attempts[t.piece] = attempt; retry_at[t.piece] = at;
     };
     for (std::size_t i = 0; i < count && job->ranged; ++i) scheduled[i] = job->completed[i];
     Clock::time_point previous = Clock::now(), checkpointed = previous, logged = previous;
@@ -1404,11 +1405,10 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
           } else if (cut_by_suspension(t, now, grace_until)) {
             // Counted as a busy server, every range in flight across a rest-mode cycle shrank the window
             // for the rest of the job and spent an attempt on its way to failing the download.
-            if (!waived[t.piece]) { waived[t.piece] = 1; log_failure(t, attempts[t.piece]); }
-            --attempts[t.piece];
-            requeue(t, now+retry_delay(t, 1));
+            if (!waived[t.piece]) { waived[t.piece] = 1; log_failure(t, t.attempt); }
+            requeue(t, t.attempt-1, now+retry_delay(t, 1));
           } else {
-            const unsigned attempt = attempts[t.piece];
+            const unsigned attempt = t.attempt;
             log_failure(t, attempt);
             if (job->request.adaptive && congested(t)) windows[t.window].shrink(now, t.retry_after);
             unsigned allowed_attempts = attempt_limit(t);
@@ -1416,7 +1416,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             else if (forget_redirect(*job, t, attempt)) allowed_attempts = std::max(allowed_attempts, 4u);
             if (attempt >= allowed_attempts) { job->fail(describe(t)); break; }
             ++job->retries;
-            requeue(t, now+retry_delay(t, attempt));
+            requeue(t, attempt, now+retry_delay(t, attempt));
           }
         }
         if (t.active && t.cut && t.accepted == t.length) {
@@ -1450,7 +1450,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             if (room) break;
           }
           if (next < count) {
-            t.piece = static_cast<unsigned>(next); scheduled[next] = 1; open[next] = 1; ++attempts[next];
+            t.piece = static_cast<unsigned>(next); scheduled[next] = 1; open[next] = 1; t.attempt = ++attempts[next];
             if (!job->sources.empty()) {
               const auto& segment = job->segments[next];
               t.begin = segment.begin; t.length = segment.length; t.source = segment.source;
@@ -1466,7 +1466,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             const auto ready = std::find_if(spans.begin(), spans.end(), [&](const Span& span) { return now >= span.at; });
             if (ready != spans.end()) {
               t.piece = ready->piece; t.begin = ready->begin; t.length = ready->length;
-              spans.erase(ready); ++attempts[t.piece];
+              t.attempt = ready->attempt+1; spans.erase(ready);
             } else {
               Transfer* victim = nullptr;
               for (Transfer& other : transfers_) if (other.active && other.length-other.accepted >
@@ -1475,7 +1475,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
               const auto keep = victim->accepted+(victim->length-victim->accepted)/2;
               t.piece = victim->piece; t.begin = victim->begin+keep; t.length = victim->length-keep;
               victim->length = keep; victim->cut = true;
-              split[t.piece] = 1; ++open[t.piece]; ++job->splits;
+              split[t.piece] = 1; ++open[t.piece]; ++job->splits; t.attempt = 1;
             }
             t.mirror = mirror;
           }
