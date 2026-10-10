@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "archives.hpp"
+#include "archive_writer.hpp"
 #include "worker_thread.hpp"
 #include <clocale>
 #include <mutex>
@@ -16,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
@@ -24,11 +26,15 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <thread>
+#include <time.h>
+#include <unordered_set>
 #include <unistd.h>
 
 namespace archives {
 namespace {
 constexpr std::size_t max_artifacts = 64, max_path_length = 4096, read_block_size = 128 * 1024;
+// libarchive reads each volume in blocks this large, and hands a stored entry out in blocks as large.
+constexpr std::size_t volume_block_size = 1024 * 1024;
 constexpr unsigned max_depth = 128;
 // ShadowMount mounts these images; packages are installed by the console.
 constexpr std::array<std::string_view, 4> image_extensions{".ffpfsc", ".ffpfs", ".ffpkg", ".exfat"};
@@ -41,12 +47,19 @@ struct Job {
   Snapshot snapshot;
   std::atomic<bool> cancelled{false};
   std::mutex mutex;
+  Timings timings;
   WorkerThread worker;
 };
 std::mutex guard;
 std::shared_ptr<Job> active;
 std::uint32_t next_id = 1;
 
+// CPU time of the calling thread, or 0 when the clock is unavailable.
+std::uint64_t thread_cpu_us() {
+  timespec now{};
+  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now)) return 0;
+  return static_cast<std::uint64_t>(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+}
 bool terminal(const std::string& state) { return state == "completed" || state == "failed" || state == "cancelled"; }
 void fail(Job& job, const std::string& error) {
   std::lock_guard lock(job.mutex);
@@ -90,8 +103,9 @@ bool plain_directory(const std::string& path) {
   struct stat st;
   return !lstat(path.c_str(), &st) && S_ISDIR(st.st_mode);
 }
-// Creates the directories of `name` under `root` and returns the path of its last component.
-bool make_parents(const std::string& root, const std::string& name, std::string& target) {
+// Creates the directories of `name` under `root` and returns the path of its last component. `made`
+// holds the directories already created and checked, so a folder of many files costs no syscalls.
+bool make_parents(const std::string& root, const std::string& name, std::string& target, std::unordered_set<std::string>& made) {
   target = root;
   std::size_t start = 0;
   while (true) {
@@ -104,8 +118,10 @@ bool make_parents(const std::string& root, const std::string& name, std::string&
     start = end + 1;
     if (part == ".") continue;
     target += "/" + part;
+    if (made.contains(target)) continue;
     if (mkdir(target.c_str(), 0700) && errno != EEXIST) return false;
     if (!plain_directory(target)) { errno = ENOTDIR; return false; }
+    made.insert(target);
   }
 }
 bool file_hash(const std::string& path, Job& job, std::string& digest) {
@@ -299,12 +315,15 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
       job.snapshot.written += bytes;
     }
     std::size_t written = 0;
+    const auto writing = std::chrono::steady_clock::now();
     while (written < bytes && !job.cancelled) {
       const auto count = pwrite(fd, static_cast<const char*>(buffer) + written, bytes - written, offset + written);
       if (count < 0 && errno == EINTR) continue;
       if (count <= 0) return std::strerror(errno);
       written += count;
     }
+    job.timings.write_us += elapsed_us(writing);
+    ++job.timings.writes;
     if (contiguous && static_cast<std::uint64_t>(offset) == hashed) {
       hash.update(buffer, bytes);
       if (checksum) crc = crc32(crc, static_cast<const Bytef*>(buffer), bytes);
@@ -317,7 +336,10 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
   if (job.cancelled) return {};
   if (result != ARCHIVE_EOF) return archive_error(archive, "Incomplete archive data.");
   if (extent != static_cast<std::uint64_t>(size)) return "Extracted file size mismatch.";
+  const auto syncing = std::chrono::steady_clock::now();
   if (fsync(fd)) return std::strerror(errno);
+  job.timings.sync_us += elapsed_us(syncing);
+  ++job.timings.syncs;
   if (contiguous && hashed == extent) digest = hash.finish();
   else if (!file_hash(path, job, digest)) digest.clear();
   if (checksum) {
@@ -326,6 +348,42 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
   }
   if (digest.size() != 64 && !job.cancelled) return "Cannot verify extracted file.";
   return {};
+}
+// Hands an entry's blocks to the writer; the decoder goes on while they are written.
+std::string stream_entry(Job& job, archive* archive, Writer& writer, std::int64_t size, std::uint32_t* checksum) {
+  const auto max_bytes = job.request.max_bytes;
+  const void* buffer = nullptr;
+  std::size_t bytes = 0;
+  la_int64_t offset = 0;
+  std::uint64_t extent = 0, checked = 0;
+  std::uint32_t crc = 0;
+  bool contiguous = true;
+  int result = ARCHIVE_OK;
+  while (!job.cancelled && (result = archive_read_data_block(archive, &buffer, &bytes, &offset)) == ARCHIVE_OK) {
+    if (offset < 0 || static_cast<std::uint64_t>(offset) > max_bytes || bytes > max_bytes - static_cast<std::uint64_t>(offset))
+      return "Invalid archive data offset.";
+    {
+      std::lock_guard lock(job.mutex);
+      if (bytes > max_bytes - job.snapshot.written) return "Archive exceeds the extraction size limit.";
+      job.snapshot.written += bytes;
+    }
+    if (!writer.append(buffer, bytes, offset)) return writer.error();
+    if (checksum && contiguous && static_cast<std::uint64_t>(offset) == checked) {
+      crc = crc32(crc, static_cast<const Bytef*>(buffer), bytes);
+      checked += bytes;
+    } else {
+      contiguous = false;
+    }
+    extent = std::max(extent, static_cast<std::uint64_t>(offset) + bytes);
+  }
+  if (job.cancelled) return {};
+  if (result != ARCHIVE_EOF) return archive_error(archive, "Incomplete archive data.");
+  if (extent != static_cast<std::uint64_t>(size)) return "Extracted file size mismatch.";
+  if (checksum) {
+    if (!contiguous) return "Non-contiguous RAR5 file data cannot be verified.";
+    *checksum = crc;
+  }
+  return writer.end() ? std::string() : writer.error();
 }
 // libarchive converts every entry name to the process locale. In the C locale a single non-ASCII
 // name ("PPSA15246 – USA ...") failed that conversion, and on the console it faulted at address 0
@@ -359,17 +417,18 @@ archive* open_archive(Job& job, std::string& error, std::unique_ptr<Rar5Password
   if (!request.password.empty() && Rar5PasswordReader::matches(request.sources.front())) {
     decrypted = std::make_unique<Rar5PasswordReader>(request.sources, request.password, job.cancelled);
     result = archive_read_open(archive, decrypted.get(), nullptr, Rar5PasswordReader::read, nullptr);
-  } else result = archive_read_open_filenames(archive, files.data(), read_block_size);
+  } else result = archive_read_open_filenames(archive, files.data(), volume_block_size);
   if (result != ARCHIVE_OK)
     error = archive_error(archive, "Unsupported or incomplete archive.");
   return archive;
 }
 // Writes every entry under root and appends its digest line to the receipt.
-std::string extract(Job& job, archive* archive, const std::string& staging, std::string& receipt, Rar5PasswordReader* decrypted) {
+std::string extract(Job& job, archive* archive, const std::string& staging, std::string& receipt, Rar5PasswordReader* decrypted, Writer* writer) {
   const auto& request = job.request;
   archive_entry* entry = nullptr;
   int result = ARCHIVE_OK;
   std::uint64_t declared_total = 0;
+  std::unordered_set<std::string> made;
   // A warning is a header libarchive could only read in part, such as a name it could not convert.
   while (!job.cancelled && ((result = archive_read_next_header(archive, &entry)) == ARCHIVE_OK || result == ARCHIVE_WARN)) {
     const char* name = archive_entry_pathname_utf8(entry);
@@ -390,9 +449,11 @@ std::string extract(Job& job, archive* archive, const std::string& staging, std:
       if (slash != std::string::npos) path = path.substr(slash + 1);
     }
     std::string target;
-    if (!make_parents(staging, path, target)) return std::strerror(errno);
+    if (!make_parents(staging, path, target, made)) return std::strerror(errno);
     if (type == AE_IFDIR) {
+      if (made.contains(target)) continue;
       if (mkdir(target.c_str(), 0700) && (errno != EEXIST || !plain_directory(target))) return std::strerror(errno);
+      made.insert(target);
       continue;
     }
     const int fd = open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
@@ -400,12 +461,18 @@ std::string extract(Job& job, archive* archive, const std::string& staging, std:
     std::string digest;
     std::uint32_t crc = 0;
     const std::string original_name(name);
-    const auto error = write_entry(job, archive, fd, size, staging + "/" + path, digest, decrypted ? &crc : nullptr);
-    close(fd);
-    if (!error.empty() || job.cancelled) return error;
+    if (writer) {
+      if (!writer->begin(fd, staging + "/" + path, path)) return writer->error();
+      const auto error = stream_entry(job, archive, *writer, size, decrypted ? &crc : nullptr);
+      if (!error.empty() || job.cancelled) return error;
+    } else {
+      const auto error = write_entry(job, archive, fd, size, staging + "/" + path, digest, decrypted ? &crc : nullptr);
+      close(fd);
+      if (!error.empty() || job.cancelled) return error;
+      receipt += digest + "|" + path + "\n";
+      if (receipt.size() > max_metadata_bytes) return "Extraction receipt exceeds the metadata limit.";
+    }
     if (decrypted && !decrypted->verify(original_name, crc)) return "Extracted RAR5 file checksum mismatch.";
-    receipt += digest + "|" + path + "\n";
-    if (receipt.size() > max_metadata_bytes) return "Extraction receipt exceeds the metadata limit.";
     std::lock_guard lock(job.mutex);
     if (installable(path)) {
       if (job.snapshot.artifacts.size() == max_artifacts) return "Archive has too many installable artifacts.";
@@ -494,7 +561,29 @@ void run(const std::shared_ptr<Job>& pointer) {
     std::lock_guard lock(job.mutex);
     job.snapshot.state = "extracting";
   }
-  if (error.empty()) error = extract(job, archive, staging, receipt, decrypted.get());
+  {
+    // Without the ring or its threads, files are written inline as before.
+    Writer writer(job.cancelled, job.timings);
+    const bool pipelined = writer.start(pipeline_bytes());
+    trace("writer", pipelined ? "pipelined" : "inline");
+    const auto started = std::chrono::steady_clock::now();
+    const auto cpu_started = thread_cpu_us();
+    if (error.empty()) error = extract(job, archive, staging, receipt, decrypted.get(), pipelined ? &writer : nullptr);
+    const auto decoded_us = elapsed_us(started), cpu_us = thread_cpu_us() - cpu_started;
+    // On an error or cancel the writer's destructor drops what is queued and closes every file.
+    if (pipelined && error.empty() && !job.cancelled) error = writer.finish(receipt);
+    // Where the time went, to tell decoding, the decoder thread not being scheduled (CPU time well under
+    // its wall time with little waiting), writes and fsyncs apart on the console.
+    const auto& t = job.timings;
+    const auto ms = [](std::uint64_t us) { return std::to_string(us / 1000) + "ms"; };
+    std::lock_guard lock(job.mutex);
+    const auto summary = std::string(archive_format_name(archive) ? archive_format_name(archive) : "?") + " "
+        + std::to_string(job.snapshot.written >> 20) + "MiB " + std::to_string(job.snapshot.entries) + " entries total="
+        + ms(elapsed_us(started)) + " decoder=" + ms(decoded_us) + " decoder-cpu=" + (cpu_started ? ms(cpu_us) : "?")
+        + " waited=" + ms(t.wait_us) + " write=" + ms(t.write_us) + "/" + std::to_string(t.writes) + " hash=" + ms(t.hash_us)
+        + " fsync=" + ms(t.sync_us) + "/" + std::to_string(t.syncs);
+    trace("throughput", summary.c_str());
+  }
   if (decrypted && !decrypted->error().empty()) error = decrypted->error();
   trace("read", error.c_str());
   archive_read_free(archive);

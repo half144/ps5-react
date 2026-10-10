@@ -56,6 +56,16 @@ extern const unsigned long proof_bundle_length;
 // Extraction steps go to the console log, so the crash log keeps the last one before a fault.
 bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) { return host::read_dir(path, visit, user); }
 void archives::trace(const char* step, const char* detail) { async_log::write("[PS5-REACT] archive %s %s", step, detail); }
+// The extraction's write ring: larger on larger heaps, and none (inline writes, as before) unless the
+// heap still has room for the 64 MiB decoder budget the preflight admits, the ring, and a margin.
+std::size_t archives::pipeline_bytes() {
+  constexpr std::size_t MiB = 1024 * 1024;
+  std::size_t size = 0, live = 0, peak = 0, blocks = 0, failures = 0;
+  hui_heap_capacity(&size, nullptr, nullptr);
+  hui_heap_stats(&live, &peak, &blocks, &failures);
+  const std::size_t ring = size >= 256 * MiB ? 32 * MiB : size >= 192 * MiB ? 16 * MiB : 8 * MiB;
+  return live + 64 * MiB + ring + 16 * MiB <= size ? ring : 0;
+}
 
 namespace {
 // Startup steps log their time since main(), to show where launch time goes.

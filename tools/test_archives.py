@@ -99,7 +99,7 @@ def main():
   prefix=subprocess.check_output(["brew","--prefix","libarchive"],text=True).strip()
   xz=subprocess.check_output(["brew","--prefix","xz"],text=True).strip()
   crypto=subprocess.check_output(["brew","--prefix","openssl@3"],text=True).strip()
-  sources=[ROOT/"tools/tests/archive_client.cpp",ROOT/"native/shared/archives.cpp",ROOT/"native/shared/archive_preflight.cpp",ROOT/"native/shared/rar5_password.cpp"]
+  sources=[ROOT/"tools/tests/archive_client.cpp",ROOT/"native/shared/archives.cpp",ROOT/"native/shared/archive_preflight.cpp",ROOT/"native/shared/rar5_password.cpp",ROOT/"native/shared/archive_writer.cpp"]
   subprocess.run(["clang++","-std=c++20","-O2","-Wall","-Wextra","-Werror","-pthread","-I",str(ROOT/"native/shared"),"-I",prefix+"/include","-I",xz+"/include","-I",crypto+"/include",*map(str,sources),"-L",prefix+"/lib","-L",xz+"/lib","-L",crypto+"/lib","-larchive","-llzma","-lcrypto","-lz","-o",str(binary)],check=True)
   def run(name,parts,limit=1024*1024,password=None):
    args=[] if password is None else ["--password",password]

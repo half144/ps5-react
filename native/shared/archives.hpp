@@ -19,4 +19,6 @@ void stop();
 bool list_directory(const char* path, void (*visit)(const char* name, void* user), void* user);
 // Each extraction step, for the console's crash log; the host defines it (a no-op on the desktop).
 void trace(const char* step, const char* detail = "");
+// Bytes the host lets one extraction hold for buffered writes; under 1 MiB, files are written inline.
+std::size_t pipeline_bytes();
 }
