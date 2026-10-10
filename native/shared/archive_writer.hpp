@@ -3,22 +3,34 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #pragma once
 #include "worker_thread.hpp"
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace archives {
+// Where an extraction's time went, for the console log. Each figure is summed over its threads, so
+// sync time can exceed the wall time when several closers wait at once.
+struct Timings {
+  std::atomic<std::uint64_t> write_us{0}, hash_us{0}, sync_us{0}, wait_us{0}, writes{0}, syncs{0};
+};
+inline std::uint64_t elapsed_us(std::chrono::steady_clock::time_point since) {
+  return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - since).count();
+}
 // Writes extracted files on two threads of its own so the decoder never waits on the disk. Decoded
 // bytes are copied into one ring allocated at start(); consecutive blocks of a file are merged there
-// into writes of up to `chunk` bytes. The writer thread pwrites and hashes them, the closer thread
-// fsyncs and closes finished files. Memory is fixed at start(): nothing grows while extracting except
+// into writes of up to `chunk` bytes. The writer thread pwrites, hashes and closes them. finish() then
+// fsyncs every file, several at once: by then the system has written most of them back on its own, so
+// each fsync has little left to wait for, where one per file while extracting stalled on each. Memory is fixed at start(): nothing grows while extracting except
 // the command queue, which is capped. Every call is from the one decoding thread.
 class Writer {
 public:
-  explicit Writer(const std::atomic<bool>& cancelled) : cancelled_(cancelled) {}
+  Writer(const std::atomic<bool>& cancelled, Timings& timings) : cancelled_(cancelled), timings_(timings) {}
   ~Writer();
   Writer(const Writer&) = delete;
   Writer& operator=(const Writer&) = delete;
@@ -47,24 +59,27 @@ private:
     bool sealed = true, busy = false;
   };
   void write_loop();
-  void close_loop();
+  // fsyncs the receipt's files from `next` on, one at a time, until none is left or one fails.
+  void sync_loop(const std::vector<std::size_t>& lines, std::atomic<std::size_t>& next);
   bool push(Command command);
   std::string readback(const std::string& file);
   bool failed() const { return failed_.load() || aborted_.load() || cancelled_.load(); }
   void fail(const std::string& error);
   void stop_threads();
 
+  static constexpr std::size_t syncers = 4;
   const std::atomic<bool>& cancelled_;
+  Timings& timings_;
   unsigned char* ring_ = nullptr;
   std::size_t capacity_ = 0, chunk_ = 0;
   std::uint64_t head_ = 0, tail_ = 0;
   std::deque<Command> commands_;
-  std::deque<int> closing_;
-  std::string receipt_, error_;
+  // The receipt's names are relative to this folder, taken from the first file.
+  std::string receipt_, error_, root_;
   std::mutex mutex_;
-  std::condition_variable work_, space_, close_work_;
+  std::condition_variable work_, space_;
   std::atomic<bool> failed_{false}, aborted_{false};
-  bool stopping_ = false, closer_stopping_ = false;
-  WorkerThread writer_, closer_;
+  bool stopping_ = false;
+  WorkerThread writer_;
 };
 }

@@ -6,6 +6,7 @@
 #include "digest.hpp"
 #include "thread_name.hpp"
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -17,7 +18,7 @@ namespace archives {
 namespace {
 // Begin and end commands hold no ring bytes, and a sparse file's data commands may hold one byte each;
 // this caps them for archives of many empty files or tiny scattered blocks.
-constexpr std::size_t max_commands = 4096, max_closing = 64, readback_block = 128 * 1024;
+constexpr std::size_t max_commands = 4096, readback_block = 128 * 1024;
 // Writer threads only hash and copy; the read-back buffer is on the heap.
 constexpr std::size_t thread_stack = 256 * 1024;
 }
@@ -37,23 +38,10 @@ bool Writer::start(std::size_t ring_bytes) {
   if (!ring_) return false;
   capacity_ = ring_bytes;
   chunk_ = std::min<std::size_t>(4 * 1024 * 1024, capacity_ / 4);
-  if (!closer_.start([this] { close_loop(); }, thread_stack)) {
-    std::free(ring_);
-    ring_ = nullptr;
-    return false;
-  }
-  if (!writer_.start([this] { write_loop(); }, thread_stack)) {
-    {
-      std::lock_guard lock(mutex_);
-      closer_stopping_ = true;
-    }
-    close_work_.notify_all();
-    closer_.join();
-    std::free(ring_);
-    ring_ = nullptr;
-    return false;
-  }
-  return true;
+  if (writer_.start([this] { write_loop(); }, thread_stack)) return true;
+  std::free(ring_);
+  ring_ = nullptr;
+  return false;
 }
 
 void Writer::fail(const std::string& error) {
@@ -121,7 +109,12 @@ bool Writer::append(const void* bytes, std::size_t size, std::uint64_t offset) {
       const std::size_t pad = position + piece > capacity_ ? capacity_ - position : 0;
       if (last) last->sealed = true;
       work_.notify_one();
-      space_.wait(lock, [&] { return (head_ - tail_ + pad + piece <= capacity_ && commands_.size() < max_commands) || failed(); });
+      const auto room = [&] { return head_ - tail_ + pad + piece <= capacity_ && commands_.size() < max_commands; };
+      if (!room()) {
+        const auto waited = std::chrono::steady_clock::now();
+        space_.wait(lock, [&] { return room() || failed(); });
+        timings_.wait_us += elapsed_us(waited);
+      }
       if (failed()) return false;
       Command command{Kind::data};
       command.ring = (head_ + pad) % capacity_;
@@ -189,6 +182,7 @@ void Writer::write_loop() {
       const unsigned char* bytes = ring_ + command.ring;
       std::size_t written = 0;
       if (command.ring + command.length > capacity_) fail("Extraction write outside its buffer.");
+      const auto writing = std::chrono::steady_clock::now();
       while (!skip && fd >= 0 && written < command.length && !failed()) {
         const auto count = pwrite(fd, bytes + written, command.length - written, command.offset + written);
         if (count < 0 && errno == EINTR) continue;
@@ -198,9 +192,13 @@ void Writer::write_loop() {
         }
         written += count;
       }
+      timings_.write_us += elapsed_us(writing);
+      ++timings_.writes;
       if (!failed() && fd >= 0) {
         if (contiguous && command.offset == hashed) {
+          const auto hashing = std::chrono::steady_clock::now();
           hash->update(bytes, command.length);
+          timings_.hash_us += elapsed_us(hashing);
           hashed += command.length;
         } else {
           contiguous = false;
@@ -220,12 +218,13 @@ void Writer::write_loop() {
       if (!failed()) {
         receipt_ += digest + "|" + name + "\n";
         if (receipt_.size() > max_metadata_bytes) fail("Extraction receipt exceeds the metadata limit.");
+        const auto folder = path.size() - name.size() - 1;
+        if (!path.ends_with("/" + name) || (!root_.empty() && path.compare(0, folder, root_)))
+          fail("Extracted file outside its folder.");
+        else if (root_.empty()) root_ = path.substr(0, folder);
       }
-      std::unique_lock lock(mutex_);
-      space_.wait(lock, [&] { return closing_.size() < max_closing || failed(); });
-      closing_.push_back(fd);
+      if (close(fd) && errno != EINTR && !failed()) fail(std::strerror(errno));
       fd = -1;
-      close_work_.notify_one();
     }
   }
 }
@@ -250,21 +249,26 @@ std::string Writer::readback(const std::string& file) {
   return ok && !failed() ? hash.finish() : std::string();
 }
 
-// fsync before the receipt: inputs are deleted once extraction completes, so the files must be on disk.
-void Writer::close_loop() {
-  name_thread("archive-close");
-  while (true) {
-    int fd;
-    {
-      std::unique_lock lock(mutex_);
-      close_work_.wait(lock, [&] { return !closing_.empty() || closer_stopping_; });
-      if (closing_.empty()) return;
-      fd = closing_.front();
-      closing_.pop_front();
-      space_.notify_all();
+// Every file is on disk before the receipt: inputs are deleted once extraction completes.
+void Writer::sync_loop(const std::vector<std::size_t>& lines, std::atomic<std::size_t>& next) {
+  name_thread("archive-sync");
+  for (std::size_t index; !failed() && (index = next++) < lines.size();) {
+    const auto at = receipt_.find('|', lines[index]) + 1;
+    const auto file = root_ + "/" + receipt_.substr(at, receipt_.find('\n', at) - at);
+    const auto syncing = std::chrono::steady_clock::now();
+    // fsync needs no write access; a filesystem that wants it gets the file opened for writing.
+    int fd = open(file.c_str(), O_RDONLY | O_NOFOLLOW);
+    bool synced = fd >= 0 && !fsync(fd);
+    if (fd >= 0 && !synced && (errno == EBADF || errno == EINVAL)) {
+      close(fd);
+      fd = open(file.c_str(), O_WRONLY | O_NOFOLLOW);
+      synced = fd >= 0 && !fsync(fd);
     }
-    if (!failed() && fsync(fd)) fail(std::strerror(errno));
-    if (close(fd) && !failed() && errno != EINTR) fail(std::strerror(errno));
+    const int error = errno;
+    if (fd >= 0) close(fd);
+    timings_.sync_us += elapsed_us(syncing);
+    ++timings_.syncs;
+    if (!synced) fail(std::strerror(error));
   }
 }
 
@@ -276,18 +280,21 @@ void Writer::stop_threads() {
   }
   work_.notify_all();
   writer_.join();
-  {
-    std::lock_guard lock(mutex_);
-    closer_stopping_ = true;
-  }
-  close_work_.notify_all();
-  closer_.join();
   std::free(ring_);
   ring_ = nullptr;
 }
 
 std::string Writer::finish(std::string& receipt) {
   stop_threads();
+  std::vector<std::size_t> lines;
+  for (std::size_t at = 0; at < receipt_.size(); at = receipt_.find('\n', at) + 1) lines.push_back(at);
+  std::atomic<std::size_t> next{0};
+  // Without threads, the files are synced here, one after another.
+  std::array<WorkerThread, syncers> threads;
+  for (auto& thread : threads)
+    if (!failed() && lines.size() > 1) thread.start([&] { sync_loop(lines, next); }, thread_stack);
+  sync_loop(lines, next);
+  for (auto& thread : threads) thread.join();
   if (cancelled_) return {};
   if (failed_ || aborted_) return error_.empty() ? "Extraction stopped." : error_;
   receipt += receipt_;

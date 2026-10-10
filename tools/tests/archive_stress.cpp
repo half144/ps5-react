@@ -31,6 +31,8 @@ int open_descriptors() {
   for (int fd = 0; fd < 1024; ++fd) count += fcntl(fd, F_GETFD) != -1;
   return count;
 }
+// ARCHIVE_STRESS_SCALE stretches the time limits on a slow or throttled machine.
+int scale() { const char* v = std::getenv("ARCHIVE_STRESS_SCALE"); return v ? std::atoi(v) : 1; }
 archives::Snapshot wait(std::chrono::seconds limit) {
   const auto until = std::chrono::steady_clock::now() + limit;
   while (std::chrono::steady_clock::now() < until) {
@@ -59,13 +61,13 @@ int main(int argc, char** argv) {
     if (round < rounds) {
       std::this_thread::sleep_for(std::chrono::milliseconds(rng() % 700));
       archives::cancel(id);
-      const auto s = wait(std::chrono::seconds(10));
+      const auto s = wait(std::chrono::seconds(10 * scale()));
       // A cancel that lands after completion leaves a finished extraction; it is removed for the next round.
       if (s.state == "completed") std::system(("rm -rf '" + destination + "'").c_str());
       else assert(s.state == "cancelled" || s.state == "failed");
       assert(lstat((destination + ".extracting").c_str(), &st) && lstat(destination.c_str(), &st));
     } else {
-      const auto s = wait(std::chrono::seconds(120));
+      const auto s = wait(std::chrono::seconds(120 * scale()));
       std::printf("final %s %llu %s\n", s.state.c_str(), static_cast<unsigned long long>(s.written), s.error.c_str());
     }
     assert(open_descriptors() == before);

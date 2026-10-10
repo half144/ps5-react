@@ -5,7 +5,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <thread>
-void archives::trace(const char*,const char*){}
+// ARCHIVE_TRACE=1 prints the extraction steps, the throughput breakdown among them.
+void archives::trace(const char* step,const char* detail){if(std::getenv("ARCHIVE_TRACE"))std::cerr<<step<<" "<<detail<<"\n";}
 // ARCHIVE_PIPELINE_BYTES=0 exercises the inline writer.
 std::size_t archives::pipeline_bytes(){const char* v=std::getenv("ARCHIVE_PIPELINE_BYTES");return v?std::strtoull(v,nullptr,10):32u<<20;}
 bool archives::list_directory(const char* path,void(*visit)(const char*,void*),void* user){

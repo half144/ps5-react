@@ -26,6 +26,7 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <thread>
+#include <time.h>
 #include <unordered_set>
 #include <unistd.h>
 
@@ -46,12 +47,19 @@ struct Job {
   Snapshot snapshot;
   std::atomic<bool> cancelled{false};
   std::mutex mutex;
+  Timings timings;
   WorkerThread worker;
 };
 std::mutex guard;
 std::shared_ptr<Job> active;
 std::uint32_t next_id = 1;
 
+// CPU time of the calling thread, or 0 when the clock is unavailable.
+std::uint64_t thread_cpu_us() {
+  timespec now{};
+  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now)) return 0;
+  return static_cast<std::uint64_t>(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+}
 bool terminal(const std::string& state) { return state == "completed" || state == "failed" || state == "cancelled"; }
 void fail(Job& job, const std::string& error) {
   std::lock_guard lock(job.mutex);
@@ -307,12 +315,15 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
       job.snapshot.written += bytes;
     }
     std::size_t written = 0;
+    const auto writing = std::chrono::steady_clock::now();
     while (written < bytes && !job.cancelled) {
       const auto count = pwrite(fd, static_cast<const char*>(buffer) + written, bytes - written, offset + written);
       if (count < 0 && errno == EINTR) continue;
       if (count <= 0) return std::strerror(errno);
       written += count;
     }
+    job.timings.write_us += elapsed_us(writing);
+    ++job.timings.writes;
     if (contiguous && static_cast<std::uint64_t>(offset) == hashed) {
       hash.update(buffer, bytes);
       if (checksum) crc = crc32(crc, static_cast<const Bytef*>(buffer), bytes);
@@ -325,7 +336,10 @@ std::string write_entry(Job& job, archive* archive, int fd, std::int64_t size, c
   if (job.cancelled) return {};
   if (result != ARCHIVE_EOF) return archive_error(archive, "Incomplete archive data.");
   if (extent != static_cast<std::uint64_t>(size)) return "Extracted file size mismatch.";
+  const auto syncing = std::chrono::steady_clock::now();
   if (fsync(fd)) return std::strerror(errno);
+  job.timings.sync_us += elapsed_us(syncing);
+  ++job.timings.syncs;
   if (contiguous && hashed == extent) digest = hash.finish();
   else if (!file_hash(path, job, digest)) digest.clear();
   if (checksum) {
@@ -549,19 +563,25 @@ void run(const std::shared_ptr<Job>& pointer) {
   }
   {
     // Without the ring or its threads, files are written inline as before.
-    Writer writer(job.cancelled);
+    Writer writer(job.cancelled, job.timings);
     const bool pipelined = writer.start(pipeline_bytes());
     trace("writer", pipelined ? "pipelined" : "inline");
     const auto started = std::chrono::steady_clock::now();
+    const auto cpu_started = thread_cpu_us();
     if (error.empty()) error = extract(job, archive, staging, receipt, decrypted.get(), pipelined ? &writer : nullptr);
+    const auto decoded_us = elapsed_us(started), cpu_us = thread_cpu_us() - cpu_started;
     // On an error or cancel the writer's destructor drops what is queued and closes every file.
     if (pipelined && error.empty() && !job.cancelled) error = writer.finish(receipt);
-    // Throughput per format in the console log, to tell decoder-bound archives from disk-bound ones.
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+    // Where the time went, to tell decoding, the decoder thread not being scheduled (CPU time well under
+    // its wall time with little waiting), writes and fsyncs apart on the console.
+    const auto& t = job.timings;
+    const auto ms = [](std::uint64_t us) { return std::to_string(us / 1000) + "ms"; };
     std::lock_guard lock(job.mutex);
     const auto summary = std::string(archive_format_name(archive) ? archive_format_name(archive) : "?") + " "
-        + std::to_string(job.snapshot.written >> 20) + "MiB " + std::to_string(job.snapshot.entries) + " entries "
-        + std::to_string(ms) + "ms";
+        + std::to_string(job.snapshot.written >> 20) + "MiB " + std::to_string(job.snapshot.entries) + " entries total="
+        + ms(elapsed_us(started)) + " decoder=" + ms(decoded_us) + " decoder-cpu=" + (cpu_started ? ms(cpu_us) : "?")
+        + " waited=" + ms(t.wait_us) + " write=" + ms(t.write_us) + "/" + std::to_string(t.writes) + " hash=" + ms(t.hash_us)
+        + " fsync=" + ms(t.sync_us) + "/" + std::to_string(t.syncs);
     trace("throughput", summary.c_str());
   }
   if (decrypted && !decrypted->error().empty()) error = decrypted->error();
