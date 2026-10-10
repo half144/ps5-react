@@ -61,7 +61,10 @@
   "quickjs": "0.15.0",
   "quickjsSource": {
     "url": "https://github.com/quickjs-ng/quickjs.git",
-    "revision": "433941b99fb3c5e7f98b7ebd78727972bcf467ee"
+    "revision": "433941b99fb3c5e7f98b7ebd78727972bcf467ee",
+    "patches": [
+      "patches/quickjs-sample-stack.patch"
+    ]
   },
   "stbImage": {
     "version": "2.30",

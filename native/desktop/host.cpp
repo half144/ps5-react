@@ -33,6 +33,7 @@ void er_register_assets(void);
 #include "control.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
+#include "js_profiler.hpp"
 #include "render_workers.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
@@ -139,6 +140,7 @@ struct Host {
   SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
   GcScheduler gc_scheduler{now_us};
+  JsProfiler profiler{now_us};
   bool l2_down = false, r2_down = false;
 
   ~Host() {
@@ -205,6 +207,8 @@ struct Host {
     cfg.install_host_globals = ps5_react_install_host_api;
     runtime_started = er_runtime_init(&cfg);
     if (!runtime_started) return false;
+    // PS5_REACT_PROFILE=<file> samples JavaScript; the folded stacks are written there on exit.
+    if (std::getenv("PS5_REACT_PROFILE")) profiler.start(JS_GetRuntime(er_runtime_context()), 1000);
     if (controlled) {
       // Read when the bundle loads: Text reports its content to the inspector only then.
       JSContext* ctx = er_runtime_context();
@@ -731,6 +735,12 @@ int main(int argc, char** argv) {
       SDL_ShowCursor(SDL_DISABLE);
     }
     while (ok && host.running) ok = host.frame();
+    if (host.profiler.running()) {
+      host.profiler.stop();
+      const char* path = std::getenv("PS5_REACT_PROFILE");
+      std::printf("profile: %llu samples, %s %s\n", static_cast<unsigned long long>(host.profiler.samples()),
+                  host.profiler.write(path) ? "saved to" : "could not write", path);
+    }
   }
   if (!ok) std::fprintf(stderr, "Texture proof failed: %s / %s\n", SDL_GetError(), er_runtime_last_error());
   if (ok && desktop_relaunch_requested()) {

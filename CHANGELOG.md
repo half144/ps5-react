@@ -96,6 +96,13 @@
   room is at least 8 MiB (docs/ARCHITECTURE.md). On a PS5 burst of detail pages
   and grid scrolling, the previous policy collected automatically inside a
   full-screen frame in both runs (51–58 ms); this one in neither.
+- A PS5 test deploy can report every slow frame with a limit in
+  `dev/slow-frame-lines.txt`, instead of the first eight per window.
+- A JavaScript sampling profiler: `dev/profile.txt` on a PS5 test deploy (the
+  interval in microseconds) or `PS5_REACT_PROFILE=<file>` for the preview writes
+  folded stacks of where JavaScript time went (docs/ANIMATION.md, "Profiling
+  JavaScript"). A QuickJS patch, maintained here and not proposed upstream, lets
+  the interrupt handler sample the stack.
 - Per-frame callbacks run in one React batch, through an Embedded React patch
   that exports `unstable_batchedUpdates`: each image delivered and each
   VirtualList step rendered on its own before.

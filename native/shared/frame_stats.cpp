@@ -97,7 +97,7 @@ const char* FrameStats::end_frame(std::uint32_t slow_us) {
   const std::uint32_t forks = render_workers::forked_commits(), forked = forks - parallel_seen_;
   parallel_seen_ = forks;
   if (forked) ++parallel_frames_;
-  if (f.frame_us <= slow_us || slow_lines_ >= slow_lines_per_window) return nullptr;
+  if (f.frame_us <= slow_us || slow_lines_ >= slow_line_limit_) return nullptr;
   ++slow_lines_;
   // `other` is host work outside js/layout/raster/present: input polling, swap, the animation tick.
   std::snprintf(slow_line_, sizeof slow_line_,

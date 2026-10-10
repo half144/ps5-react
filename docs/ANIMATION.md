@@ -439,7 +439,8 @@ with the same split for that frame and the bounding box of its repaint:
 
 `other` is host work outside those phases, including the vsync wait. A PS5
 test deploy can lower the 33 ms threshold with `dev/slow-frame-ms.txt` in the
-app folder. The host clamps the animation step to 50 ms, so frames beyond that
+app folder, and report every slow frame instead of the first eight per two-second
+window with a larger limit in `dev/slow-frame-lines.txt`. The host clamps the animation step to 50 ms, so frames beyond that
 make animations run in slow motion.
 
 #### Reproducible profiling
@@ -476,6 +477,20 @@ present at launch are skipped). Writing the file with a new number, for example
 the current time in milliseconds, runs its steps once; each line is echoed as a
 `command:` line in the kernel log. The host polls only when the app folder has a
 `dev` directory, which a build never creates.
+
+#### Profiling JavaScript
+
+When a slow frame's time is in `js` or `react`, a sampling profiler shows which
+functions it went to. Put the sampling interval in microseconds (`1000` is a good
+start) in `dev/profile.txt` of a PS5 test deploy, or set `PS5_REACT_PROFILE` to an
+output path for the preview. About once per interval QuickJS's interrupt handler
+records the running stack, and when the run ends the host writes folded stacks
+to `dev/profile.folded` (or the given path): one line per stack, outermost frame
+first, frames as `name@line`, then the microseconds charged to it. Flame-graph
+tools read the format. Lines are those of `.build/<app>/generated/app.bundle.js`,
+which also identifies React's minified internals. Time inside a native call is
+charged to the first sample after it returns, so bridge and engine calls are
+undercounted; the frame-time log measures those.
 
 #### Screenshots
 

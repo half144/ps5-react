@@ -25,12 +25,14 @@ public:
   // Closes the engine's frame. Returns its breakdown when it took longer than
   // slow_us (at most a few per window), otherwise nullptr.
   const char* end_frame(std::uint32_t slow_us);
+  // How many slow frames a window reports (default 8).
+  void set_slow_line_limit(std::uint32_t limit) { slow_line_limit_ = limit; }
 
 private:
   static constexpr std::int64_t window_us = 2000000;
   // Holds a full window up to 512 Hz; beyond that p95 covers the latest frames.
   static constexpr int capacity = 1024;
-  static constexpr int slow_lines_per_window = 8;
+  std::uint32_t slow_line_limit_ = 8;
 
   std::uint32_t totals_[capacity] = {}, scratch_[capacity] = {};
   std::uint64_t phase_sum_[phase_count] = {}, total_sum_ = 0;

@@ -24,6 +24,7 @@
 #include "actions.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
+#include "js_profiler.hpp"
 #include "payload_loader.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
@@ -226,6 +227,7 @@ const char* nav_action(hui::Direction direction) {
 }
 
 GcScheduler gc_scheduler(hui::sys::monotonic_us);
+JsProfiler profiler(hui::sys::monotonic_us);
 
 bool dispatch(const char* action) {
   gc_scheduler.input(hui::sys::monotonic_us());
@@ -316,6 +318,14 @@ bool run_proof() {
     runtime = er_runtime_init(&config);
     ok = runtime;
     async_log::write("[PS5-REACT] runtime=%d at %lldms", ok, since_launch_ms());
+    // A test deploy samples JavaScript with dev/profile.txt holding the interval in microseconds.
+    if (FILE* file = ok ? std::fopen(dev_path("profile.txt").c_str(), "rb") : nullptr) {
+      char text[16] = {};
+      const int interval = std::fgets(text, sizeof text, file) ? std::atoi(text) : 0;
+      std::fclose(file);
+      profiler.start(JS_GetRuntime(er_runtime_context()), interval > 0 ? interval : 1000);
+      async_log::write("[PS5-REACT] profiling JavaScript every %d us", interval > 0 ? interval : 1000);
+    }
   }
   if (ok) {
     er_register_assets();
@@ -342,6 +352,12 @@ bool run_proof() {
     if (FILE* file = std::fopen(dev_path("slow-frame-ms.txt").c_str(), "rb")) {
       char text[16] = {};
       if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) slow_frame_us = std::atoi(text) * 1000u;
+      std::fclose(file);
+    }
+    // And report every slow frame instead of the first few per window, with dev/slow-frame-lines.txt.
+    if (FILE* file = std::fopen(dev_path("slow-frame-lines.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) stats.set_slow_line_limit(std::atoi(text));
       std::fclose(file);
     }
     tsc_per_us = std::max<std::uint64_t>(sceKernelGetTscFrequency() / 1000000, 1);
@@ -440,6 +456,11 @@ bool run_proof() {
       if (ps5_react_exit_requested()) break;
     }
     async_log::write("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
+    if (profiler.running()) {
+      profiler.stop();
+      const bool saved = profiler.write(dev_path("profile.folded").c_str());
+      async_log::write("[PS5-REACT] profile: %llu samples, saved=%d", static_cast<unsigned long long>(profiler.samples()), saved);
+    }
   }
   if (!ok && runtime) async_log::write("[PS5-REACT] error=%s", er_runtime_last_error());
   ps5_react_stop_images();
