@@ -8,6 +8,7 @@ so it is never linked into the engine; the engine starts this program and reads 
 import subprocess
 import tarfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from common import DEPS, LOCK, ROOT, digest, fetch
 
@@ -40,8 +41,26 @@ def unrar_source():
     return root
 
 
+def up_to_date(target, command, inputs):
+    """Whether `target` was made by `command` (recorded beside it) and is newer than every input."""
+    recorded = target.with_name(target.name + ".cmd")
+    if not target.exists() or not recorded.exists() or recorded.read_text() != "\0".join(command):
+        return False
+    built = target.stat().st_mtime
+    return all(Path(p).exists() and Path(p).stat().st_mtime <= built for p in inputs)
+
+
+def depfile_inputs(depfile):
+    """The files listed in a compiler -MMD depfile, or None when it is missing."""
+    if not depfile.exists():
+        return None
+    text = depfile.read_text().replace("\\\n", " ")
+    return text.split(":", 1)[1].split() if ":" in text else None
+
+
 def build(output, compiler, flags=(), libraries=(), env=None):
-    """Compiles UnRAR and the driver with `compiler` (a command list) and links `output`."""
+    """Compiles UnRAR and the driver with `compiler` (a command list) and links `output`, skipping objects
+    and the link when their command and inputs are unchanged since the last build."""
     source = unrar_source()
     objects = output.parent / (output.name + ".obj")
     objects.mkdir(parents=True, exist_ok=True)
@@ -50,11 +69,17 @@ def build(output, compiler, flags=(), libraries=(), env=None):
     def compile_one(item):
         path, extra = item
         obj = objects / (path.stem + ".o")
+        depfile = obj.with_suffix(".d")
         # UnRAR's headers are a system include for the driver, which builds with the engine's warnings.
-        result = subprocess.run([*map(str, common), *extra, "-isystem", str(source), "-c", str(path), "-o", str(obj)],
-                                capture_output=True, text=True, env=env)
+        command = [*map(str, common), *extra, "-isystem", str(source), "-MMD", "-MF", str(depfile),
+                   "-c", str(path), "-o", str(obj)]
+        inputs = depfile_inputs(depfile)
+        if inputs is not None and up_to_date(obj, command, inputs):
+            return obj
+        result = subprocess.run(command, capture_output=True, text=True, env=env)
         if result.returncode:
             raise RuntimeError(f"{path.name}: {result.stderr[-4000:]}")
+        obj.with_name(obj.name + ".cmd").write_text("\0".join(command))
         return obj
 
     library = ["-std=c++17", "-w"]
@@ -62,10 +87,13 @@ def build(output, compiler, flags=(), libraries=(), env=None):
     items = [(source / f"{name}.cpp", library) for name in SOURCES] + [(ROOT / "native/rar_worker/rar_worker.cpp", driver)]
     with ThreadPoolExecutor(8) as pool:
         built = list(pool.map(compile_one, items))
-    result = subprocess.run([*map(str, compiler), *map(str, flags), *map(str, built), *map(str, libraries), "-o", str(output)],
-                            capture_output=True, text=True, env=env)
+    command = [*map(str, compiler), *map(str, flags), *map(str, built), *map(str, libraries), "-o", str(output)]
+    if up_to_date(output, command, [*built, *libraries]):
+        return output
+    result = subprocess.run(command, capture_output=True, text=True, env=env)
     if result.returncode:
         raise RuntimeError(f"rar-extract link: {result.stderr[-4000:]}")
+    output.with_name(output.name + ".cmd").write_text("\0".join(command))
     return output
 
 
