@@ -52,10 +52,11 @@ function releaseScope(parent, released) {
 
 /**
  * While `when` is true, the remote images under it stop holding their cache entries, except those
- * on screen when it turned true: they stay mounted, and the decoded cache may evict them least
- * recently used first when it needs the room. When it turns false they load again, at once and
- * without re-rendering when still cached. For a screen kept mounted while hidden, so its images do
- * not pin memory the visible one needs, yet what it showed is there at once when it returns.
+ * on screen when it turned true, which keep theirs. All stay mounted, and the decoded cache may evict
+ * the released ones least recently used first when it needs the room. When it turns false they load
+ * again, at once and without re-rendering when still cached. For a screen kept mounted while
+ * hidden, so its images do not pin memory the visible one needs, yet what it showed is there at once
+ * when it returns.
  * On screen is by layout, clipped by enclosing ScrollViews; transforms are not applied, and the
  * last layout counts, so a screen hidden with `display: 'none'` in the same render still has it.
  * @param {{when: boolean, children?: import('react').ReactNode}} props
