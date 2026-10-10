@@ -117,5 +117,13 @@
     "version": "3.0.0",
     "url": "https://github.com/Tehreer/SheenBidi/archive/refs/tags/v3.0.0.tar.gz",
     "sha256": "86c56014034739ba39a24c23eb00323b0bf6f737354f665786015fca842af786"
+  },
+  "unrarSource": {
+    "version": "7.2.1",
+    "url": "https://www.rarlab.com/rar/unrarsrc-7.2.1.tar.gz",
+    "sha256": "3fe3b4d710da45521625353dc2e023dad48c010f02a93302756e1061a8f3ae8e",
+    "patches": [
+      "patches/unrar-worker.patch"
+    ]
   }
 }

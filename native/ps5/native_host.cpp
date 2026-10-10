@@ -23,6 +23,7 @@
 #include "actions.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
+#include "payload_loader.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
 #include "filesystem_access.hpp"
@@ -66,6 +67,18 @@ std::size_t archives::pipeline_bytes() {
   const std::size_t ring = size >= 256 * MiB ? 32 * MiB : size >= 192 * MiB ? 16 * MiB : 8 * MiB;
   return live + 64 * MiB + ring + 16 * MiB <= size ? ring : 0;
 }
+// rar-extract.elf goes to the payload loader as the package installer does, and reports on the socket.
+int archives::start_rar_worker(const std::string& request, std::string& error) {
+  const int socket = payload_loader::send("rar-extract.elf", request, 5'000'000, "Archives.extract", error);
+  if (socket >= 0) payload_loader::receive_timeout(socket, 250'000);
+  return socket;
+}
+long archives::read_rar_worker(int stream, char* data, std::size_t size) {
+  const int count = payload_loader::receive(stream, data, size);
+  return count < 0 ? -1 : count;
+}
+void archives::cancel_rar_worker(int stream) { payload_loader::write(stream, "cancel\n", 7); }
+void archives::close_rar_worker(int stream) { payload_loader::close(stream); }
 
 namespace {
 // Startup steps log their time since main(), to show where launch time goes.

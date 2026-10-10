@@ -15,6 +15,7 @@ import tarfile
 import urllib.request
 import zipfile
 
+from rar_worker import build as build_rar_worker, unrar_source
 from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
 from network_ports import ports, copy_notices
 from text_fonts import harfbuzz, sheenbidi
@@ -196,6 +197,9 @@ def main():
     run([sdk / "bin/prospero-clang", "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-o", installer,
          ROOT / "native/ps5/payloads/pkg_installer.c", "-lkernel_sys", "-lSceUserService"],
         env=env, log=BUILD / "pkg-installer.log")
+    # RAR sets extract in a payload of their own: UnRAR's license keeps its code out of this GPL app.
+    rar_extract = build_rar_worker(BUILD / "rar-extract.elf", [sdk / "bin/prospero-clang++"],
+                                   ["-I", archive_ports / "include"], [archive_ports / "lib/libcrypto.a", builtins], env)
     # Opens the app again after it closes, which the app itself cannot do.
     relauncher = BUILD / "relauncher.elf"
     run([sdk / "bin/prospero-clang", "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-o", relauncher,
@@ -216,6 +220,7 @@ def main():
     run([host_tool, "self", "--sign", "--in", elf, "--out", app / "eboot.bin", "--magic", "0x1D3D154F"])
     shutil.copy2(runtime, app / "sce_module/libc.prx")
     shutil.copy2(installer, app / "pkg-installer.elf")
+    run([sdk / "bin/prospero-strip", "-o", app / "rar-extract.elf", rar_extract], env=env)
     shutil.copy2(relauncher, app / "relauncher.elf")
     shutil.copy2(capture, app / "browser-capture.elf")
     param = json.loads((hui / "sce_sys/param.json").read_text())
@@ -256,6 +261,7 @@ def main():
     else:
         for name in ("lapy.elf", "lapy-manifest.json"):
             (app / name).unlink(missing_ok=True)
+    shutil.copy2(unrar_source() / "license.txt", notices / "unRAR-license.txt")
     stb = (stb_image() / "stb_image.h").read_text()
     (notices / "stb_image-LICENSE").write_text(stb[stb.index("This software is available under 2 licenses"):])
     copy_notices(compatibility_client, notices / "networking")

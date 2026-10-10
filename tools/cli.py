@@ -14,6 +14,7 @@ import sys
 import time
 
 from common import ROOT, app_config, app_files, bundle, dependency, run, stb_image
+from rar_worker import build_host
 from text_fonts import harfbuzz, sheenbidi
 
 
@@ -42,6 +43,8 @@ def desktop(app, test=False, target="ps5-react-preview"):
          f"-DER_ROOT={er}", f"-DHUI_ROOT={hui}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", f"-DHB_ROOT={harfbuzz()}", f"-DSB_ROOT={sheenbidi()}", "-DCMAKE_BUILD_TYPE=Release"],
         log=build / "configure.log")
     run(["cmake", "--build", build, "--target", target, "-j", "6"], log=build / "build.log")
+    # RAR sets extract in this separate program, which the preview finds beside itself.
+    build_host(build / "rar-extract")
     command = [build / "ps5-react-preview", generated / "app.bundle.js"]
     if test:
         run(["node", "--test", *sorted((ROOT / "tools/tailwind").glob("*.test.mjs")),
