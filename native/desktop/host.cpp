@@ -586,6 +586,8 @@ bool storage_test() {
       const large = 'x'.repeat(3 * 1024 * 1024 + 7);
       fs.writeFile(testPath, large, false);
       if (fs.readFile(testPath) !== large) return false;
+      fs.writeFile(testPath, 'synced', false, true);
+      if (fs.readFile(testPath) !== 'synced') return false;
     } finally { fs.remove(testPath); }
     // removeTree deletes the tree but only unlinks the symbolic link set up below, keeping its target.
     fs.removeTree('/download0/remove-tree-test');
