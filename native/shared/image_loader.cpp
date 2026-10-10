@@ -32,18 +32,22 @@
 #include <pthread.h>
 #include <unordered_map>
 
-// stb_image reports failures through one global string; only the decode thread decodes. Some of its
-// allocation failures leave that string stale, so they are noted here instead.
+// Several threads decode at once. stb_image's failure strings are not thread-safe (a global, or a
+// thread_local the title has never used, plus a static buffer it rewrites for unknown PNG chunks), so
+// they are compiled out, and running out of heap is told apart by counting failed allocations
+// instead. Its other globals are only read.
 namespace {
-bool stb_out_of_memory = false;
+// The hooks cannot tell which decode allocates: one that fails while this moved is treated as out of
+// memory and retried, which under heap pressure is right for any of them.
+std::atomic<unsigned> stb_failed_allocations{0};
 void* stb_malloc(std::size_t size) {
   void* p = std::malloc(size);
-  stb_out_of_memory = stb_out_of_memory || !p;
+  if (!p) ++stb_failed_allocations;
   return p;
 }
 void* stb_realloc(void* address, std::size_t size) {
   void* p = std::realloc(address, size);
-  stb_out_of_memory = stb_out_of_memory || !p;
+  if (!p) ++stb_failed_allocations;
   return p;
 }
 } // namespace
@@ -51,6 +55,7 @@ void* stb_realloc(void* address, std::size_t size) {
 #define STBI_REALLOC stb_realloc
 #define STBI_FREE std::free
 #define STBI_NO_THREAD_LOCALS
+#define STBI_NO_FAILURE_STRINGS
 #define STBI_NO_STDIO
 #define STBI_NO_HDR
 #define STBI_NO_LINEAR
@@ -78,6 +83,15 @@ constexpr std::array<const char*, 2> kDohURLs = {"https://1.1.1.1/dns-query", "h
 constexpr std::size_t kResolver = kDohURLs.size();
 // A decode that ran out of heap is tried again 1 and 2 s later, from the cached bytes.
 constexpr unsigned kDecodeAttempts = 3;
+// A screen of evicted covers reloads from the disk cache at 8-10 ms of decode each on the PS5. Its
+// title sees 16 CPUs and a commit raster takes 9 (eight render workers); four decoders fit beside
+// them. A fixed count keeps the preview's behaviour the console's.
+constexpr unsigned kDecoders = 4;
+// A decode holds up to about 8 bytes per source pixel: stb_image's buffers (4.5 for JPEG, 8 for PNG),
+// then its output and the resampled pixels. Decodes running together stay within what one image at
+// the source limit took when a single thread decoded; one always runs, whatever it holds.
+constexpr std::size_t kDecodeBytesPerPixel = 8;
+constexpr std::size_t kDecodeBudget = kMaxSourcePixels * kDecodeBytesPerPixel;
 // While a download runs it holds up to 64 connections and their TLS state; images take fewer.
 constexpr unsigned kDownloadConnections = 8;
 // Per origin, on reused keep-alive connections (the console's curl has no HTTP/2): a grid of 30 Sony
@@ -173,6 +187,7 @@ struct Entry {
   std::atomic<std::uint64_t> rank{0};
   // Written by the workers before the entry is handed to poll() under the service mutex.
   Body body;
+  std::size_t decode_cost = 0;
   std::uint32_t* pixels = nullptr;
   int width = 0, height = 0;
   bool opaque = true;
@@ -338,21 +353,24 @@ bool decode(Entry& entry) {
   const auto* bytes = reinterpret_cast<const stbi_uc*>(entry.body->data);
   const int size = static_cast<int>(entry.body->size);
   int width = 0, height = 0, components = 0;
+  const unsigned failed_allocations = stb_failed_allocations;
+  const auto out_of_memory = [&] { return stb_failed_allocations != failed_allocations; };
+  bool retry = false;
   if (!stbi_info_from_memory(bytes, size, &width, &height, &components)) {
-    entry.error = message(entry, std::string("not a decodable JPEG or PNG (") + stbi_failure_reason() + ")");
+    retry = out_of_memory();
+    entry.error = message(entry, retry ? "out of memory to decode" : "not a decodable JPEG or PNG");
   } else if (static_cast<std::uint64_t>(width) * height > kMaxSourcePixels) {
     entry.error = message(entry, std::to_string(width) + "x" + std::to_string(height) +
                           " exceeds the 5-megapixel source limit");
   }
-  if (!entry.error.empty()) { entry.body.reset(); return true; }
+  if (!entry.error.empty()) { entry.body.reset(); return !retry; }
   const int channels = components == 2 || components == 4 ? 4 : 3;
-  stb_out_of_memory = false;
   stbi_uc* source = stbi_load_from_memory(bytes, size, &width, &height, &components, channels);
   entry.body.reset();
   if (!source) {
-    entry.error = message(entry, stb_out_of_memory ? std::string("out of memory to decode")
-                                                   : std::string("decode failed (") + stbi_failure_reason() + ")");
-    return !stb_out_of_memory;
+    retry = out_of_memory();
+    entry.error = message(entry, retry ? "out of memory to decode" : "decode failed");
+    return !retry;
   }
   const Plan p = plan(width, height, entry.box_width, entry.box_height, entry.fit);
   const bool resampled = resample(source, width, channels, p, entry);
@@ -361,6 +379,15 @@ bool decode(Entry& entry) {
   if (!resampled) { entry.error = message(entry, "out of memory for decoded pixels"); return false; }
   entry.color = vivid_color(entry.pixels, entry.width, entry.height);
   return true;
+}
+
+// Heap a decode of `body` holds at most, from its header; 0 when it fails before allocating.
+std::size_t decode_cost(const Bytes& body) {
+  int width = 0, height = 0, components = 0;
+  if (!stbi_info_from_memory(reinterpret_cast<const stbi_uc*>(body.data), static_cast<int>(body.size), &width, &height,
+                             &components)) return 0;
+  const auto pixels = static_cast<std::uint64_t>(width) * height;
+  return pixels > kMaxSourcePixels ? 0 : static_cast<std::size_t>(pixels) * kDecodeBytesPerPixel;
 }
 
 // Encoded responses kept on disk between launches, keyed by a hash of the URL. Each file holds a
@@ -500,9 +527,10 @@ public:
     }
     for (Transfer& t : transfers_) if (!(t.curl = curl_easy_init())) { stop(nullptr); return false; }
     fetch_started_ = spawn(fetch_thread_, +[](void* p)->void* { static_cast<Service*>(p)->fetch_loop(); return nullptr; }, this);
-    decode_started_ = fetch_started_ &&
-      spawn(decode_thread_, +[](void* p)->void* { static_cast<Service*>(p)->decode_loop(); return nullptr; }, this);
-    if (!decode_started_) { stop(nullptr); return false; }
+    while (fetch_started_ && decoders_ < kDecoders &&
+           spawn(decode_threads_[decoders_], +[](void* p)->void* { static_cast<Service*>(p)->decode_loop(); return nullptr; }, this))
+      ++decoders_;
+    if (decoders_ < kDecoders) { stop(nullptr); return false; }
     running_ = true; return true;
   }
 
@@ -512,8 +540,8 @@ public:
     wake_.notify_all();
     if (multi_) curl_multi_wakeup(multi_);
     if (fetch_started_) pthread_join(fetch_thread_, nullptr);
-    if (decode_started_) pthread_join(decode_thread_, nullptr);
-    fetch_started_ = decode_started_ = false;
+    for (unsigned i = 0; i < decoders_; ++i) pthread_join(decode_threads_[i], nullptr);
+    fetch_started_ = false; decoders_ = 0;
     for (Transfer& t : transfers_) {
       if (t.curl) curl_easy_cleanup(t.curl);
       t = Transfer{};
@@ -677,9 +705,14 @@ private:
   }
 
   void decode_later(std::vector<EntryPtr> entries, const Body& body) {
+    const std::size_t cost = decode_cost(*body);
     {
       std::lock_guard lock(mutex_);
-      for (EntryPtr& entry : entries) if (!entry->cancelled) { entry->body = body; decodes_.push_back(std::move(entry)); }
+      for (EntryPtr& entry : entries) {
+        if (entry->cancelled) continue;
+        entry->body = body; entry->decode_cost = cost;
+        decodes_.push_back(std::move(entry));
+      }
     }
     wake_.notify_all();
   }
@@ -924,23 +957,36 @@ private:
       EntryPtr entry;
       {
         std::unique_lock lock(mutex_);
-        wake_.wait(lock, [&] { return stopping_ || !decodes_.empty(); });
+        // The most wanted image waits for room in the budget rather than letting smaller ones pass it.
+        auto next = decodes_.end();
+        wake_.wait(lock, [&] {
+          std::erase_if(decodes_, [](const EntryPtr& e) { return e->cancelled.load(); });
+          next = std::max_element(decodes_.begin(), decodes_.end(),
+                                  [](const EntryPtr& a, const EntryPtr& b) { return a->rank < b->rank; });
+          return stopping_ || (next != decodes_.end() && (!decoding_ || decoding_ + (*next)->decode_cost <= kDecodeBudget));
+        });
         if (stopping_) break;
-        auto next = std::max_element(decodes_.begin(), decodes_.end(),
-                                     [](const EntryPtr& a, const EntryPtr& b) { return a->rank < b->rank; });
         entry = std::move(*next);
         decodes_.erase(next);
+        decoding_ += entry->decode_cost;
       }
-      if (entry->cancelled) continue;
       const auto started = Clock::now();
       const bool decoded = decode(*entry);
       counters.decode_us += std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started).count();
-      if (decoded || ++entry->attempts >= kDecodeAttempts) { finish(entry); continue; }
       // Out of heap: fetched again (usually from the encoded or disk cache) once memory may be free.
-      entry->error.clear();
-      entry->retry_at = Clock::now() + std::chrono::seconds(entry->attempts);
-      { std::lock_guard lock(mutex_); fetches_.push_back(std::move(entry)); }
-      curl_multi_wakeup(multi_);
+      const bool retry = !decoded && ++entry->attempts < kDecodeAttempts;
+      if (retry) {
+        entry->error.clear();
+        entry->retry_at = Clock::now() + std::chrono::seconds(entry->attempts);
+      }
+      {
+        std::lock_guard lock(mutex_);
+        decoding_ -= entry->decode_cost;
+        if (retry) fetches_.push_back(std::move(entry));
+        else finished_.push_back(std::move(entry));
+      }
+      wake_.notify_all();
+      if (retry) curl_multi_wakeup(multi_);
     }
   }
 
@@ -961,10 +1007,14 @@ private:
   std::map<std::string, Doh> doh_hosts_;
   // Every pin made, kept until stop(): a transfer in flight may still read a replaced one.
   std::vector<curl_slist*> doh_pins_;
+  // Decode costs of the images being decoded, guarded by the mutex.
+  std::size_t decoding_ = 0;
   CURLM* multi_ = nullptr;
-  pthread_t fetch_thread_{}, decode_thread_{};
+  pthread_t fetch_thread_{};
+  std::array<pthread_t, kDecoders> decode_threads_{};
+  unsigned decoders_ = 0;
   std::string cache_directory_;
-  bool stopping_ = false, running_ = false, fetch_started_ = false, decode_started_ = false, over_budget_ = false;
+  bool stopping_ = false, running_ = false, fetch_started_ = false, over_budget_ = false;
   // Render thread only.
   std::unordered_map<std::string, EntryPtr> by_key_;
   std::unordered_map<std::uint32_t, EntryPtr> by_id_;

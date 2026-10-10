@@ -378,15 +378,29 @@ export const BrowserCapture = Object.freeze({
 });
 
 const pendingImages = new Map();
+// Finished loads the host has handed over and no listener has received yet, by id in arrival order.
+const arrivedImages = new Map();
 let stopImagePolling = null;
 
+// Frame callbacks run outside a React batch, so in the LegacyRoot renderer an <Image>'s state update
+// renders and commits inside its listener call. A page mounting dozens of images gets their loads
+// back together; delivering them all in one frame stalls it for tens of milliseconds, so each frame
+// delivers until this much time has gone (performance.now() counts whole milliseconds on the
+// engine), and always at least one.
+const IMAGE_DELIVERY_BUDGET_MS = 4;
+
 function pollImages() {
-  for (const result of host().image.poll()) {
-    const listeners = pendingImages.get(result.id);
-    pendingImages.delete(result.id);
-    for (const listener of listeners ?? []) listener(result);
+  for (const result of host().image.poll()) arrivedImages.set(result.id, result);
+  const start = performance.now();
+  for (const [id, result] of arrivedImages) {
+    arrivedImages.delete(id);
+    const listeners = pendingImages.get(id);
+    if (!listeners) continue;
+    pendingImages.delete(id);
+    for (const listener of listeners) listener(result);
+    if (performance.now() - start >= IMAGE_DELIVERY_BUDGET_MS) break;
   }
-  if (pendingImages.size === 0) {
+  if (pendingImages.size === 0 && arrivedImages.size === 0) {
     stopImagePolling();
     stopImagePolling = null;
   }
@@ -434,7 +448,10 @@ export function acquireImage(uri, width, height, fit, prefetch, listener) {
   const release = () => {
     const listeners = pendingImages.get(id);
     listeners?.delete(listener);
-    if (listeners?.size === 0) pendingImages.delete(id);
+    if (listeners?.size === 0) {
+      pendingImages.delete(id);
+      arrivedImages.delete(id);
+    }
     host().image.release(id, prefetch);
     pollImagesSoon();
   };

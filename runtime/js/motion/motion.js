@@ -3,8 +3,8 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // motion.* components: props describe targets, the engine animates them, React renders once per
 // target change rather than per frame.
-import {createContext, createElement, forwardRef, useContext, useEffect, useLayoutEffect, useMemo, useRef}
-  from 'react';
+import {createContext, createElement, forwardRef, useContext, useEffect, useLayoutEffect, useReducer, useRef,
+  useState} from 'react';
 import {View} from 'embedded-react';
 import {FOCUS_PROPS, isFocusable, resolveStyle, useFocusNode} from '../focus/focusable.js';
 import {NodeContext} from '../focus/runtime.js';
@@ -19,13 +19,33 @@ import {MotionValues} from './values.js';
 const BASE_WIDTH = 1280;
 
 /**
- * Variant labels a motion element passes down, and the registry its children stagger against.
- * @type {import('react').Context<{labels: string[], initial: string[] | false | undefined,
- *   registry: {order: object[], transition?: object}} | null>}
+ * Variant labels a motion element passes down, and the registry its children stagger against. The
+ * value is one object for the element's lifetime, updated as it renders; only descendants that use
+ * its labels subscribe to them, so a label change re-renders those and not every motion element
+ * below (a screen of focusable cards held about 150).
+ * @typedef {{labels: string[], labelKey: string, initial: string[] | false | undefined,
+ *   registry: {order: object[], transition?: object}, listeners: Set<() => void>}} Channel
+ * @type {import('react').Context<Channel | null>}
  */
 const MotionContext = createContext(null);
 
 const isLabel = definition => typeof definition === 'string' || Array.isArray(definition);
+
+/** Re-renders the caller when `channel`'s labels change, while `follow`. @param {Channel | null} channel */
+function useLabels(channel, follow) {
+  const [, rerender] = useReducer(count => count + 1, 0);
+  const seen = useRef(undefined);
+  seen.current = channel?.labelKey;
+  useLayoutEffect(() => {
+    if (!channel || !follow) return undefined;
+    const listener = () => {
+      if (channel.labelKey !== seen.current) rerender();
+    };
+    channel.listeners.add(listener);
+    listener();
+    return () => { channel.listeners.delete(listener); };
+  }, [channel, follow]);
+}
 
 function useMotion(props) {
   const {initial, animate, exit, transition, variants, whileFocus, whileSelect, whilePress,
@@ -37,6 +57,9 @@ function useMotion(props) {
   const self = state.current;
 
   const inherited = animate === undefined;
+  const controlling = [initial, animate, exit, whileFocus, whileSelect, whilePress].some(isLabel);
+  // Inherited labels matter to an element that resolves them against its variants, or passes them on.
+  useLabels(parent, inherited && (variants !== undefined || controlling));
   const exiting = presence ? !presence.isPresent : false;
   const keys = collectKeys([initial, animate, exit, whileFocus, whileSelect, whilePress], variants);
   const layers = [
@@ -67,7 +90,6 @@ function useMotion(props) {
     bound = self.values.bound();
   }
 
-  const controlling = [initial, animate, exit, whileFocus, whileSelect, whilePress].some(isLabel);
   const labels = [
     ...(inherited ? parent?.labels ?? [] : labelsOf(animate)),
     ...(focused ? labelsOf(whileFocus) : []),
@@ -81,8 +103,13 @@ function useMotion(props) {
   const labelKey = labels.join('\0');
   const ownInitial = initial === false || isLabel(initial) ? labelsOf(initial) : undefined;
   const childInitial = initial === undefined ? parent?.initial : initial === false ? false : ownInitial;
-  const context = useMemo(() => ({labels, initial: childInitial, registry}),
-    [labelKey, String(childInitial)]);
+  const [channel] = useState(() => ({labels, labelKey, initial: childInitial, registry, listeners: new Set()}));
+  channel.labels = labels;
+  channel.labelKey = labelKey;
+  channel.initial = childInitial;
+  useLayoutEffect(() => {
+    for (const listener of [...channel.listeners]) listener();
+  }, [labelKey]);
 
   const complete = useRef(onAnimationComplete);
   complete.current = onAnimationComplete;
@@ -133,7 +160,7 @@ function useMotion(props) {
     self.values.apply(targets, finish);
   });
 
-  return {bound, flat, context: controlling ? context : parent, consumedPresence: presence !== null};
+  return {bound, flat, context: controlling ? channel : parent, consumedPresence: presence !== null};
 }
 
 const MOTION_PROPS = ['initial', 'animate', 'exit', 'transition', 'variants', 'whileFocus', 'whileSelect',

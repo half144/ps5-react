@@ -101,7 +101,9 @@ next child only after the previous one left.
 - Animations bind opacity and transforms only; scale/rotate render only on
   elements whose laid-out size fits the transform scratch buffer (512×512
   physical px in the default profile). Translate and opacity have no size limit;
-  full-screen opacity is expensive.
+  full-screen opacity is expensive, except on a container holding only an
+  `<Image layer>`, which the host fades without repainting
+  ([IMAGES.md](IMAGES.md)).
 - On the PS5 the cost of a change is mostly its raster, about 5 ns per changed
   pixel at 1080p (more under scaled images and gradients), plus about 0.5 ms to
   upload 1920×540 rows through the presenter's buffer textures. Full-screen
@@ -290,7 +292,22 @@ const card = {
 ```
 
 Cards inside `Page` that declare `variants={card}` fade in staggered and fade
-out with the page.
+out with the page. A label change renders only the elements that use labels:
+those with `variants` and no `animate` of their own, and those that pass labels
+on. Elements with their own `animate` or only `whileFocus` stay as they are.
+
+For tabs, `Screens` (NAVIGATION.md, "Tabs that keep their pages") runs the
+same leave-then-enter switch with these labels but keeps every page it has
+shown mounted, so going back to a page does not build it again.
+
+A full-screen page that only slides, such as a details sheet over the screen
+it came from, is moved by copying the pixels it already painted when it is one
+opaque plain `View` (a solid background, no radius, border, gradient or
+shadow), optionally inside paint-free single-child wrappers, with its whole
+subtree inside its box and no translucent or transformed ancestor. Each frame
+then repaints only the strip it uncovers, the area it left and anything drawn
+over it, instead of the whole screen. Give such a sheet a solid background
+rather than a translucent one, and animate `x` or `y`, not scale or opacity.
 
 ### Toasts and other pop-ins
 

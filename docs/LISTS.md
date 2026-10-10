@@ -29,7 +29,7 @@ function Library({games, open}) {
 
 ## Why
 
-The engine has a fixed node pool (`ERUI_MAX_NODES`, 2048 on the PS5), and its
+The engine has a fixed node pool (`ERUI_MAX_NODES`, 4096 on the PS5), and its
 layout coordinates are 16-bit: content more than 32767 render px tall wraps
 around. A 611-game library at 1080p is about 125 rows and 53000 px of cards,
 around 6000 nodes. Paging kept both in bounds by mounting 20 cards at a time.
@@ -59,7 +59,7 @@ Lengths are logical px of a 1280-wide layout, like class names.
 | `rowGap`, `columnGap` | Space between rows and between items in a row |
 | `overscan` | Rows mounted beyond the viewport in the direction of travel (default 2; one row behind) |
 | `maxItemsPerFrame` | Items a row entering ahead of the scroll mounts per frame (default 1) |
-| `initialNumRows` | Rows mounted before the first layout (default 2) |
+| `initialNumRows` | Rows mounted before the first layout (default 2): the first whole, the rest one a frame |
 | `onEndReached` | Called once per list length when the visible end is within `onEndReachedThreshold` viewports of the content end (default 1) |
 | `recycle` | Reuse leaving rows for entering ones (same elements, new items) instead of unmounting and mounting |
 | `style`, `className` | The list's own box |
@@ -82,7 +82,10 @@ Lengths are logical px of a 1280-wide layout, like class names.
    whole row of cards in one frame costs more JavaScript than a frame has; one
    card a frame does not, and a held key still leaves several frames per row.
    Rows in `required` that are missing or still filling (the first layout, a
-   jump) mount whole at once.
+   jump) mount whole at once while focus is in the list, so scrolling never
+   shows an empty row. With focus elsewhere (typing a search, a page's first
+   frames) they enter empty and fill a whole row a frame, top down, before any
+   other step, so new data costs one row's mount per frame.
 4. Each mounted row is a memoized component: a window step renders the
    entering row only, not every mounted card. A row that gains an item
    re-renders alone, without the list, and keeps the elements of the items it

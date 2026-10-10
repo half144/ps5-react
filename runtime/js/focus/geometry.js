@@ -16,6 +16,14 @@ export function overlaps(a, b) {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+/** The area two rectangles share, or null when none. @param {Rect} a @param {Rect} b @returns {Rect | null} */
+export function intersection(a, b) {
+  if (!overlaps(a, b)) return null;
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  return {x, y, width: Math.min(a.x + a.width, b.x + b.width) - x, height: Math.min(a.y + a.height, b.y + b.height) - y};
+}
+
 /** Edges along the pressed axis and across it, so every direction reads like `right`. */
 function axes(rect, direction) {
   const horizontal = direction in HORIZONTAL;

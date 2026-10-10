@@ -7,6 +7,7 @@
 #include "archives.hpp"
 #include "packages.hpp"
 #include "browser_capture.hpp"
+#include "render_workers.hpp"
 #include "thread_name.hpp"
 #include "app_config.hpp"
 #include "async_log.hpp"
@@ -266,7 +267,28 @@ bool run_proof() {
   if (ok) {
     software = er_software_backend_init(width, height);
     ok = software && damage_tracker_install(width, height);
+    // The presenter draws qualifying <Image layer> images itself (er_set_layers_enabled). A test deploy may
+    // rasterize them all with a dev/layers.txt holding 0, for comparisons.
+    bool layers = true;
+    if (FILE* file = std::fopen(dev_path("layers.txt").c_str(), "rb")) {
+      char text[16] = {};
+      layers = !std::fgets(text, sizeof text, file) || std::atoi(text) != 0;
+      std::fclose(file);
+    }
+    er_set_layers_enabled(ok && layers && presenter.layers_supported());
     async_log::write("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
+  }
+  if (ok) {
+    // A test deploy may pick the count with dev/render-workers.txt (1 renders single-core).
+    const int cpus = render_workers::available_cpus();
+    int wanted = cpus;
+    if (FILE* file = std::fopen(dev_path("render-workers.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) wanted = std::atoi(text);
+      std::fclose(file);
+    }
+    async_log::write("[PS5-REACT] render workers=%d of %d, cpus=%d", render_workers::start(wanted),
+                     render_workers::max_workers(), cpus);
   }
   // The pad opens before the bundle runs: it also initializes the user service
   // that the users, notification and browser calls need.
@@ -324,6 +346,8 @@ bool run_proof() {
         // Every fifth summary, about ten seconds apart.
         if (++summaries % 5 == 1) log_memory();
       }
+      // Input and JavaScript commit layout only; the commit after them paints the frame once.
+      er_set_raster_deferred(true);
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
       if (input.is_pressed(hui::Action::menu)) break;
@@ -358,10 +382,14 @@ bool run_proof() {
         async_log::write("[PS5-REACT] frame callback exception");
         break;
       }
+      er_set_raster_deferred(false);
       er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
       stats.lap(FrameStats::update, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
+      int layer_count = 0;
+      const ERLayer* layers = er_get_layers(&layer_count);
+      presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
       ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
                           display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
@@ -394,6 +422,7 @@ bool run_proof() {
   if (runtime) er_runtime_shutdown();
   text_shaper::shutdown();
   ps5_react_stop_sound();
+  render_workers::stop();
   if (software) er_software_backend_destroy();
   host_platform_set_pad(nullptr);
   pad.close();

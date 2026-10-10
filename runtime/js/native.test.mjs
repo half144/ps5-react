@@ -90,6 +90,44 @@ test('remote images poll only while loads are pending and release every referenc
   delete globalThis.__ps5ReactNative;
 });
 
+test('finished image loads arriving together are delivered across frames under a time budget', () => {
+  const originalNow = performance.now;
+  let clock = 0, polls = 0, nextId = 1, finished = [];
+  performance.now = () => clock;
+  globalThis.__ps5ReactNative = {image: {
+    load: () => ({id: nextId++, state: 'loading', name: '', width: 0, height: 0, error: ''}),
+    release: () => {},
+    poll: () => { polls++; const out = finished; finished = []; return out; },
+  }};
+  try {
+    let frame = [];
+    const frames = [];
+    const step = () => { globalThis.__ps5ReactFrame(16); frames.push(frame); frame = []; };
+    // Each arrival costs what re-rendering its <Image> would: 1.5 ms, or 10 ms for id 6.
+    const releases = new Map();
+    for (let i = 1; i <= 9; i++) {
+      releases.set(i, acquireImage(`https://example.com/${i}.jpg`, 20, 20, 0, false, result => {
+        if (result.state === 'loading') return;
+        frame.push(result.state === 'failed' ? `${result.id}:${result.error}` : result.id);
+        clock += result.id === 6 ? 10 : 1.5;
+      }));
+    }
+    releases.get(3)();
+    finished = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(id => (id === 9
+      ? {id, state: 'failed', name: '', width: 0, height: 0, error: 'HTTP 404'}
+      : {id, state: 'ready', name: `@image:${id}`, width: 20, height: 20, error: ''}));
+    step();
+    releases.get(5)();
+    while (frames.length < 6) step();
+    assert.deepEqual(frames, [[1, 2, 4], [6], [7, 8, '9:HTTP 404'], [], [], []],
+      'released ids are skipped for free, a slow arrival still lands, failures are delivered too');
+    assert.equal(polls, 3, 'polling continues while results are queued and stops once all are delivered');
+  } finally {
+    performance.now = originalNow;
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
 test('Power.keepAwake passes a boolean to the host', () => {
   const calls = [];
   globalThis.__ps5ReactNative = {power: {keepAwake: enabled => calls.push(enabled)}};

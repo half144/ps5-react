@@ -312,8 +312,9 @@ ones draw nothing. The 32 most recent static ones skip re-flattening on repaint
 
 Images drawn larger or smaller than their baked size are scaled bilinearly. The
 engine profile (`native/ps5/CMakeLists.txt`, shared by both hosts) enables
-`ERUI_BILINEAR_SCALE`, scales rows up to the full 2560-pixel render width
-(`ERUI_MAX_IMG_ROW_PIXELS`), and registers up to 256 baked images
+`ERUI_BILINEAR_SCALE`, scales rows in chunks of up to 2560 pixels
+(`ERUI_MAX_IMG_ROW_PIXELS`) so wider images still draw in full, and registers
+up to 256 baked images
 (`ERUI_IMAGE_REGISTRY_MAX`); images past that limit never draw.
 
 ## State variants

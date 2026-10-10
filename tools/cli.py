@@ -199,8 +199,24 @@ def main():
     if command:
         if args.watch and args.command == "preview":
             watch(app, command, directory)
+        elif args.command == "test":
+            render_worker_parity(command, directory, app)
         else:
             run(command, cwd=directory, env=preview_env(app))
+
+
+def render_worker_parity(command, directory, app):
+    """Runs the self-test single-core, then across every render worker: the snapshots must match byte for byte."""
+    single = directory / "single-core"
+    shutil.rmtree(single, ignore_errors=True)
+    single.mkdir()
+    run(command, cwd=single, env={**preview_env(app), "PS5_REACT_RENDER_WORKERS": "1"})
+    run(command, cwd=directory, env=preview_env(app))
+    snapshots = sorted(path.name for path in single.glob("texture-*.ppm"))
+    if not snapshots: raise RuntimeError("The single-core self-test wrote no snapshots")
+    differ = [name for name in snapshots if (single / name).read_bytes() != (directory / name).read_bytes()]
+    if differ: raise RuntimeError(f"Parallel rendering differs from single-core in {', '.join(differ)} ({directory})")
+    print(f"PASS: {len(snapshots)} snapshots identical single-core and across render workers.")
 
 
 if __name__ == "__main__":

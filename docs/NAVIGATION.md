@@ -161,7 +161,9 @@ the same scope (or the scope's remembered/first element).
 
 Use `inert` for a layer that stays mounted while hidden (`display: none`, or
 covered by another screen). The engine stops laying out a hidden subtree, so its
-elements keep their last rectangles and would otherwise remain reachable.
+elements keep their last rectangles and would otherwise remain reachable. Wrap
+it in `ReleaseImages` too, so its images do not hold memory the visible screen
+needs ([IMAGES.md](IMAGES.md)).
 
 `FocusScope` renders no element of its own, so it does not affect layout.
 
@@ -365,6 +367,37 @@ function App() {
 `key={page}` remounts the page, so entering a new page starts at its first
 element. `focusedKey` with a `tab:` prefix tells the app which region has focus
 for hints and highlights, without an index.
+
+### Tabs that keep their pages
+
+Remounting rebuilds a whole page on every tab switch, tens of milliseconds of
+React work on the PS5 for a page of posters. `Screens` keeps each page it has
+shown mounted instead, and brings it back with its state, scroll and focus:
+
+```jsx
+import {Screen, Screens, useIsScreenActive} from '@ps5-react/core';
+
+<Screens active={page} focusKey="content" onBack={() => focus('tabs')} preload>
+  <Screen id={0}><HomePage /></Screen>
+  <Screen id={1}><MoviesPage /></Screen>
+  <Screen id={2}><SearchPage /></Screen>
+</Screens>
+```
+
+Switching works like `AnimatePresence mode="wait"`: the page on stage leaves,
+then the next one enters, with the `variants` labels `hidden`, `shown` and
+`gone` (a short slide by default; ANIMATION.md, "Page transitions"). A page off
+stage is `display: 'none'`, out of navigation (its `FocusScope` is `inert`),
+holds no image cache entries (`ReleaseImages`), and does not re-render when the
+component rendering `Screens` does; context changes still reach it. Pages
+passed over while another one leaves are not mounted. `focusKey` and `onBack`
+go to the scope of the page on stage, and a `Screen`'s own `onBack` wins.
+`preload` mounts pages not shown yet, one at a time, after the stage has rested
+for a second, so their first visit does not build them either.
+
+Hidden pages keep their engine nodes and their timers. Pause polling, clocks
+and ambient animation with `useIsScreenActive()`, which is false while the
+page is off stage or leaving and true outside `Screens`.
 
 ### Modal
 

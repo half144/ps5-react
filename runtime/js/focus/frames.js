@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // Node rectangles through their scrolling ancestors: layout rectangles are pre-scroll, and each
 // enclosing ScrollView (a Frame) moves its content by its offset.
-import {overlaps} from './geometry.js';
+import {intersection, overlaps} from './geometry.js';
 
 /**
  * @typedef {import('./geometry.js').Rect} Rect
@@ -16,12 +16,31 @@ export function scrolledBy(rect, frame) {
   return {...rect, x: rect.x - frame.x, y: rect.y - frame.y};
 }
 
+/** `rect` as `frame` is currently displayed, rather than its animation target. */
+function displayedScrolledBy(rect, frame) {
+  const [x, y] = frame.timer !== null && frame.position ? frame.position : [frame.x, frame.y];
+  return {...rect, x: rect.x - x, y: rect.y - y};
+}
+
 /** @param {Node} node @returns {Rect | null} the rectangle on screen, scrolling applied */
 export function screenRect(node) {
   let rect = node.rect;
   if (!rect) return null;
   for (let frame = node.frame; frame; frame = frame.parent) rect = scrolledBy(rect, frame);
   return rect;
+}
+
+/**
+ * Whether any of a layout rectangle under `frame` shows within `bounds` (the screen), clipped by each
+ * enclosing ScrollView's viewport. Transforms are not applied: layout rectangles do not include them.
+ * @param {Rect | null} rect @param {Frame | null} frame @param {Rect} bounds
+ */
+export function shownIn(rect, frame, bounds) {
+  for (; rect && frame; frame = frame.parent) {
+    rect = displayedScrolledBy(rect, frame);
+    if (frame.viewport) rect = intersection(rect, frame.viewport);
+  }
+  return !!rect && overlaps(rect, bounds);
 }
 
 /**

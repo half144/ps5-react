@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <sys/stat.h>
 #include <unordered_map>
@@ -800,7 +801,29 @@ int wrap(const char* text, std::uint8_t font_size, const char* family, std::int1
   return static_cast<int>(lines.size());
 }
 
-const ERTextShaper kShaper = {claims, measure, wrap, render};
+// Render workers measure and draw text concurrently. The HarfBuzz buffer and rasterizer, the glyph and
+// layout caches and the lazily loaded faces are shared, and the references they hand out outlive the
+// lookup, so shaped text renders one call at a time. claims() reads only the baked fonts.
+std::mutex shaping;
+
+void serial_measure(const char* text, std::uint8_t font_size, const char* family, std::int16_t letter_spacing,
+                    std::uint8_t font_weight, int* out_width, int* out_height) {
+  std::lock_guard lock(shaping);
+  measure(text, font_size, family, letter_spacing, font_weight, out_width, out_height);
+}
+
+int serial_wrap(const char* text, std::uint8_t font_size, const char* family, std::int16_t letter_spacing,
+                std::uint8_t font_weight, int max_w, int max_lines, int* out_width) {
+  std::lock_guard lock(shaping);
+  return wrap(text, font_size, family, letter_spacing, font_weight, max_w, max_lines, out_width);
+}
+
+void serial_render(const ERTextRenderParams* params, const char* text, const std::uint8_t* span_map) {
+  std::lock_guard lock(shaping);
+  render(params, text, span_map);
+}
+
+const ERTextShaper kShaper = {claims, serial_measure, serial_wrap, serial_render};
 
 }  // namespace
 
@@ -856,6 +879,7 @@ void shutdown() {
 }
 
 std::vector<std::pair<int, int>> lines(const char* text, const char* font_family, int font_size, int max_w) {
+  std::lock_guard lock(shaping);
   const Layout& layout = layout_for(text, font_family, er_text_clamp_font_size(font_size), 0, 0, ER_DIRECTION_INHERIT);
   bool truncated = false;
   std::vector<std::pair<int, int>> out;

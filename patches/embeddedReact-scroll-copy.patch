@@ -542,7 +542,7 @@ index 0000000..e1a44dc
 +++ b/engine/tests/scroll/test_scroll_copy.c
 @@ -0,0 +1,345 @@
 +/*
-+ * Copyright 2026 Cory Lamming
++ * Copyright 2026 PS5 React contributors
 + *
 + * Licensed under the Apache License, Version 2.0 (the "License");
 + * you may not use this file except in compliance with the License.
