@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — download tail splitting
+
+- Once every range of a download has a connection, idle connections split the range with the most
+  bytes left and fetch its second half, down to 1 MiB parts. Files with fewer ranges than allowed
+  connections (under 1 GiB at 16 MiB ranges) now use every connection, and a slow connection or the
+  last ranges no longer hold the end of a download: a 432 MiB file from a 1.4 MB/s-per-connection
+  origin went from 14.3 s to 8.4 s on a localhost benchmark. The stats line counts `splits`.
+
 ## Unreleased — downloads across rest mode
 
 - A download whose connections die while the title is suspended (rest mode, or another app in
