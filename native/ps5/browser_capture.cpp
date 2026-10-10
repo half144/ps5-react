@@ -60,7 +60,8 @@ void run(std::shared_ptr<Job> job) {
   }
   std::lock_guard lock(job->mutex);
   job->snapshot.state = job->cancelled ? "cancelled" : !url.empty() ? "completed" : "failed";
-  job->snapshot.error = error;
+  // A cancel shuts the socket down, which the loop above reads as a payload that stopped answering.
+  job->snapshot.error = job->cancelled ? "" : error;
   async_log::write("[browser-capture] task=%u state=%s%s%s", job->snapshot.id, job->snapshot.state.c_str(),
     error.empty() ? "" : " reason=", error.c_str());
   if (!job->cancelled) job->snapshot.url = std::move(url);
