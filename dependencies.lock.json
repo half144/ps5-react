@@ -27,7 +27,16 @@
       "patches/embeddedReact-european-glyphs.patch",
       "patches/embeddedReact-text-shaper.patch",
       "patches/embeddedReact-text-direction.patch",
-      "patches/embeddedReact-text-clip.patch"
+      "patches/embeddedReact-text-clip.patch",
+      "patches/embeddedReact-parallel-vectors.patch",
+      "patches/embeddedReact-worker-context-lookups.patch",
+      "patches/embeddedReact-transform-cache.patch",
+      "patches/embeddedReact-deferred-raster.patch",
+      "patches/embeddedReact-wide-rows.patch",
+      "patches/embeddedReact-layers.patch",
+      "patches/embeddedReact-offscreen-record.patch",
+      "patches/embeddedReact-translate-copy.patch",
+      "patches/embeddedReact-batched-updates.patch"
     ]
   },
   "platform": {
@@ -52,7 +61,10 @@
   "quickjs": "0.15.0",
   "quickjsSource": {
     "url": "https://github.com/quickjs-ng/quickjs.git",
-    "revision": "433941b99fb3c5e7f98b7ebd78727972bcf467ee"
+    "revision": "433941b99fb3c5e7f98b7ebd78727972bcf467ee",
+    "patches": [
+      "patches/quickjs-sample-stack.patch"
+    ]
   },
   "stbImage": {
     "version": "2.30",

@@ -33,6 +33,18 @@ them with no opt-in.
   opacity. An opaque image drawn at its decoded size takes the engine's plain
   copy path, the cheapest way the software backend draws a bitmap; RGB565
   would halve memory but this backend expands it row by row on every repaint.
+- **Layers.** `<Image layer>` lets the host draw the image itself, as a texture
+  beneath the framebuffer, instead of the rasterizer. A fade of it, or of a
+  container holding only it, then repaints nothing, and what is drawn over it
+  (gradients, text) is not repainted either. It applies while the image is
+  opaque (JPEG art is), untinted, square-cornered, `cover` or `stretch`, with no
+  scale or rotation on it or an ancestor, and no translucent ancestor holding
+  anything else. Below full opacity it also needs a layer directly under it, in
+  the preceding sibling container and starting from an opaque one that covers
+  it: a crossfade keeps the old image opaque underneath until the new one is in.
+  Otherwise, and on a host without layers, it is rasterized as usual; the result
+  looks the same. Changing between the two repaints the image's box once.
+  Screenshots (`shot:`) composite the layers on the CPU.
 - **Placeholder.** Until the image arrives the element draws only its own style:
   give it a `backgroundColor` (as above) for a tile of that color. The image
   replaces it in one frame, without a fade.
@@ -42,6 +54,18 @@ them with no opt-in.
   the URL, for example `Image.load https://example.com/a.jpg: HTTP 404`.
 - **Lifetime.** Unmounting the element or changing its `source` releases the
   image; a fetch or decode that nothing else is waiting for is cancelled.
+- **Hidden screens.** `<ReleaseImages when={hidden}>` lets the images under it
+  go while `when` is true, except those on screen when it turned true: they stay
+  mounted, but the decoded cache may evict the released ones, least recently
+  used first. When it turns false they are taken again without re-rendering when
+  still cached; an evicted one keeps drawing nothing until its reload lands. On
+  screen is by layout, clipped by enclosing ScrollViews, at the moment of
+  release; transforms are not applied, and hiding with `display: 'none'` in the
+  same render still counts the last layout. The kept images pin about one
+  screen of decoded art. Wrap a screen kept mounted while hidden (see
+  [NAVIGATION.md](NAVIGATION.md)): in a private 3840×2160 app, a hidden home
+  screen otherwise pinned about 60 MiB of decoded art while the next page loaded
+  its own, and the PS5 heap peaked at 238 of 256 MiB.
 - **Lazy loading.** As a browser's `loading="lazy"`, an element's image goes to
   the network only once it has been mounted for 120 ms, and no request starts
   while a ScrollView moves or for 150 ms after it stops: a held key scrolls past
@@ -75,20 +99,23 @@ fetched again) and samples at most about 16k pixels: use it for an accent or
 
 ## Memory and threads
 
-Two native workers own the work: one fetches over a dedicated libcurl multi
+Five native workers own the work: one fetches over a dedicated libcurl multi
 handle (its own connections, separate from the download queue, so images
-never wait behind a large file), one decodes. Images that an element draws are
+never wait behind a large file), four decode. Images that an element draws are
 fetched and decoded before prefetches, in request order. Workers never touch JavaScript or
 the engine. The render thread only submits, releases and polls once per frame
-while loads are pending, then registers finished pixels with the engine.
+while loads are pending, then registers finished pixels with the engine. Each
+frame hands finished loads to their elements, whose re-render runs then, until
+about 4 ms have gone and at least one: images that finish together, as when a
+page mounts, arrive over several frames instead of stalling one.
 
 | Budget | Value |
 | --- | --- |
 | Decoded cache | 64 MiB and at most 256 images; the PS5 host keeps 64 MiB with a heap of 256 MiB or more, 40 MiB from 192 MiB and 24 MiB below. Images in use are never evicted, so a screen that draws more than that exceeds it; unused ones are evicted least recently used first |
 | Encoded cache | 4 MiB of recently fetched bytes by URL, so the same image at another size decodes without a second fetch. Loads of a URL already being fetched join that request |
-| Decode | One image at a time; a decode holds about 4.5 bytes per source pixel for JPEG and 8 for PNG (up to 40 MiB at the source limit) until it finishes |
+| Decode | Up to four images at a time, in the same priority order. A decode is counted at 8 bytes per source pixel (it holds about 4.5 for JPEG and 8 for PNG until it finishes), and those running together stay within 40 MB, what one image at the source limit takes; one always runs |
 | In flight | No new fetch starts while encoded bytes held anywhere (responses, decode queue, encoded cache) pass 16 MiB; up to 32 connections, 8 while a download to a file runs |
-| Threads | Two, with 1 MiB stacks |
+| Threads | Five, with 1 MiB stacks |
 
 All of it comes from the process heap shared with QuickJS, the framebuffer and
 the download buffers (128 MiB at the least on the PS5; see

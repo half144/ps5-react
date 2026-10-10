@@ -176,7 +176,7 @@ PNG files in the app's `sce_sys/` go into the title's `sce_sys/`: `icon0.png`
 ### Application configuration
 
 `app.json` controls the title identity, display name, version, render/surface
-sizes and automatic exit. A configuration for the example app is:
+sizes, refresh rate and automatic exit. A configuration for the example app is:
 
 ```json
 {
@@ -192,8 +192,15 @@ sizes and automatic exit. A configuration for the example app is:
 ```
 
 The render size determines software rasterization cost and styling scale; the
-surface size is the displayed framebuffer size. Configuration errors are
-reported before expensive builds. Add networking and filesystem opt-ins only
+surface size is the displayed framebuffer size.
+
+`"refreshRate": 120` asks for 120 Hz output (default 60). The display must
+accept 120 Hz at the surface size, which for 3840×2160 means HDMI 2.1;
+otherwise the console stays at 60 Hz. Each frame then has 8.3 ms, so frames
+that fit 60 Hz can miss at 120, and switching the TV into the mode delays the
+first frame by about 1.5 s. Motion keeps its speed at either rate.
+
+Configuration errors are reported before expensive builds. Add networking and filesystem opt-ins only
 when your app needs those capabilities.
 
 ## Tailwind-style styling

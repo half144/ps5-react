@@ -61,7 +61,9 @@ const Row = memo(function Row({row, count, data, columns, renderItem, keyExtract
 
 /**
  * Renders the rows of `data` near the viewport of the enclosing ScrollView and near focus. Rows ahead
- * of the scroll mount over several frames, `maxItemsPerFrame` items at a time.
+ * of the scroll mount over several frames, `maxItemsPerFrame` items at a time. While focus is outside
+ * the list, rows on screen fill a whole row a frame from the top, so a list that mounts or gets new data
+ * spreads its mount across frames.
  * @param {VirtualListProps} props
  */
 export function VirtualList(props) {
@@ -77,9 +79,12 @@ export function VirtualList(props) {
   const self = useRef(null);
   if (!self.current) {
     // `range`: rows [first, end) mounted; `filling`: row → items mounted so far, for rows still filling;
-    // `base`: the first row the content represents.
+    // `base`: the first row the content represents. The first row mounts with the list, the rest of
+    // the initial rows fill one a frame after it, so new data costs one row's mount per frame.
+    const initial = Math.min(rows, props.initialNumRows ?? 2);
     const list = {
-      props, rows, stride, layout: null, range: [0, Math.min(rows, props.initialNumRows ?? 2)], filling: new Map(),
+      props, rows, stride, layout: null, range: [0, initial],
+      filling: new Map(Array.from({length: Math.max(0, initial - 1)}, (_, i) => [i + 1, 0])),
       base: 0, scroll: 0, direction: 1, slots: new Map(), stepping: null, endFor: -1, required: null, desired: null,
       span: () => Math.max(1, Math.floor(SPAN_PX / list.stride)),
       /** The row of the focused element when it is in this list, else -1. */
@@ -141,15 +146,20 @@ export function VirtualList(props) {
         frame.shift(dy);
         rerender();
       },
-      /** Rows on screen or around focus that are missing or still filling (a first layout, a jump) mount whole now. */
+      /**
+       * Rows on screen or around focus that are missing or still filling (a first layout, a jump). With
+       * focus in the list they mount whole now, so scrolling never shows an empty row; otherwise (typing
+       * a search, a page's first frames) they enter empty and step fills them a row a frame.
+       */
       mountRequired() {
         const [first, end] = list.required;
+        const eager = list.focusedRow() >= 0;
         let changed = false;
         if (first < list.range[0] || end > list.range[1]) {
-          list.setRange(stepRange(list.range, list.required, list.desired, 1), Infinity);
+          list.setRange(stepRange(list.range, list.required, list.desired, 1), eager ? Infinity : 0);
           changed = true;
         }
-        for (let row = first; row < end; row++) changed = list.filling.delete(row) || changed;
+        if (eager) for (let row = first; row < end; row++) changed = list.filling.delete(row) || changed;
         if (changed) rerender();
       },
       /**
@@ -159,6 +169,14 @@ export function VirtualList(props) {
       step() {
         const columns = list.props.numColumns ?? 1;
         const batch = list.props.maxItemsPerFrame ?? 1;
+        // Required rows still filling come first, whole and top down.
+        const [first, end] = list.required;
+        const urgent = [...list.filling.keys()].filter(row => row >= first && row < end);
+        if (urgent.length) {
+          list.filling.delete(Math.min(...urgent));
+          rerender();
+          return;
+        }
         const next = stepRange(list.range, list.required, list.desired, 1);
         if (!same(next, list.range)) list.setRange(next, batch);
         else if (list.filling.size) {

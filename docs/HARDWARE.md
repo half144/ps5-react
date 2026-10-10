@@ -112,6 +112,137 @@ at 16 s. A first build that imported `libSceAppInstUtil` never reached `main`; t
 library is loaded by path. The in-app route (engine to loader on 127.0.0.1) is
 recorded separately once tested.
 
+## Render workers — 2026-10-10
+
+Firmware 13.60, kstuff, etaHEN and ShadowMountPlus 1.7beta4. A development
+build of uncommitted render-worker changes ran a private 3840×2160 app (not in
+this repository) through the same scripted tour of browsing, scrolling and page
+changes, with `dev/render-workers.txt` picking the count. The title saw 16 CPUs.
+"Heavy" windows are one-second windows repainting more than 500 kilopixels per
+frame; frames right after each tour screenshot are excluded.
+
+| Workers | Heavy-window raster | Slow frames | Time over 16.7 ms | Full-screen raster (median) |
+| --- | --- | --- | --- | --- |
+| 1 | 23.1 ms | 160 | 9.3 s | 53.2 ms |
+| 2 | 13.2 ms | 114 | 4.8 s | 34.2 ms |
+| 4 | 10.1 ms | 71 | 3.3 s | 29.7 ms |
+| 8 | 10.3 ms | 44 | 2.7 s | 15.7 ms |
+
+With 768-row opacity strips the heap dropped to 192 MiB (328 MiB of flexible
+memory free); 128-row strips rendered the tour at the same speed with the heap
+at 256 MiB (368 MiB free) and identical screenshots apart from the clock. A
+1920×1080 build of the same app at eight workers against the build before the
+change: heavy-window raster 7.1 → 3.3 ms, slow frames 80 → 22, full-screen
+present 0.9 ms in both. The starter has not been run with this change.
+
+A later revision of the same app and tour (more pages, so not comparable with
+the table above) then measured the two Embedded React patches below, each run
+once, at eight workers. Screenshot frames are excluded.
+
+| Build | Slow frames | Time over 16.7 ms | Row-scroll frames over | Full-screen fade frames over |
+| --- | --- | --- | --- | --- |
+| Before both | 36 | 1406 ms | 15 (574 ms) | 10 (272 ms) |
+| Kept transform sources | 29 | 1024 ms | 10 (226 ms) | 8 (235 ms) |
+| Plus deferred raster | 16 | 664 ms | 1 (28 ms) | 4 (82 ms) |
+
+A focused card's scale animation took 30–43 ms per frame before its transform
+source was kept, and about 3 ms after. The deferred-raster screenshots differ
+from the previous build in under 0.07% of pixels, at the clock and a focus ring
+caught mid-animation.
+
+All three builds drew full-width scaled images only 2560 px wide, so the app's
+hero backdrop lost its right third and its crossfades cost a third less than
+they should. With that fixed (the wide-rows patch), the same tour showed the
+whole backdrop and spent 1328 ms over budget in 50 slow frames: 39 full-screen
+crossfade frames (765 ms, about 30 ms of raster each), 9 React frames (511 ms)
+and 1 row-scroll frame (20 ms).
+
+With `ERUI_MAX_NODES` and the bridge handles at 4096 and the app's home screen
+kept mounted while hidden, the heap still took 256 MiB (104 MiB of flexible
+memory free after it, against 107 MiB). Idle commits spent 0.1 ms in the damage
+pre-pass and flag sweep, and no slow frame more than 0.3 ms. Deepest render
+recursion over the tour, measured on the desktop preview: about 115 KiB of
+stack at 8.8 KiB per level, against the workers' 1 MiB. Keeping the screen's
+images held pinned about 60 MiB of decoded art while the next page loaded (heap
+peak 238 MiB, one failed allocation, retried); under `ReleaseImages` the peak
+was 176 MiB. Returning to it took a 79–81 ms frame (45–47 ms of React) and an
+81 ms frame of focus handling, instead of rebuilding it. Idle collections held
+7.4–9.2 MiB live against 3.5–7.2 MiB, and paused 14–34 ms against 10–32 ms.
+
+The app's backdrops then became `<Image layer>`, drawn by the presenter beneath
+the framebuffer, with finished image loads delivered under a per-frame budget.
+One build, the same tour, once with layers and once with `dev/layers.txt` at 0:
+
+| Build | Slow frames | Time over 16.7 ms | Full-screen crossfade frames over |
+| --- | --- | --- | --- |
+| Layers off | 45 | 1243 ms | 21 (446 ms) |
+| Layers on | 26 | 832 ms | 0 |
+
+What remains is React and layout work when a page mounts, mostly in the frame
+an exit animation completes: 25–68 ms of React per tab switch, 83 ms for a
+search keystroke, 200 ms for three quick L1 presses back to the home screen.
+With layers on, full-screen slow frames spent a median 4.9 ms in present, against
+3.7 ms; the PS5 present also includes the wait for the display.
+
+Later builds of the same day, the same tour, one run each:
+
+| Build | Time over 16.7 ms |
+| --- | --- |
+| Layers on (above) | 832 ms |
+| Pages kept by `Screens`, preloaded | 842 ms |
+| Plus idle collections waiting for a still screen | 694 ms |
+| Plus label changes re-rendering only label users | about 495 ms |
+| Plus the fix for nodes translated off screen | about 403 ms |
+| Plus the 8 MiB collection room | about 419 ms |
+
+Before the label change, a tab switch re-rendered about 157 motion elements and
+three quick L1 presses took a 203 ms frame; after it, 69 ms (45 ms of React).
+The last three rows differ by less than run-to-run noise in React time; what is
+left is React work when a page mounts or a search key is pressed (40–63 ms).
+
+A details sheet sliding 360 px over the screen, opened and closed twice with
+every frame over 20 ms logged: before the translate copy every frame of both
+slides took 20–24 ms (10–16 ms of raster); with it, only the frame that mounts
+the page (39–55 ms, 16–30 ms of React) and the first frame of each exit (21 ms)
+went over.
+
+Garbage collection, a scripted burst of detail pages and grid scrolling, the
+same build with three scheduling policies:
+
+| Policy | Runs | Automatic collections | Idle pauses | Time over 16.7 ms |
+| --- | --- | --- | --- | --- |
+| Room 1.5× live, no still wait | 2 | 1 each, in a full-screen frame (51–58 ms) | 12–32 ms | 232–253 ms |
+| Room at least 8 MiB, still wait with valve | 1 | 0 | 16, 26, 33 ms | 181 ms |
+| Same, idle trigger at a sixth of live | 3 | 0 | five per run, 12–33 ms | 225–239 ms |
+
+Every idle pause landed in a frame that repainted under 2% of the screen. A
+longer session of fast browsing still reached the 8 MiB room once (a 79 ms
+detail-page frame against 39 ms) and then paused 48 ms at 17.5 MiB live.
+
+With `"refreshRate": 120` the console accepted 3840×2160 at 120 Hz on this
+display. Page slides and row scrolls ran at 117–120 fps; windows with images
+streaming in, search typing or a page's first mount fell to 70–100 fps. The
+controller was in use during that run, so its tour path differed from the
+60 Hz runs and the numbers are not a comparison.
+
+Before and after, the same private app and 2.5-minute tour at 3840×2160 and
+60 Hz, one run each from a clean build directory. "Before" is upstream
+`6c168a6` with only the offscreen buffers sized for a 3840-wide render
+(`ERUI_SCRATCH_*` and `ERUI_XFORM_*` 768, `ERUI_MAX_IMG_ROW_PIXELS` 3840), so
+that full-width images and focus scales render at all, and the app's
+`Screens`/`Screen` replaced by one keyed page under `AnimatePresence
+mode="wait"`. "After" is this branch. Frames over 33 ms are logged; frames
+right after each tour screenshot are excluded. The screenshots show the same
+screens, except that on return to Home the branch keeps the scrolled row.
+
+| | Before | After |
+| --- | --- | --- |
+| Frames over 33 ms | 217 | 4 |
+| Time over 16.7 ms | 27.4 s | 0.09 s |
+| Median of those frames | 138 ms | 41 ms |
+| Worst frame | 855 ms | 42 ms |
+| Home idle, hero animating | about 4 fps (each frame a full repaint, 133 ms raster + 113 ms upload) | 60 fps |
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

@@ -29,14 +29,45 @@ pixels to the render thread, which registers them with the engine
 shutdown. See
 [NETWORKING.md](NETWORKING.md) for the buffer, heap, stack and queue contract,
 and [NATIVE-API.md](NATIVE-API.md) for the bridge. When the surface matches the
-render size (the PS5), the presenter copies changed framebuffer rows into two
-buffer textures (the PS5 allows 1048576 texels per buffer texture) that its
-shader reads with `texelFetch`: there `glBufferSubData` of 1920×540 takes about
+render size (the PS5), the presenter copies changed framebuffer rows into
+horizontal slices of buffer textures, each within the PS5's 1048576 texels per
+buffer texture (two at 1080p, eight at 2160p), that its shader reads with
+`texelFetch`, one draw per slice: there `glBufferSubData` of 1920×540 takes about
 0.46 ms against 14.9 ms for `glTexSubImage2D`. Other sizes scale a 2D texture.
-The presenter
+When the engine lists layers (`<Image layer>`, see [IMAGES.md](IMAGES.md)), the
+presenter first draws those images as textured quads, uploaded once per image,
+then the framebuffer over them with premultiplied blending; the engine leaves
+their rects transparent and keeps what it draws over them in the alpha channel.
+Every other pixel is still rasterized on the CPU. The presenter
 has no knowledge of React state, fonts, or widgets. The engine and JavaScript
 run on the same render thread. The PS5 host keeps the heap, shims, CRT, SDK
 pair, and FSELF path used by the hardware-tested proof of concept.
+
+Only a commit's repaint leaves the render thread. `native/shared/render_workers.cpp`
+starts a thread per available CPU, up to `ERUI_RENDER_WORKERS` (8), and the
+engine splits each repainted region of at least 16 rows per worker into
+horizontal slices, one per worker, joined before the commit returns. Each worker
+has its own clip stack, opacity strips, transform buffer and damage set, which
+the render thread folds after the join. Vector paths and HarfBuzz-shaped text
+render one call at a time under a lock, and while any view casts a shadow every
+commit renders single-core. JavaScript, layout and QuickJS never run on a
+worker. Hosts stop the workers before destroying the backend. Opacity strips and
+transform buffers are static, per worker, and outside the heap, which on the PS5
+takes the largest size that leaves 96 MiB of flexible memory free: keep them
+small enough that it stays at 256 MiB (`native/ps5/CMakeLists.txt`). Hosts log
+`render workers=N of 8, cpus=M`. To compare against single-core, set
+`PS5_REACT_RENDER_WORKERS=1` for the desktop preview, or put a count in
+`dev/render-workers.txt` of a PS5 test deploy. `npm test` runs the self-test
+single-core and across the workers, and fails unless the snapshots are
+byte-identical and at least one commit forked.
+
+The reconciler commits through the bridge after each React commit, during the
+host's input and JavaScript phase. Hosts bracket that phase with
+`er_set_raster_deferred`, so those commits run layout and `onLayout` but leave
+their damage to the commit after `ps5_react_frame`, which paints the frame once.
+A view that scales or rotates keeps its rendered source in one of
+`ERUI_XFORM_CACHE_SLOTS` shared slots (two on the PS5, 2.25 MiB each), reused
+while its subtree, images and size are unchanged.
 
 QuickJS frees most objects when their last reference goes, but cycles (React
 fibers of unmounted components, effect lists) wait for its collector, a pause of
@@ -44,10 +75,16 @@ tens of milliseconds on the PS5 that runs inside whatever allocation crosses its
 threshold, often the frame handling a key press. Hosts install a counting
 allocator (`native/shared/js_heap.cpp`) and collect in idle frames, half a
 second after the last input, once a third of the room before that threshold is
-garbage, so bursts of input start with most of it. The threshold itself is
-never raised, and it stays an eighth below `memory_limit`: QuickJS fails an
-allocation past the limit without collecting first. Hosts log each
-collection as `gc: idle` or `gc: automatic` with the live heap.
+garbage, so bursts of input start with most of it. The room is at least 8 MiB,
+more than QuickJS's 1.5 times what survived while that is under 16 MiB, and the
+threshold stays an eighth below `memory_limit`: QuickJS fails an allocation past
+the limit without collecting first. An idle collection also waits for three
+frames in a row that repainted under a fiftieth of the screen, so it does not
+land in a page slide, until three quarters of the room is garbage. A pause grows
+with the heap it scans: on the PS5 about 12 ms at 9 MiB live and 48 ms at 17.5.
+Hosts log each collection as `gc: idle` or `gc: automatic` with the live heap.
+A PS5 test deploy can drop the wait for still frames with `dev/gc-still.txt`
+holding 0.
 
 `className` and `tw` styling is compiled by `tools/tailwind` during bundling into
 literal style objects; class names and CSS never reach QuickJS or the engine.

@@ -33,6 +33,8 @@ void er_register_assets(void);
 #include "control.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
+#include "js_profiler.hpp"
+#include "render_workers.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
 #include "storage_stats.hpp"
@@ -125,6 +127,7 @@ struct Host {
   GlPresenter presenter;
   FrameStats stats;
   bool log_frames = true, running = true, runtime_started = false, backend_started = false;
+  int render_worker_count = 1;
   Uint32 previous_tick = 0, next_repeat = 0, next_image_stats = 0;
   std::string image_stats;
   const char* held_action = nullptr;
@@ -137,6 +140,7 @@ struct Host {
   SDL_Scancode held_key = SDL_SCANCODE_UNKNOWN;
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
   GcScheduler gc_scheduler{now_us};
+  JsProfiler profiler{now_us};
   bool l2_down = false, r2_down = false;
 
   ~Host() {
@@ -148,6 +152,7 @@ struct Host {
     if (runtime_started) er_runtime_shutdown();
     text_shaper::shutdown();
     ps5_react_stop_sound();
+    render_workers::stop();
     if (backend_started) er_software_backend_destroy();
     presenter.release(); // GL objects must be deleted before their context.
     desktop_set_controller(nullptr);
@@ -183,6 +188,15 @@ struct Host {
   bool boot(const char* path) {
     backend_started = er_software_backend_init(width, height);
     if (!backend_started || !damage_tracker_install(width, height)) return false;
+    // The presenter draws qualifying <Image layer> images itself; PS5_REACT_LAYERS=0 rasterizes them all.
+    const char* layers = std::getenv("PS5_REACT_LAYERS");
+    er_set_layers_enabled((!layers || std::atoi(layers) != 0) && presenter.layers_supported());
+    // PS5_REACT_RENDER_WORKERS=1 renders single-core, for comparisons.
+    const char* workers = std::getenv("PS5_REACT_RENDER_WORKERS");
+    render_worker_count = render_workers::start(workers && std::atoi(workers) > 0 ? std::atoi(workers)
+                                                                                   : render_workers::available_cpus());
+    std::printf("[PS5-REACT] render workers=%d of %d, cpus=%d\n", render_worker_count, render_workers::max_workers(),
+                render_workers::available_cpus());
     if (network::start()) ps5_react_start_images();
     ps5_react_start_sound();
     ErRuntimeConfig cfg = {};
@@ -193,6 +207,8 @@ struct Host {
     cfg.install_host_globals = ps5_react_install_host_api;
     runtime_started = er_runtime_init(&cfg);
     if (!runtime_started) return false;
+    // PS5_REACT_PROFILE=<file> samples JavaScript; the folded stacks are written there on exit.
+    if (std::getenv("PS5_REACT_PROFILE")) profiler.start(JS_GetRuntime(er_runtime_context()), 1000);
     if (controlled) {
       // Read when the bundle loads: Text reports its content to the inspector only then.
       JSContext* ctx = er_runtime_context();
@@ -331,6 +347,8 @@ struct Host {
       std::printf("[PS5-REACT] %s\n", line);
       std::fflush(stdout); // The dev watcher reads a pipe, where stdout is fully buffered.
     }
+    // Input and JavaScript commit layout only; the commit after them paints the frame once.
+    er_set_raster_deferred(true);
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       const char* action = nullptr;
@@ -383,6 +401,7 @@ struct Host {
       std::fprintf(stderr, "Frame callback failed\n");
       return false;
     }
+    er_set_raster_deferred(false);
     er_commit();
     stats.lap(FrameStats::update, now_us());
     if (ps5_react_exit_requested()) {
@@ -391,8 +410,12 @@ struct Host {
     }
     int sw = 0, sh = 0;
     SDL_GL_GetDrawableSize(window, &sw, &sh);
+    const std::size_t repainted = damage_tracker_area();
     if (sw > 0 && sh > 0) {
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
+      int layer_count = 0;
+      const ERLayer* layers = er_get_layers(&layer_count);
+      presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
       if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), sw, sh)) return false;
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       damage_tracker_clear();
@@ -400,7 +423,9 @@ struct Host {
     stats.lap(FrameStats::present, now_us());
     if (swap) SDL_GL_SwapWindow(window);
     stats.lap(FrameStats::swap, now_us());
-    if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), now_us()); line && log_frames)
+    if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), now_us(), repainted,
+                                              static_cast<std::size_t>(width) * height);
+        line && log_frames)
       std::printf("[PS5-REACT] %s\n", line);
     const Uint32 now = SDL_GetTicks();
     embedded_renderer_tick(std::min<Uint32>(now - previous_tick, 50));
@@ -662,6 +687,13 @@ bool self_test(Host& host) {
   if (!(SDL_GetWindowFlags(host.window) & SDL_WINDOW_FULLSCREEN) ||
       !expect(0, 1, 1) || !host.snapshot("texture-fullscreen.ppm")) return false;
   std::puts("PASS: software framebuffer → OpenGL texture, channel order, orientation, React state/focus, simulated controller and fullscreen.");
+  // The snapshots are compared against a single-core run, which proves nothing if no commit forked.
+  if (host.render_worker_count > 1 && render_workers::forked_commits() == 0) {
+    std::fprintf(stderr, "Render workers: %d installed, but no commit rendered in parallel\n", host.render_worker_count);
+    return false;
+  }
+  if (host.render_worker_count > 1)
+    std::printf("PASS: %u commits rendered across %d workers.\n", render_workers::forked_commits(), host.render_worker_count);
   return true;
 }
 } // namespace
@@ -703,6 +735,12 @@ int main(int argc, char** argv) {
       SDL_ShowCursor(SDL_DISABLE);
     }
     while (ok && host.running) ok = host.frame();
+    if (host.profiler.running()) {
+      host.profiler.stop();
+      const char* path = std::getenv("PS5_REACT_PROFILE");
+      std::printf("profile: %llu samples, %s %s\n", static_cast<unsigned long long>(host.profiler.samples()),
+                  host.profiler.write(path) ? "saved to" : "could not write", path);
+    }
   }
   if (!ok) std::fprintf(stderr, "Texture proof failed: %s / %s\n", SDL_GetError(), er_runtime_last_error());
   if (ok && desktop_relaunch_requested()) {

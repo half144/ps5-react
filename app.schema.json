@@ -79,6 +79,14 @@
       },
       "additionalProperties": false
     },
+    "refreshRate": {
+      "enum": [
+        60,
+        120
+      ],
+      "default": 60,
+      "description": "Display refresh in Hz. 120 needs a display with 120 Hz input; others stay at 60."
+    },
     "filesystemAccess": {
       "type": "string",
       "enum": [

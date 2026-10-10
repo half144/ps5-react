@@ -3,14 +3,17 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import {useLayoutEffect, useRef} from 'react';
 import {subscribeInput} from './input.js';
-import {Text as EngineText} from 'embedded-react';
+import {Text as EngineText, unstable_batchedUpdates} from 'embedded-react';
+import {setFrameBatcher} from './frame.js';
 import {inspectableText} from './focus/inspect-text.js';
 export {AppRegistry, Animated, useAnimatedValue, Easing, LayoutAnimation, Svg, Path, Circle, Rect, Line, G}
   from 'embedded-react';
 export const Text = inspectableText(EngineText);
-export {View, Image, Pressable, ScrollView, VirtualList, FocusScope, useFocusable, useFocus, useIsFocused,
-  useNavigationEvents} from './focus/index.js';
+setFrameBatcher(unstable_batchedUpdates);
+export {View, Image, ReleaseImages, Pressable, ScrollView, VirtualList, FocusScope, useFocusable, useFocus,
+  useIsFocused, useNavigationEvents} from './focus/index.js';
 export {motion, AnimatePresence, transitions} from './motion/index.js';
+export {Screens, Screen, useIsScreenActive} from './screens.js';
 export {DownloadFormats} from './download-formats.js';
 export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useGamepad, Linking, Power, Fonts, BackHandler,
   Http, Downloads, Archives, Packages, BrowserCapture, Sound} from './native.js';

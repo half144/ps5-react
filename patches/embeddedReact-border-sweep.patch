@@ -186,7 +186,7 @@ index 0000000..81ff851
 +++ b/engine/rendering/border_sweep.c
 @@ -0,0 +1,169 @@
 +/*
-+ * Copyright 2026 Cory Lamming
++ * Copyright 2026 PS5 React contributors
 + *
 + * Licensed under the Apache License, Version 2.0 (the "License");
 + * you may not use this file except in compliance with the License.
@@ -361,7 +361,7 @@ index 0000000..076d1bf
 +++ b/engine/rendering/border_sweep.h
 @@ -0,0 +1,47 @@
 +/*
-+ * Copyright 2026 Cory Lamming
++ * Copyright 2026 PS5 React contributors
 + *
 + * Licensed under the Apache License, Version 2.0 (the "License");
 + * you may not use this file except in compliance with the License.
@@ -540,9 +540,10 @@ new file mode 100644
 index 0000000..d727369
 --- /dev/null
 +++ b/engine/tests/rendering/test_border_sweep.c
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,322 @@
 +/*
 + * Copyright 2026 Cory Lamming
++ * Copyright 2026 PS5 React contributors
 + *
 + * Licensed under the Apache License, Version 2.0 (the "License");
 + * you may not use this file except in compliance with the License.

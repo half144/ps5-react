@@ -61,9 +61,10 @@ new file mode 100644
 index 0000000..fd26db7
 --- /dev/null
 +++ b/engine/tests/rendering/test_occluded_translate.c
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,330 @@
 +/*
 + * Copyright 2026 Cory Lamming
++ * Copyright 2026 PS5 React contributors
 + *
 + * Licensed under the Apache License, Version 2.0 (the "License");
 + * you may not use this file except in compliance with the License.

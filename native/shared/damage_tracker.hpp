@@ -25,3 +25,5 @@ struct DamageMove { ERRect src; int dx, dy; };
 std::span<const ERRect> damage_tracker_rects();
 std::span<const DamageMove> damage_tracker_moves();
 void damage_tracker_clear();
+// Pixels the rects and the moved copies cover, counting overlaps more than once.
+std::size_t damage_tracker_area();

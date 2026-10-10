@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "frame_stats.hpp"
+#include "render_workers.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -53,7 +54,7 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
       // Mean ms per frame, and mean kilopixels repainted (dirty) and written (blit) per frame.
       std::snprintf(line_ + length, sizeof line_ - length,
                     " | js=%u.%u (dispatch=%u.%u react=%u.%u marshal=%u.%u) layout=%u.%u raster=%u.%u"
-                    " (prepass=%u.%u render=%u.%u blit=%u.%u) dirty=%llukpx blit=%llukpx",
+                    " (prepass=%u.%u render=%u.%u blit=%u.%u) dirty=%llukpx blit=%llukpx parallel=%u",
                     MS(tenths(engine_sum_[ER_PERF_PHASE_JS], ms)), MS(tenths(js_sub_sum_[ER_PERF_JS_DISPATCH], ms)),
                     MS(tenths(js_sub_sum_[ER_PERF_JS_RECONCILE], ms)), MS(tenths(js_sub_sum_[ER_PERF_JS_MARSHAL], ms)),
                     MS(tenths(engine_sum_[ER_PERF_PHASE_LAYOUT], ms)), MS(tenths(engine_sum_[ER_PERF_PHASE_RASTER], ms)),
@@ -61,7 +62,7 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
                     MS(tenths(raster_sub_sum_[ER_PERF_RASTER_RENDER], ms)),
                     MS(tenths(raster_sub_sum_[ER_PERF_RASTER_BLIT], ms)),
                     static_cast<unsigned long long>(dirty_px_sum_ / ms),
-                    static_cast<unsigned long long>(blit_px_sum_ / ms));
+                    static_cast<unsigned long long>(blit_px_sum_ / ms), parallel_frames_);
     }
     summary = line_;
     std::fill(std::begin(phase_sum_), std::end(phase_sum_), 0);
@@ -70,7 +71,7 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
     std::fill(std::begin(js_sub_sum_), std::end(js_sub_sum_), 0);
     std::fill(std::begin(raster_sub_sum_), std::end(raster_sub_sum_), 0);
     dirty_px_sum_ = blit_px_sum_ = 0;
-    perf_frames_ = slow_lines_ = 0;
+    perf_frames_ = slow_lines_ = parallel_frames_ = 0;
     window_start_ = now_us;
   }
   er_perf_frame_begin();
@@ -92,13 +93,17 @@ const char* FrameStats::end_frame(std::uint32_t slow_us) {
   dirty_px_sum_ += f.dirty_px;
   blit_px_sum_ += f.blit_px;
   ++perf_frames_;
-  if (f.frame_us <= slow_us || slow_lines_ >= slow_lines_per_window) return nullptr;
+  // Commits whose repaint the engine forked across render workers.
+  const std::uint32_t forks = render_workers::forked_commits(), forked = forks - parallel_seen_;
+  parallel_seen_ = forks;
+  if (forked) ++parallel_frames_;
+  if (f.frame_us <= slow_us || slow_lines_ >= slow_line_limit_) return nullptr;
   ++slow_lines_;
   // `other` is host work outside js/layout/raster/present: input polling, swap, the animation tick.
   std::snprintf(slow_line_, sizeof slow_line_,
                 "slow frame: %u.%ums | js=%u.%u (dispatch=%u.%u react=%u.%u marshal=%u.%u) layout=%u.%u"
                 " raster=%u.%u (prepass=%u.%u render=%u.%u blit=%u.%u sweep=%u.%u) present=%u.%u other=%u.%u"
-                " | dirty=%dx%d@%d,%d %ukpx blit=%ukpx",
+                " | dirty=%dx%d@%d,%d %ukpx blit=%ukpx%s",
                 MS(tenths(f.frame_us, 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_JS], 1000)),
                 MS(tenths(f.js_us[ER_PERF_JS_DISPATCH], 1000)), MS(tenths(f.js_us[ER_PERF_JS_RECONCILE], 1000)),
                 MS(tenths(f.js_us[ER_PERF_JS_MARSHAL], 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_LAYOUT], 1000)),
@@ -108,6 +113,6 @@ const char* FrameStats::end_frame(std::uint32_t slow_us) {
                 MS(tenths(f.other_us, 1000)),
                 static_cast<int>(f.dirty_w), static_cast<int>(f.dirty_h), static_cast<int>(f.dirty_x),
                 static_cast<int>(f.dirty_y), static_cast<unsigned>(f.dirty_px / 1000),
-                static_cast<unsigned>(f.blit_px / 1000));
+                static_cast<unsigned>(f.blit_px / 1000), forked ? " parallel" : "");
   return slow_line_;
 }

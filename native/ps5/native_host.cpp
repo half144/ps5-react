@@ -7,6 +7,7 @@
 #include "archives.hpp"
 #include "packages.hpp"
 #include "browser_capture.hpp"
+#include "render_workers.hpp"
 #include "thread_name.hpp"
 #include "app_config.hpp"
 #include "async_log.hpp"
@@ -23,10 +24,13 @@
 #include "actions.hpp"
 #include "input_script.hpp"
 #include "js_heap.hpp"
+#include "js_profiler.hpp"
 #include "payload_loader.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
 #include "filesystem_access.hpp"
+#include <EGL/egl.h>
+#include <ps5_opengl_display_modes.h>
 #include <algorithm>
 #include <cerrno>
 #include <climits>
@@ -223,6 +227,7 @@ const char* nav_action(hui::Direction direction) {
 }
 
 GcScheduler gc_scheduler(hui::sys::monotonic_us);
+JsProfiler profiler(hui::sys::monotonic_us);
 
 bool dispatch(const char* action) {
   gc_scheduler.input(hui::sys::monotonic_us());
@@ -257,6 +262,9 @@ bool run_proof() {
   FrameStats stats;
   unsigned summaries = 0;
   bool runtime = false, software = false;
+  // Accepted only before Display::open initializes EGL. A display without 120 Hz stays at 60.
+  if (PS5_REACT_REFRESH_RATE != 60 && !eglSetDisplayRefreshPS5(eglGetDisplay(EGL_DEFAULT_DISPLAY), PS5_REACT_REFRESH_RATE))
+    async_log::write("[PS5-REACT] refresh %d Hz refused: 0x%x", PS5_REACT_REFRESH_RATE, eglGetError());
   bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT);
   async_log::write("[PS5-REACT] display=%d at %lldms", ok, since_launch_ms());
   if (ok) {
@@ -266,7 +274,28 @@ bool run_proof() {
   if (ok) {
     software = er_software_backend_init(width, height);
     ok = software && damage_tracker_install(width, height);
+    // The presenter draws qualifying <Image layer> images itself (er_set_layers_enabled). A test deploy may
+    // rasterize them all with a dev/layers.txt holding 0, for comparisons.
+    bool layers = true;
+    if (FILE* file = std::fopen(dev_path("layers.txt").c_str(), "rb")) {
+      char text[16] = {};
+      layers = !std::fgets(text, sizeof text, file) || std::atoi(text) != 0;
+      std::fclose(file);
+    }
+    er_set_layers_enabled(ok && layers && presenter.layers_supported());
     async_log::write("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
+  }
+  if (ok) {
+    // A test deploy may pick the count with dev/render-workers.txt (1 renders single-core).
+    const int cpus = render_workers::available_cpus();
+    int wanted = cpus;
+    if (FILE* file = std::fopen(dev_path("render-workers.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) wanted = std::atoi(text);
+      std::fclose(file);
+    }
+    async_log::write("[PS5-REACT] render workers=%d of %d, cpus=%d", render_workers::start(wanted),
+                     render_workers::max_workers(), cpus);
   }
   // The pad opens before the bundle runs: it also initializes the user service
   // that the users, notification and browser calls need.
@@ -289,6 +318,14 @@ bool run_proof() {
     runtime = er_runtime_init(&config);
     ok = runtime;
     async_log::write("[PS5-REACT] runtime=%d at %lldms", ok, since_launch_ms());
+    // A test deploy samples JavaScript with dev/profile.txt holding the interval in microseconds.
+    if (FILE* file = ok ? std::fopen(dev_path("profile.txt").c_str(), "rb") : nullptr) {
+      char text[16] = {};
+      const int interval = std::fgets(text, sizeof text, file) ? std::atoi(text) : 0;
+      std::fclose(file);
+      profiler.start(JS_GetRuntime(er_runtime_context()), interval > 0 ? interval : 1000);
+      async_log::write("[PS5-REACT] profiling JavaScript every %d us", interval > 0 ? interval : 1000);
+    }
   }
   if (ok) {
     er_register_assets();
@@ -302,6 +339,9 @@ bool run_proof() {
     // Input failure is logged; timeout still allows the display-only proof to end.
     async_log::write("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
+    // Replaced by the accepted mode after the first frame: a display without 120 Hz stays at 60.
+    int refresh_hz = PS5_REACT_REFRESH_RATE;
+    double tick_carry_ms = 0;
     std::uint64_t frames = 0;
     InputScript script;
     load_input_script(script);
@@ -314,8 +354,20 @@ bool run_proof() {
       if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) slow_frame_us = std::atoi(text) * 1000u;
       std::fclose(file);
     }
+    // And report every slow frame instead of the first few per window, with dev/slow-frame-lines.txt.
+    if (FILE* file = std::fopen(dev_path("slow-frame-lines.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0) stats.set_slow_line_limit(std::atoi(text));
+      std::fclose(file);
+    }
     tsc_per_us = std::max<std::uint64_t>(sceKernelGetTscFrequency() / 1000000, 1);
     er_perf_set_clock(perf_clock);
+    // A test deploy may let idle collections run during motion with a dev/gc-still.txt holding 0.
+    if (FILE* file = std::fopen(dev_path("gc-still.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file)) gc_scheduler.wait_for_still(std::atoi(text) != 0);
+      std::fclose(file);
+    }
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
@@ -324,6 +376,8 @@ bool run_proof() {
         // Every fifth summary, about ten seconds apart.
         if (++summaries % 5 == 1) log_memory();
       }
+      // Input and JavaScript commit layout only; the commit after them paints the frame once.
+      er_set_raster_deferred(true);
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
       if (input.is_pressed(hui::Action::menu)) break;
@@ -351,39 +405,62 @@ bool run_proof() {
       er_runtime_pump();
       // The display shows a new frame every vblank, so motion advances by whole vblanks, not by the
       // loop's jittery wall-clock interval.
-      const std::int64_t vblanks = std::max<std::int64_t>(1, (now - previous + 8333) / 16667);
-      ok = ps5_react_frame(er_runtime_context(), vblanks * 1000.0 / 60.0);
+      const std::int64_t vblank_us = 1000000 / refresh_hz;
+      const std::int64_t vblanks = std::max<std::int64_t>(1, (now - previous + vblank_us / 2) / vblank_us);
+      const double elapsed_ms = vblanks * 1000.0 / refresh_hz;
+      ok = ps5_react_frame(er_runtime_context(), elapsed_ms);
       er_perf_phase_end(ER_PERF_PHASE_JS);
       if (!ok) {
         async_log::write("[PS5-REACT] frame callback exception");
         break;
       }
+      er_set_raster_deferred(false);
       er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
       stats.lap(FrameStats::update, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
+      int layer_count = 0;
+      const ERLayer* layers = er_get_layers(&layer_count);
+      presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
       ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
                           display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
+      const std::size_t repainted = damage_tracker_area();
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
       ok = ok && display.swap();
       stats.lap(FrameStats::swap, hui::sys::monotonic_us());
       if (!ok) break;
-      if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), hui::sys::monotonic_us()))
+      if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), hui::sys::monotonic_us(),
+                                                repainted, static_cast<std::size_t>(width) * height))
         async_log::write("[PS5-REACT] %s", line);
       if (!first_present) {
         first_present = hui::sys::monotonic_us();
         hui::sys::hide_splash_screen();
         async_log::write("[PS5-REACT] first frame presented at %lldms", since_launch_ms());
+        // The accepted mode is known only once a frame has been presented.
+        EGLint mode_width = 0, mode_height = 0, mode_hz = 0;
+        if (eglGetDisplayModePS5(eglGetDisplay(EGL_DEFAULT_DISPLAY), &mode_width, &mode_height, &mode_hz)) {
+          async_log::write("[PS5-REACT] display mode %dx%d at %d Hz", mode_width, mode_height, mode_hz);
+          if (mode_hz > 0) refresh_hz = mode_hz;
+        }
       }
-      embedded_renderer_tick(static_cast<std::uint32_t>(std::clamp<std::int64_t>((now-previous)/1000, 0, 50)));
+      // The engine clock takes whole milliseconds; carrying the remainder keeps 8.33 ms frames at speed.
+      tick_carry_ms += std::min(elapsed_ms, 50.0);
+      const auto tick_ms = static_cast<std::uint32_t>(tick_carry_ms);
+      tick_carry_ms -= tick_ms;
+      embedded_renderer_tick(tick_ms);
       previous = now;
       ++frames;
       if (const char* line = stats.end_frame(slow_frame_us)) async_log::write("[PS5-REACT] %s", line);
       if (ps5_react_exit_requested()) break;
     }
     async_log::write("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
+    if (profiler.running()) {
+      profiler.stop();
+      const bool saved = profiler.write(dev_path("profile.folded").c_str());
+      async_log::write("[PS5-REACT] profile: %llu samples, saved=%d", static_cast<unsigned long long>(profiler.samples()), saved);
+    }
   }
   if (!ok && runtime) async_log::write("[PS5-REACT] error=%s", er_runtime_last_error());
   ps5_react_stop_images();
@@ -394,6 +471,7 @@ bool run_proof() {
   if (runtime) er_runtime_shutdown();
   text_shaper::shutdown();
   ps5_react_stop_sound();
+  render_workers::stop();
   if (software) er_software_backend_destroy();
   host_platform_set_pad(nullptr);
   pad.close();

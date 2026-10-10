@@ -5,7 +5,7 @@
 // Every call is synchronous and runs on the render thread; see docs/NATIVE-API.md.
 import {useEffect, useState} from 'react';
 import {normalizeDownloadManifest} from './download-formats.js';
-import {onFrame} from './frame.js';
+import {onFrameUnbatched} from './frame.js';
 
 function host() {
   const api = globalThis.__ps5ReactNative;
@@ -378,15 +378,38 @@ export const BrowserCapture = Object.freeze({
 });
 
 const pendingImages = new Map();
+// Finished loads the host has handed over and no listener has received yet, by id in arrival order.
+const arrivedImages = new Map();
 let stopImagePolling = null;
+
+// Each image listener runs outside the frame batch, so its LegacyRoot render commits before elapsed
+// time is checked. A single synchronous render cannot be preempted, but delivery stops after the
+// first listener that carries the frame past the budget.
+const IMAGE_DELIVERY_BUDGET_MS = 4;
 
 function pollImages() {
   for (const result of host().image.poll()) {
-    const listeners = pendingImages.get(result.id);
-    pendingImages.delete(result.id);
-    for (const listener of listeners ?? []) listener(result);
+    if (pendingImages.has(result.id)) arrivedImages.set(result.id, result);
   }
-  if (pendingImages.size === 0) {
+  const start = performance.now();
+  for (const [id, result] of arrivedImages) {
+    const listeners = pendingImages.get(id);
+    if (!listeners?.size) {
+      arrivedImages.delete(id);
+      continue;
+    }
+    for (const listener of listeners) {
+      listeners.delete(listener);
+      listener(result);
+      if (listeners.size === 0) {
+        pendingImages.delete(id);
+        arrivedImages.delete(id);
+      }
+      if (performance.now() - start >= IMAGE_DELIVERY_BUDGET_MS) break;
+    }
+    if (performance.now() - start >= IMAGE_DELIVERY_BUDGET_MS) break;
+  }
+  if (pendingImages.size === 0 && arrivedImages.size === 0) {
     stopImagePolling();
     stopImagePolling = null;
   }
@@ -394,7 +417,7 @@ function pollImages() {
 
 // One more poll: a release can push unused images over the cache budget, and polls evict.
 function pollImagesSoon() {
-  stopImagePolling ??= onFrame(pollImages);
+  stopImagePolling ??= onFrameUnbatched(pollImages);
 }
 
 /**
@@ -434,7 +457,10 @@ export function acquireImage(uri, width, height, fit, prefetch, listener) {
   const release = () => {
     const listeners = pendingImages.get(id);
     listeners?.delete(listener);
-    if (listeners?.size === 0) pendingImages.delete(id);
+    if (listeners?.size === 0) {
+      pendingImages.delete(id);
+      arrivedImages.delete(id);
+    }
     host().image.release(id, prefetch);
     pollImagesSoon();
   };

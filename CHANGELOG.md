@@ -8,6 +8,108 @@
   second for the rest of the job, nor spend the attempts that fail a download. Connection failures
   in the minute after the suspension, while the network comes back, are treated the same way.
 
+## Unreleased — multi-core rendering
+
+- Keep translated framebuffer copies out from under translucent ancestors, use
+  clipped coverage for image crossfades, retain images by the displayed scroll
+  position, advance screen switches when an outgoing screen is removed, and
+  clamp screenshot sampling taps independently at image edges.
+
+- Render each commit's repaint in horizontal slices across up to eight render
+  workers, one per available CPU (docs/ARCHITECTURE.md). On a PS5 at 3840×2160
+  a scripted tour of a private app spent 2.7 s over the 16.7 ms frame budget,
+  against 9.3 s single-core (docs/HARDWARE.md).
+- Present the framebuffer through as many buffer-texture slices as the render
+  size needs (eight at 2160p), so changed rows avoid `glTexSubImage2D` at 4K.
+- Log the worker count at launch and `parallel=` per stats window; set
+  `PS5_REACT_RENDER_WORKERS` (desktop) or `dev/render-workers.txt` (PS5 test
+  deploy) to pick the count.
+- `npm test` now also renders the self-test single-core and fails unless the
+  parallel snapshots are byte-identical.
+- Force the opacity strip height (128 rows) and transform buffer size (768 px)
+  in `native/ps5/CMakeLists.txt`: they were taken from a build directory's
+  first configure, and per-worker strips at 768 rows shrank the PS5 heap to
+  192 MiB.
+- Two Embedded React patches, maintained here and not proposed upstream, render
+  vector paths from workers under a lock and look up a worker's context once
+  per call.
+- Keep the source of a scaling or rotating view across frames, shared by every
+  worker (`ERUI_XFORM_CACHE_SLOTS`, two on the PS5), so a focus scale no longer
+  re-renders the card's subtree each frame.
+- Both hosts defer the paint of commits made during input and JavaScript to the
+  frame's own commit, so a region that React and an animation change in the same
+  frame is painted once. Layout and `onLayout` still run at each React commit.
+  The two changes cut a PS5 tour's time over budget from 1.4 s to 0.66 s
+  (docs/HARDWARE.md).
+- Raise the PS5 node pool (`ERUI_MAX_NODES`) and bridge handles from 2048 to
+  4096, so an app can keep a screen mounted while hidden. The heap still lands
+  at 256 MiB, and the per-commit pool walks stay at 0.1–0.3 ms.
+- Add `ReleaseImages`: the remote images under it stop holding their cache
+  entries while `when` is true, except those on screen at that moment, and are
+  taken again without re-rendering when it turns false (docs/IMAGES.md).
+- Remote images decode on four threads within the same 40 MB decode-memory
+  bound, so a screen of cached images appears 3–4 times sooner on the desktop
+  preview. Decode errors no longer include stb_image's reason.
+- Deliver finished image loads under a per-frame budget of about 4 ms of
+  `<Image>` re-renders, at least one a frame: dozens finishing together on a
+  page mount re-rendered in one frame, 50–70 ms of React work on the PS5
+  (docs/IMAGES.md).
+- Fix scaled images and gradients wider than `ERUI_MAX_IMG_ROW_PIXELS` (2560 on
+  the PS5) being cut off at that width: a full-width 4K cover image lost its
+  right third. Rows are now rendered in chunks, and a gradient's colours no
+  longer shift by one step with the clip window. Drawing the whole image makes
+  full-screen crossfades at 3840×2160 cost about 30 ms of raster per frame.
+- Add `<Image layer>`: when the image qualifies (opaque, untinted, square,
+  `cover` or `stretch`, no scale or rotation, and for a translucent one an opaque
+  layer directly beneath), both hosts draw it as a GPU texture under the
+  framebuffer, and fading it repaints nothing (docs/IMAGES.md). An Embedded React
+  patch, maintained here and not proposed upstream, adds the layer list and a
+  backend clear, and makes the software backend's blends keep destination alpha,
+  bit-identical over opaque pixels. Set `PS5_REACT_LAYERS=0` (desktop) or
+  `dev/layers.txt` to 0 (PS5 test deploy) to rasterize every image. On the desktop
+  preview, single-core, the frames of a 4K crossfade went from about 130 ms of
+  raster each to none; the two that add and drop an image still repaint what is
+  drawn over it (about 45 ms there).
+- Add `Screens`, `Screen` and `useIsScreenActive`: a leave-then-enter page
+  switcher that keeps every page it has shown mounted, hidden, inert and without
+  image cache entries, and can preload pages not shown yet (docs/NAVIGATION.md,
+  "Tabs that keep their pages").
+- A variant label change re-renders only the motion elements that use labels.
+  Every motion element under a labelled parent re-rendered before: about 157 of
+  them per tab switch in a PS5 app, which took a page switch from 203 ms to 69 ms.
+- Move a full-screen opaque page that only an animated translate moves by
+  copying its pixels, repainting only what the move uncovers (docs/ANIMATION.md,
+  "Page transitions"). An Embedded React patch, maintained here and not proposed
+  upstream. A details sheet sliding in at 3840×2160 had every frame at about
+  20 ms with 10–12 ms of raster; now every frame of the slide fits 16.7 ms.
+- Fix nodes that a translate moved wholly off the screen in one frame (a top bar
+  scrolled away) repainting their old footprint on every later commit; with a
+  focus ring animating, that was 1.4 million pixels a frame. An Embedded React
+  patch, maintained here and not proposed upstream.
+- `"refreshRate": 120` requests 120 Hz output and sets the `param.json` bits the
+  console requires; a display without 120 Hz stays at 60, and the log reports the
+  accepted mode after the first frame. The PS5 host counts vblanks at that mode
+  and carries the engine clock's sub-millisecond remainder, and focus scrolling
+  shows the positions between its 60 Hz steps, so motion keeps its speed.
+- Idle garbage collections wait for a still screen (three frames that repainted
+  under a fiftieth of it) until three quarters of their room is garbage, and the
+  room is at least 8 MiB (docs/ARCHITECTURE.md). On a PS5 burst of detail pages
+  and grid scrolling, the previous policy collected automatically inside a
+  full-screen frame in both runs (51–58 ms); this one in neither.
+- A PS5 test deploy can report every slow frame with a limit in
+  `dev/slow-frame-lines.txt`, instead of the first eight per window.
+- A JavaScript sampling profiler: `dev/profile.txt` on a PS5 test deploy (the
+  interval in microseconds) or `PS5_REACT_PROFILE=<file>` for the preview writes
+  folded stacks of where JavaScript time went (docs/ANIMATION.md, "Profiling
+  JavaScript"). A QuickJS patch, maintained here and not proposed upstream, lets
+  the interrupt handler sample the stack.
+- Per-frame callbacks run in one React batch, through an Embedded React patch
+  that exports `unstable_batchedUpdates`: each image delivered and each
+  VirtualList step rendered on its own before.
+- VirtualList spreads a mount across frames while focus is outside it: rows on
+  screen fill a row a frame instead of all at once. A PS5 search keystroke that
+  remounts a results grid went from a 44 ms frame to 26 ms (docs/LISTS.md).
+
 ## Unreleased — browser capture
 
 - Add ABI v7 `BrowserCapture.capture`, a bounded, read-only Vikingfile URL
