@@ -84,8 +84,9 @@ export function Screens({active, variants = SLIDE, focusKey, onBack, preload: pr
   const [state, setState] = useState(() => initialStage(active));
   const latest = useRef(active);
   latest.current = active;
-  const [labels] = useState(() => ({...variants, [ENTER]: {...variants.hidden, transition: {duration: 0}}}));
-  useLayoutEffect(() => setState(current => activate(current, active, screens.has(current.stage))), [active]);
+  const labels = {...variants, [ENTER]: {...variants.hidden, transition: {duration: 0}}};
+  const stageExists = screens.has(state.stage);
+  useLayoutEffect(() => setState(current => activate(current, active, stageExists)), [active, stageExists]);
 
   const resting = state.phase === 'shown';
   const next = preloading && resting ? [...screens.keys()].find(id => !state.mounted.includes(id)) : undefined;
