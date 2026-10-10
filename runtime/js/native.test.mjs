@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {acquireImage, Archives, BrowserCapture, Downloads, Http, Power, Sound} from './native.js';
+import {setFrameBatcher} from './frame.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
   let tick;
@@ -119,10 +120,42 @@ test('finished image loads arriving together are delivered across frames under a
     step();
     releases.get(5)();
     while (frames.length < 6) step();
-    assert.deepEqual(frames, [[1, 2, 4], [6], [7, 8, '9:HTTP 404'], [], [], []],
+    assert.deepEqual(frames.filter(frame => frame.length), [[1, 2, 4], [6], [7, 8, '9:HTTP 404']],
       'released ids are skipped for free, a slow arrival still lands, failures are delivered too');
     assert.equal(polls, 3, 'polling continues while results are queued and stops once all are delivered');
   } finally {
+    performance.now = originalNow;
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
+test('image listener commits are measured individually despite the frame batcher', () => {
+  const originalNow = performance.now;
+  let finished = [], clock = 0;
+  const delivered = [];
+  const deferredBatches = [];
+  performance.now = () => clock;
+  setFrameBatcher(run => deferredBatches.push(run));
+  globalThis.__ps5ReactNative = {image: {
+    load: () => ({id: 1, state: 'loading', name: '', width: 0, height: 0, error: ''}),
+    release: () => {},
+    poll: () => { const out = finished; finished = []; return out; },
+  }};
+  try {
+    for (let id = 1; id <= 7; id++) acquireImage(`https://example.com/${id}.jpg`, 20, 20, 0, false, result => {
+      if (result.state === 'ready') { delivered.push(id); clock += 3; }
+    });
+    finished = [{id: 1, state: 'ready', name: '@image:1', width: 20, height: 20, error: ''}];
+    const batches = [];
+    for (let frame = 0; frame < 4; frame++) {
+      globalThis.__ps5ReactFrame(16);
+      batches.push(delivered.length);
+    }
+    assert.deepEqual(batches, [2, 4, 6, 7], 'the next listener waits until the next frame after commits cross 4 ms');
+    assert.deepEqual(delivered, [1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(deferredBatches.length, 4, 'listeners ran although no batch did; each frame still closes with one');
+  } finally {
+    setFrameBatcher(run => run());
     performance.now = originalNow;
     delete globalThis.__ps5ReactNative;
   }
