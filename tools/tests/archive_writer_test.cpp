@@ -1,0 +1,121 @@
+// Stress test for archives::Writer: random block sizes and file counts through rings small enough to wrap
+// constantly, checked byte for byte and by digest; a failing descriptor and a cancel mid-stream must
+// end without a hang and with every descriptor closed.
+#include "archive_writer.hpp"
+#include "archives.hpp"
+#include "digest.hpp"
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <fcntl.h>
+#include <random>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+std::size_t archives::pipeline_bytes() { return 0; }
+void archives::trace(const char*, const char*) {}
+bool archives::list_directory(const char*, void (*)(const char*, void*), void*) { return false; }
+
+namespace {
+int open_descriptors() {
+  int count = 0;
+  for (int fd = 0; fd < 1024; ++fd) count += fcntl(fd, F_GETFD) != -1;
+  return count;
+}
+std::string sha(const std::vector<unsigned char>& bytes) {
+  integrity::Hash hash;
+  hash.update(bytes.data(), bytes.size());
+  return hash.finish();
+}
+std::vector<unsigned char> slurp(const std::string& path) {
+  std::vector<unsigned char> out;
+  FILE* file = std::fopen(path.c_str(), "rb");
+  int c;
+  while ((c = std::fgetc(file)) != EOF) out.push_back(static_cast<unsigned char>(c));
+  std::fclose(file);
+  return out;
+}
+
+void round_trip(const std::string& dir, std::mt19937& rng, std::size_t ring) {
+  std::atomic<bool> cancelled{false};
+  archives::Writer writer(cancelled);
+  assert(writer.start(ring));
+  const int files = 1 + rng() % 200;
+  std::vector<std::vector<unsigned char>> contents;
+  std::string expected;
+  for (int i = 0; i < files; ++i) {
+    const std::size_t size = rng() % 4 == 0 ? 0 : rng() % 3 == 0 ? rng() % (3 * ring) : rng() % 70000;
+    std::vector<unsigned char> data(size);
+    for (auto& byte : data) byte = static_cast<unsigned char>(rng());
+    const std::string name = "f" + std::to_string(i);
+    const int fd = open((dir + "/" + name).c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    assert(fd >= 0 && writer.begin(fd, dir + "/" + name, name));
+    // Mostly in order, as decoders emit; now and then out of order, which takes the read-back path.
+    std::vector<std::pair<std::size_t, std::size_t>> blocks;
+    for (std::size_t at = 0; at < size;) {
+      const std::size_t length = std::min<std::size_t>(size - at, 1 + rng() % (rng() % 2 ? 65536 : 2 * 1024 * 1024));
+      blocks.emplace_back(at, length);
+      at += length;
+    }
+    if (blocks.size() > 2 && rng() % 8 == 0) std::swap(blocks[0], blocks[1]);
+    for (const auto& [at, length] : blocks) assert(writer.append(data.data() + at, length, at));
+    assert(writer.end());
+    expected += sha(data) + "|" + name + "\n";
+    contents.push_back(std::move(data));
+  }
+  std::string receipt;
+  const auto error = writer.finish(receipt);
+  if (!error.empty()) std::fprintf(stderr, "error: %s\n", error.c_str());
+  assert(error.empty() && receipt == expected);
+  for (int i = 0; i < files; ++i) {
+    assert(slurp(dir + "/f" + std::to_string(i)) == contents[i]);
+    unlink((dir + "/f" + std::to_string(i)).c_str());
+  }
+}
+
+void write_error(const std::string& dir) {
+  std::atomic<bool> cancelled{false};
+  archives::Writer writer(cancelled);
+  assert(writer.start(1 << 20));
+  const int fd = open((dir + "/ro").c_str(), O_RDONLY | O_CREAT, 0600);
+  assert(writer.begin(fd, dir + "/ro", "ro"));
+  std::vector<unsigned char> data(8 << 20, 7);
+  bool accepted = true;
+  for (int i = 0; i < 64 && accepted; ++i) accepted = writer.append(data.data(), data.size(), std::size_t(i) * data.size());
+  std::string receipt;
+  const auto error = accepted && writer.end() ? writer.finish(receipt) : writer.error();
+  assert(!error.empty() && receipt.empty());
+  unlink((dir + "/ro").c_str());
+}
+
+void cancel_midway(const std::string& dir, std::mt19937& rng) {
+  std::atomic<bool> cancelled{false};
+  archives::Writer writer(cancelled);
+  assert(writer.start(1 << 20));
+  std::vector<unsigned char> data(256 * 1024, 1);
+  const int stop_after = rng() % 40;
+  for (int i = 0; i < 40; ++i) {
+    const std::string name = "c" + std::to_string(i);
+    const int fd = open((dir + "/" + name).c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (!writer.begin(fd, dir + "/" + name, name)) break;
+    if (i == stop_after) cancelled = true;
+    if (!writer.append(data.data(), data.size(), 0) || !writer.end()) break;
+  }
+  // Destroyed without finish(), as when extraction stops on an error or a cancel.
+}
+}
+
+int main(int argc, char** argv) {
+  const std::string dir = argc > 1 ? argv[1] : "/tmp/archive-writer-test";
+  mkdir(dir.c_str(), 0700);
+  std::mt19937 rng(argc > 2 ? std::atoi(argv[2]) : 1);
+  const int before = open_descriptors();
+  for (int round = 0; round < 40; ++round) round_trip(dir, rng, (1 + rng() % 4) << 20);
+  write_error(dir);
+  for (int round = 0; round < 40; ++round) cancel_midway(dir, rng);
+  for (int i = 0; i < 40; ++i) unlink((dir + "/c" + std::to_string(i)).c_str());
+  assert(open_descriptors() == before);
+  std::puts("PASS: writer round trips, write error, cancel without leaks");
+}

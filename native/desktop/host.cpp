@@ -714,4 +714,5 @@ int main(int argc, char** argv) {
 }
 
 void archives::trace(const char*, const char*) {}
+std::size_t archives::pipeline_bytes() { return 32 * 1024 * 1024; }
 bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) { return host::read_dir(path, visit, user); }
