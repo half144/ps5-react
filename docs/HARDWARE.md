@@ -219,6 +219,12 @@ Every idle pause landed in a frame that repainted under 2% of the screen. A
 longer session of fast browsing still reached the 8 MiB room once (a 79 ms
 detail-page frame against 39 ms) and then paused 48 ms at 17.5 MiB live.
 
+With `"refreshRate": 120` the console accepted 3840×2160 at 120 Hz on this
+display. Page slides and row scrolls ran at 117–120 fps; windows with images
+streaming in, search typing or a page's first mount fell to 70–100 fps. The
+controller was in use during that run, so its tour path differed from the
+60 Hz runs and the numbers are not a comparison.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

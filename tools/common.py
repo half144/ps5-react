@@ -159,6 +159,9 @@ def app_config(app, config=None):
             value = config[field][axis]
             if type(value) is not int or not 1 <= value <= 3840:
                 raise ValueError(f"{field}.{axis} must be an integer between 1 and 3840")
+    refresh = config.get("refreshRate", 60)
+    if type(refresh) is not int or refresh not in (60, 120):
+        raise ValueError("refreshRate must be 60 or 120")
     if type(config["timeoutSeconds"]) is not int or not 0 <= config["timeoutSeconds"] <= 3600:
         raise ValueError("timeoutSeconds must be 0 (disabled) or 1..3600")
     if not config["name"].strip() or len(config["name"]) > 80:
@@ -184,7 +187,8 @@ def generated_config(config, directory):
     directory.mkdir(parents=True, exist_ok=True)
     definitions = {"WIDTH": config["render"]["width"], "HEIGHT": config["render"]["height"],
                    "SURFACE_WIDTH": config["surface"]["width"], "SURFACE_HEIGHT": config["surface"]["height"],
-                   "TIMEOUT": config["timeoutSeconds"], "NAME": config["name"], "TITLE": config["titleId"],
+                   "TIMEOUT": config["timeoutSeconds"], "REFRESH_RATE": config.get("refreshRate", 60),
+                   "NAME": config["name"], "TITLE": config["titleId"],
                    "CONSOLE_FILESYSTEM": int(config.get("filesystemAccess", "sandbox") == "console"),
                    "NETWORKING": int(config.get("networking", False))}
     (directory / "app_config.hpp").write_text("#pragma once\n" + "".join(

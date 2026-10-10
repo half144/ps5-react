@@ -86,6 +86,11 @@
   scrolled away) repainting their old footprint on every later commit; with a
   focus ring animating, that was 1.4 million pixels a frame. An Embedded React
   patch, maintained here and not proposed upstream.
+- `"refreshRate": 120` requests 120 Hz output and sets the `param.json` bits the
+  console requires; a display without 120 Hz stays at 60, and the log reports the
+  accepted mode after the first frame. The PS5 host counts vblanks at that mode
+  and carries the engine clock's sub-millisecond remainder, and focus scrolling
+  shows the positions between its 60 Hz steps, so motion keeps its speed.
 - Idle garbage collections wait for a still screen (three frames that repainted
   under a fiftieth of it) until three quarters of their room is garbage, and the
   room is at least 8 MiB (docs/ARCHITECTURE.md). On a PS5 burst of detail pages
