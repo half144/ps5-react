@@ -19,6 +19,9 @@ namespace {
 // Begin and end commands hold no ring bytes, and a sparse file's data commands may hold one byte each;
 // this caps them for archives of many empty files or tiny scattered blocks.
 constexpr std::size_t max_commands = 4096, readback_block = 128 * 1024;
+// Each queued file holds its open descriptor; this keeps the decoder from opening thousands ahead of a
+// slow disk and running the process out of descriptors.
+constexpr std::size_t max_queued_files = 32;
 // Writer threads only hash and copy; the read-back buffer is on the heap.
 constexpr std::size_t thread_stack = 256 * 1024;
 }
@@ -63,11 +66,13 @@ bool Writer::push(Command command) {
   std::unique_lock lock(mutex_);
   if (!commands_.empty()) commands_.back().sealed = true;
   work_.notify_one();
-  space_.wait(lock, [&] { return commands_.size() < max_commands || failed(); });
+  const bool file = command.kind == Kind::begin;
+  space_.wait(lock, [&] { return (commands_.size() < max_commands && (!file || queued_files_ < max_queued_files)) || failed(); });
   if (failed()) {
-    if (command.kind == Kind::begin) close(command.fd);
+    if (file) close(command.fd);
     return false;
   }
+  queued_files_ += file;
   commands_.push_back(std::move(command));
   work_.notify_one();
   return true;
@@ -163,6 +168,7 @@ void Writer::write_loop() {
       }
       command = std::move(commands_.front());
       commands_.pop_front();
+      queued_files_ -= command.kind == Kind::begin;
       space_.notify_all();
     }
     const bool skip = failed();

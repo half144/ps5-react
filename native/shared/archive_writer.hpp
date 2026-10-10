@@ -73,6 +73,7 @@ private:
   unsigned char* ring_ = nullptr;
   std::size_t capacity_ = 0, chunk_ = 0;
   std::uint64_t head_ = 0, tail_ = 0;
+  std::size_t queued_files_ = 0;
   std::deque<Command> commands_;
   // The receipt's names are relative to this folder, taken from the first file.
   std::string receipt_, error_, root_;
