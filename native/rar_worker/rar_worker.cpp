@@ -8,7 +8,8 @@
 //
 // Request, one item per line: "RARX1", then "threads <n>" (0 picks from the cores), "window <bytes>",
 // "limit <bytes>", "flatten <extension>"..., "reserved <text>", "password <hex>", "dest <directory>",
-// "source <path>"... in volume order, then "end". The engine can then write "cancel" at any time.
+// "source <path>"... in volume order, "wait 1" when later volumes are still downloading (each is read once
+// a file has its name), then "end". The engine can then write "cancel" at any time.
 // Answers: "ready", "p <bytes written>" a few times a second, "k" every second, "f <sha256> <size>
 // <path>" once a file is on disk and synced, then "ok", "cancelled" or "fail <reason>".
 #include "rar.hpp"
@@ -40,6 +41,7 @@ const char* too_much_memory = "This archive needs more memory to extract than th
 struct Options {
   unsigned threads = 0;
   uint64 window = 0, limit = 0;
+  bool wait = false;
   std::vector<std::string> flatten, sources;
   std::string reserved, password, destination;
 };
@@ -108,6 +110,7 @@ bool read_request(Options& options) {
     else if (key == "reserved") options.reserved = value;
     else if (key == "password" && !from_hex(value, options.password)) return false;
     else if (key == "dest") options.destination = value;
+    else if (key == "wait") options.wait = value == "1";
     else if (key == "source") options.sources.push_back(value);
   }
   return false;
@@ -380,6 +383,19 @@ void heartbeat(Session& session) {
   if (stop_requested()) cancelled = true;
 }
 
+// The app renames a volume to its final name once it is complete; until then, progress and a look for
+// "cancel" go on as while decoding.
+bool await_volume(Session& session, const std::string& path) {
+  struct stat st;
+  while (lstat(path.c_str(), &st)) {
+    if (errno != ENOENT) return false;
+    heartbeat(session);
+    if (cancelled) return false;
+    usleep(250000);
+  }
+  return S_ISREG(st.st_mode);
+}
+
 int CALLBACK callback(UINT message, LPARAM user, LPARAM p1, LPARAM p2) {
   Session& session = *reinterpret_cast<Session*>(user);
   switch (message) {
@@ -402,7 +418,12 @@ int CALLBACK callback(UINT message, LPARAM user, LPARAM p1, LPARAM p2) {
         session.missing_volume = true;
         return -1;
       }
-      UtfToWide(session.options.sources[session.next_volume++].c_str(), reinterpret_cast<wchar*>(p1), size_t(p2));
+      const std::string& path = session.options.sources[session.next_volume++];
+      if (session.options.wait && !await_volume(session, path)) {
+        if (!cancelled) session.missing_volume = true;
+        return -1;
+      }
+      UtfToWide(path.c_str(), reinterpret_cast<wchar*>(p1), size_t(p2));
       return 1;
     }
     case UCM_CHANGEVOLUME:
