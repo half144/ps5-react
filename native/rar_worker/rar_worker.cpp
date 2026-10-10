@@ -11,7 +11,8 @@
 // "source <path>"... in volume order, "wait 1" when later volumes are still downloading (each is read once
 // a file has its name), then "end". The engine can then write "cancel" at any time.
 // Answers: "ready", "p <bytes written>" a few times a second, "k" every second, "f <sha256> <size>
-// <path>" once a file is on disk and synced, then "ok", "cancelled" or "fail <reason>".
+// <path>" once a file is on disk and synced, "t <key>=<value>..." with where the time went (an engine that
+// does not know a key ignores it), then "ok", "cancelled" or "fail <reason>".
 #include "rar.hpp"
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
@@ -25,6 +26,7 @@
 #include <mutex>
 #include <poll.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <thread>
 #include <time.h>
@@ -231,9 +233,11 @@ public:
   void begin(int fd, const std::string& name) {
     current_ = nullptr;
     {
+      const uint64 started = now_ns();
       std::unique_lock lock(mutex_);
       changed_.wait(lock, [this] { return queued_files_ < max_queued_files; });
       ++queued_files_;
+      wait_ns += now_ns() - started;
     }
     push({Command::begin, fd, name, nullptr, 0});
   }
@@ -263,6 +267,10 @@ public:
     std::lock_guard lock(mutex_);
     return error_;
   }
+  // Time in pwrite and fsync on the writer thread, and the decoder's waits for a buffer or a file slot.
+  // Read once finish() returned.
+  uint64 write_ns = 0, sync_ns = 0, wait_ns = 0;
+  unsigned writes = 0, syncs = 0;
 
 private:
   struct Command {
@@ -273,8 +281,10 @@ private:
     uint64 size;
   };
   byte* take() {
+    const uint64 started = now_ns();
     std::unique_lock lock(mutex_);
     changed_.wait(lock, [this] { return !free_.empty() || !error_.empty(); });
+    wait_ns += now_ns() - started;
     if (!error_.empty()) return nullptr;
     byte* buffer = free_.front();
     free_.pop_front();
@@ -303,6 +313,7 @@ private:
       written_ = 0;
       hash_.init();
     } else if (command.type == Command::data) {
+      const uint64 started = now_ns();
       size_t done = 0;
       while (done < command.size && error().empty()) {
         const ssize_t count = pwrite(fd_, command.buffer + done, command.size - done, written_ + done);
@@ -310,11 +321,19 @@ private:
         if (count <= 0) fail(strerror(count < 0 ? errno : ENOSPC));
         else done += count;
       }
+      write_ns += now_ns() - started;
+      ++writes;
       hash_.update(command.buffer, command.size);
       written_ += command.size;
     } else {
-      if (written_ != command.size) fail("Extracted file size mismatch.");
-      else if (fsync(fd_)) fail(strerror(errno));
+      if (written_ != command.size) {
+        fail("Extracted file size mismatch.");
+      } else {
+        const uint64 started = now_ns();
+        if (fsync(fd_)) fail(strerror(errno));
+        sync_ns += now_ns() - started;
+        ++syncs;
+      }
       const bool closed = !close(fd_);
       fd_ = -1;
       if (!closed) fail(strerror(errno));
@@ -478,11 +497,20 @@ int dll_error(CommandData& command) {
   }
 }
 
+long cores() { return sysconf(_SC_NPROCESSORS_ONLN); }
+
+// The engine asks for fewer while downloads run. One core always stays with the app's interface; when the
+// count is unknown, the cap alone applies.
 unsigned pick_threads(unsigned requested) {
-  if (requested) return std::min(requested, 8u);
-  // Two cores stay with the app's interface and downloads.
-  const long cores = sysconf(_SC_NPROCESSORS_ONLN);
-  return unsigned(std::clamp(cores - 2, 1L, 4L));
+  const long known = cores();
+  if (!requested) return unsigned(std::clamp(known - 2, 1L, 4L));
+  return unsigned(std::min<long>(requested, known > 0 ? std::clamp(known - 1, 1L, 6L) : 6));
+}
+
+uint64 process_cpu_us() {
+  rusage usage;
+  if (getrusage(RUSAGE_SELF, &usage)) return 0;
+  return (uint64(usage.ru_utime.tv_sec) + usage.ru_stime.tv_sec) * 1000000 + usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
 }
 
 bool flattened(const Options& options, const std::string& name) {
@@ -626,6 +654,13 @@ int main() {
     }
     const auto written = session.writer.finish();
     if (error.empty()) error = written;
+    const Writer& w = session.writer;
+    const auto ms = [](uint64 ns) { return std::to_string(ns / 1000000) + "ms"; };
+    std::string timings = "t threads=" + std::to_string(pick_threads(options.threads)) + " cores=" + std::to_string(cores())
+        + " write=" + ms(w.write_ns) + "/" + std::to_string(w.writes) + " fsync=" + ms(w.sync_ns) + "/" + std::to_string(w.syncs)
+        + " waited=" + ms(w.wait_ns);
+    if (const uint64 cpu = process_cpu_us()) timings += " cpu=" + ms(cpu * 1000);
+    say(timings);
     // The precise cause, rather than the checksum or header failure it leads to.
     if (!error.empty() && session.error.empty() && !cancelled) {
       if (session.missing_password) error = describe(ERAR_MISSING_PASSWORD);

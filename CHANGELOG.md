@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — RAR extraction threads
+
+- rar-extract decodes with 6 threads when no download runs and 4 while one does (or while the set
+  itself still downloads), instead of 4 always; it never takes more than the cores but one. Its
+  `throughput` trace line adds the threads, cores, process CPU time, write and fsync time and the
+  decoder's waits, which the worker now reports on a `t` line.
+
 ## Unreleased — downloads across rest mode
 
 - A download whose connections die while the title is suspended (rest mode, or another app in
