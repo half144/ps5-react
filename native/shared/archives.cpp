@@ -526,9 +526,12 @@ bool rar_volumes(const Request& request) {
     return std::any_of(rar_signatures.begin(), rar_signatures.end(), [&](std::string_view signature) { return bytes.starts_with(signature); });
   });
 }
+// Decoder threads: PS5 has 8 cores; the interface keeps two either way, and downloads (a streamed set's own
+// included) two more.
+unsigned rar_threads(const Request& request) { return request.stream || downloading() ? 4 : 6; }
 std::string rar_request(const Request& request, const std::string& staging) {
   constexpr char digits[] = "0123456789abcdef";
-  std::string text = "RARX1\nthreads 0\nwindow " + std::to_string(rar_window) + "\nlimit " + std::to_string(request.max_bytes) + "\n";
+  std::string text = "RARX1\nthreads " + std::to_string(rar_threads(request)) + "\nwindow " + std::to_string(rar_window) + "\nlimit " + std::to_string(request.max_bytes) + "\n";
   for (auto extension : image_extensions) text += "flatten " + std::string(extension) + "\n";
   text += "reserved .ps5-react-\n";
   if (request.stream) text += "wait 1\n";
@@ -577,7 +580,7 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
   }
   trace("rar worker started");
   const auto started = std::chrono::steady_clock::now();
-  std::string pending;
+  std::string pending, timings;
   std::uint64_t total = 0;
   bool finished = false, succeeded = false, cancel_sent = false, exited = false;
   unsigned silent = 0;
@@ -607,6 +610,8 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
         job.snapshot.written = std::min(written, job.request.max_bytes);
       } else if (line.starts_with("f ")) {
         if (const auto refusal = rar_file(job, staging, line.substr(2), total, receipt); !refusal.empty() && error.empty()) error = refusal;
+      } else if (line.starts_with("t ")) {
+        timings = line.substr(1);
       } else if (line == "ok" || line == "cancelled" || line.starts_with("fail ")) {
         finished = true;
         succeeded = line == "ok";
@@ -621,8 +626,16 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
   trace("rar worker finished", error.c_str());
   {
     std::lock_guard lock(job.mutex);
+    // The worker's own timings, as its "t" line names them; one from an older worker has none.
+    const auto field = [&](const char* key) {
+      const auto at = timings.find(" " + std::string(key) + "=");
+      if (at == std::string::npos) return std::string("?");
+      const auto from = at + std::strlen(key) + 2;
+      return timings.substr(from, timings.find(' ', from) - from);
+    };
     const auto summary = "RAR worker " + std::to_string(total >> 20) + "MiB " + std::to_string(job.snapshot.entries)
-        + " entries total=" + std::to_string(elapsed_us(started) / 1000) + "ms";
+        + " entries total=" + std::to_string(elapsed_us(started) / 1000) + "ms threads=" + field("threads") + " cores=" + field("cores")
+        + " decode-cpu=" + field("cpu") + " write=" + field("write") + " fsync=" + field("fsync") + " waited=" + field("waited");
     trace("throughput", summary.c_str());
   }
   if (error.empty() && !job.cancelled && !succeeded) error = finished ? "RAR extraction failed." : "The RAR worker stopped before finishing.";

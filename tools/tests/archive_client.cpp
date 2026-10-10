@@ -9,6 +9,8 @@
 void archives::trace(const char* step,const char* detail){if(std::getenv("ARCHIVE_TRACE"))std::cerr<<step<<" "<<detail<<"\n";}
 // ARCHIVE_PIPELINE_BYTES=0 exercises the inline writer.
 std::size_t archives::pipeline_bytes(){const char* v=std::getenv("ARCHIVE_PIPELINE_BYTES");return v?std::strtoull(v,nullptr,10):32u<<20;}
+// ARCHIVE_DOWNLOADING=1 asks rar-extract for the thread count used while downloads run.
+bool archives::downloading(){return std::getenv("ARCHIVE_DOWNLOADING")!=nullptr;}
 bool archives::list_directory(const char* path,void(*visit)(const char*,void*),void* user){
  DIR* d=opendir(path);if(!d)return false;while(auto* e=readdir(d))visit(e->d_name,user);closedir(d);return true;}
 int main(int argc,char** argv){

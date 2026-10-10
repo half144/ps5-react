@@ -23,6 +23,8 @@ bool list_directory(const char* path, void (*visit)(const char* name, void* user
 void trace(const char* step, const char* detail = "");
 // Bytes the host lets one extraction hold for buffered writes; under 1 MiB, files are written inline.
 std::size_t pipeline_bytes();
+// True while the host downloads a file; a RAR extraction then leaves it more cores. Cheap, any thread.
+bool downloading();
 // RAR sets go to rar-extract (native/rar_worker), a program of its own: UnRAR's license keeps its code
 // out of this engine. The host starts it with `request` as its input (the console's payload loader, a
 // child process on the desktop) and returns its stream, or -1 with `error` when it cannot.
