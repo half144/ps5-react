@@ -50,6 +50,8 @@ struct Job {
   std::mutex mutex;
   Timings timings;
   WorkerThread worker;
+  // The RAR worker went silent without saying it stopped: it may still be writing into staging.
+  bool worker_unconfirmed = false;
 };
 std::mutex guard;
 std::shared_ptr<Job> active;
@@ -418,7 +420,10 @@ archive* open_archive(Job& job, std::string& error, std::unique_ptr<Rar5Password
   if (!request.password.empty() && Rar5PasswordReader::matches(request.sources.front())) {
     decrypted = std::make_unique<Rar5PasswordReader>(request.sources, request.password, job.cancelled);
     result = archive_read_open(archive, decrypted.get(), nullptr, Rar5PasswordReader::read, nullptr);
-  } else result = archive_read_open_filenames(archive, files.data(), volume_block_size);
+  } else {
+    // Large blocks only where the heap leaves room for the write ring too; otherwise as before.
+    result = archive_read_open_filenames(archive, files.data(), pipeline_bytes() >= volume_block_size ? volume_block_size : read_block_size);
+  }
   if (result != ARCHIVE_OK)
     error = archive_error(archive, "Unsupported or incomplete archive.");
   return archive;
@@ -555,7 +560,7 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
   const auto started = std::chrono::steady_clock::now();
   std::string pending;
   std::uint64_t total = 0;
-  bool finished = false, succeeded = false, cancel_sent = false;
+  bool finished = false, succeeded = false, cancel_sent = false, exited = false;
   unsigned silent = 0;
   std::array<char, 4096> buffer;
   while (!finished) {
@@ -565,7 +570,10 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
       silent = 0;
     }
     const auto count = read_rar_worker(stream, buffer.data(), buffer.size());
-    if (!count) break;
+    if (!count) {
+      exited = true;
+      break;
+    }
     if (count < 0) {
       if (++silent > (cancel_sent ? rar_cancel_reads : rar_silent_reads)) break;
       continue;
@@ -590,6 +598,7 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
     if (pending.size() > max_path_length * 2 && error.empty()) error = "Invalid RAR worker output.";
   }
   close_rar_worker(stream);
+  job.worker_unconfirmed = !finished && !exited;
   trace("rar worker finished", error.c_str());
   {
     std::lock_guard lock(job.mutex);
@@ -716,7 +725,8 @@ void run(const std::shared_ptr<Job>& pointer) {
   close(root);
   if (job.cancelled || !error.empty()) {
     // Only this task created staging. Input parts and existing destinations are never removed.
-    remove_owned_staging(staging, owned);
+    // A console payload cannot be killed; staging stays for the next attempt rather than vanish under it.
+    if (!job.worker_unconfirmed) remove_owned_staging(staging, owned);
     fail(job, error.empty() ? "Extraction cancelled; downloaded parts are preserved." : error);
     return;
   }

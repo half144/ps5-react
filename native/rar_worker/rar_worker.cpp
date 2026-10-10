@@ -9,14 +9,15 @@
 // Request, one item per line: "RARX1", then "threads <n>" (0 picks from the cores), "window <bytes>",
 // "limit <bytes>", "flatten <extension>"..., "reserved <text>", "password <hex>", "dest <directory>",
 // "source <path>"... in volume order, then "end". The engine can then write "cancel" at any time.
-// Answers: "ready", "p <bytes written>" a few times a second, "f <sha256> <size> <path>" once a file
-// is on disk and synced, then "ok", "cancelled" or "fail <reason>".
+// Answers: "ready", "p <bytes written>" a few times a second, "k" every second, "f <sha256> <size>
+// <path>" once a file is on disk and synced, then "ok", "cancelled" or "fail <reason>".
 #include "rar.hpp"
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
 #else
 #include <openssl/evp.h>
 #endif
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <fcntl.h>
@@ -570,6 +571,19 @@ int main() {
     return 1;
   }
   say("ready");
+  // Progress comes from the decoder's callback only, so one long fsync on a slow drive would look like a
+  // dead worker to the engine. "k" every second says this process is still alive whatever it is doing.
+  std::mutex alive_mutex;
+  std::condition_variable alive_wake;
+  bool done = false;
+  std::thread alive;
+  try {
+    alive = std::thread([&] {
+      std::unique_lock lock(alive_mutex);
+      while (!alive_wake.wait_for(lock, std::chrono::seconds(1), [&] { return done; })) say("k");
+    });
+  } catch (...) {
+  }
   std::string error;
   {
     Session session{options};
@@ -592,6 +606,12 @@ int main() {
       else if (session.missing_volume) error = describe(ERAR_EOPEN);
     }
   }
+  {
+    std::lock_guard lock(alive_mutex);
+    done = true;
+  }
+  alive_wake.notify_all();
+  if (alive.joinable()) alive.join();
   if (cancelled) say("cancelled");
   else say(error.empty() ? "ok" : "fail " + error);
   return error.empty() ? 0 : 1;
